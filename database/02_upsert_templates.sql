@@ -1,7 +1,14 @@
--- Upsert templates for Sprint 1 ingestion module
+-- Upsert templates for Sprint 1 ingestion module (확장 가능하도록 수정됨)
 -- Replace :named placeholders with your DB client parameter style
 -- 원칙: 재수집을 전제로 INSERT + ON CONFLICT UPDATE 사용
 -- 주의: :param 표기법은 라이브러리에 맞게 $1, %s 등으로 변환 필요
+
+-- 0) 참조 데이터 조회 (확장성: 새 플랫폼/타입 추가 시 rating_type_code, scale_code만 제공하면 됨)
+-- Review type ID 조회 (type_code: 'user', 'critic' 등)
+select id from review_types where type_code = :review_type_code limit 1;
+
+-- Score scale ID 조회 (scale_code: 'binary', '10', '100' 등)
+select id from score_scales where scale_code = :scale_code limit 1;
 
 -- 1) game upsert
 -- normalized_title 기준으로 동일 게임 판단
@@ -32,6 +39,7 @@ insert into game_platform_map (
     external_game_id,
     external_game_url,
     crawled_at,
+    platform_meta_json,
     updated_at
 )
 values (
@@ -40,6 +48,7 @@ values (
     :external_game_id,
     :external_game_url,
     :crawled_at,
+    :platform_meta_json,
     now()
 )
 on conflict (platform_id, external_game_id)
@@ -47,6 +56,7 @@ do update set
     game_id = excluded.game_id,
     external_game_url = coalesce(excluded.external_game_url, game_platform_map.external_game_url),
     crawled_at = coalesce(excluded.crawled_at, game_platform_map.crawled_at),
+    platform_meta_json = coalesce(excluded.platform_meta_json, game_platform_map.platform_meta_json),
     updated_at = now()
 returning id;
 
@@ -66,28 +76,41 @@ values (
 )
 returning id;
 
--- 4) review upsert
+-- 4) review upsert (확장 가능한 구조)
 -- source_review_key 생성 규칙 예시
 -- steam: sha256(author_id + '|' + date_posted + '|' + review_text_clean)
 -- metacritic: sha256(author + '|' + date + '|' + type + '|' + review_text_clean)
 -- source_review_id가 없어도 source_review_key로 중복 제어 가능
+--
+-- source_meta_json 저장 가이드 (정규화 컬럼과 중복 금지):
+-- - Steam: {"author_id": "...", "reviewer_level": "verified_buyer", "helpful_percent": 95.0}
+--   주의: playtime_hours, author_name, score 등은 정규화 컬럼에만 저장
+-- - Metacritic: 현재 수집 필드 없음 (향후 고유 필드만 추가, outlet/critic_name 등은 미수집)
+--
+-- 새로운 플랫폼 추가 시:
+-- 1. review_type_id: review_types 테이블에서 조회하거나 위 template 0으로 확인
+-- 2. score_scale_id: score_scales 테이블에서 조회하거나 위 template 0으로 확인
+-- 3. 트리거가 자동으로 normalized_score_100 계산 (규칙이 있는 경우)
 insert into external_reviews (
     platform_id,
     game_id,
     ingestion_run_id,
     source_review_id,
     source_review_key,
-    review_type,
+    review_type_id,
     author_name,
     is_recommended,
     score_raw,
     score_100,
+    score_scale_id,
+    normalized_score_100,
     language_code,
     review_text_raw,
     review_text_clean,
     reviewed_at,
     helpful_count,
     playtime_hours,
+    source_meta_json,
     updated_at
 )
 values (
@@ -96,17 +119,20 @@ values (
     :ingestion_run_id,
     :source_review_id,
     :source_review_key,
-    :review_type,
+    :review_type_id,
     :author_name,
     :is_recommended,
     :score_raw,
     :score_100,
+    :score_scale_id,
+    :normalized_score_100,
     :language_code,
     :review_text_raw,
     :review_text_clean,
     :reviewed_at,
     coalesce(:helpful_count, 0),
     :playtime_hours,
+    :source_meta_json,
     now()
 )
 on conflict (platform_id, game_id, source_review_key)
@@ -114,17 +140,20 @@ do update set
     -- 재수집 시 최신 값으로 갱신
     ingestion_run_id = excluded.ingestion_run_id,
     source_review_id = coalesce(excluded.source_review_id, external_reviews.source_review_id),
-    review_type = excluded.review_type,
+    review_type_id = excluded.review_type_id,
     author_name = excluded.author_name,
     is_recommended = excluded.is_recommended,
     score_raw = excluded.score_raw,
     score_100 = excluded.score_100,
+    score_scale_id = excluded.score_scale_id,
+    normalized_score_100 = excluded.normalized_score_100,
     language_code = excluded.language_code,
     review_text_raw = excluded.review_text_raw,
     review_text_clean = excluded.review_text_clean,
     reviewed_at = excluded.reviewed_at,
     helpful_count = excluded.helpful_count,
     playtime_hours = excluded.playtime_hours,
+    source_meta_json = coalesce(excluded.source_meta_json, external_reviews.source_meta_json),
     is_deleted = false,
     updated_at = now();
 
@@ -140,3 +169,165 @@ set
     error_count = :error_count,
     error_message = :error_message
 where id = :ingestion_run_id;
+
+-- 6) 프론트 노출용 최신 n개 조회 (플랫폼/타입별)
+-- A. Steam 최신 n개
+select r.*
+from external_reviews r
+join platforms p on p.id = r.platform_id
+where r.game_id = :game_id
+  and p.code = 'steam'
+  and r.is_deleted = false
+order by r.reviewed_at desc nulls last, r.id desc
+limit :n;
+
+-- B. Metacritic critic 최신 n개
+select r.*
+from external_reviews r
+join platforms p on p.id = r.platform_id
+join review_types t on t.id = r.review_type_id
+where r.game_id = :game_id
+  and p.code = 'metacritic'
+  and t.type_code = 'critic'
+  and r.is_deleted = false
+order by r.reviewed_at desc nulls last, r.id desc
+limit :n;
+
+-- C. Metacritic user 최신 n개
+select r.*
+from external_reviews r
+join platforms p on p.id = r.platform_id
+join review_types t on t.id = r.review_type_id
+where r.game_id = :game_id
+  and p.code = 'metacritic'
+  and t.type_code = 'user'
+  and r.is_deleted = false
+order by r.reviewed_at desc nulls last, r.id desc
+limit :n;
+
+-- 7) 증분 요약을 위한 cursor 조회/업데이트
+select last_summarized_review_id, last_summary_version
+from game_summary_cursor
+where game_id = :game_id;
+
+insert into game_summary_cursor (
+    game_id,
+    last_summarized_review_id,
+    last_summary_version,
+    updated_at
+)
+values (
+    :game_id,
+    :last_summarized_review_id,
+    :last_summary_version,
+    now()
+)
+on conflict (game_id)
+do update set
+    last_summarized_review_id = excluded.last_summarized_review_id,
+    last_summary_version = excluded.last_summary_version,
+    updated_at = now();
+
+-- 8) 증분 처리 대상(delta) 리뷰 조회
+select r.*
+from external_reviews r
+where r.game_id = :game_id
+  and r.is_deleted = false
+  and r.id > coalesce(:last_summarized_review_id, 0)
+order by r.id asc;
+
+-- 9) 요약 작업(job) 시작/종료
+-- 토큰/비용 정보는 review_summary_chunks에 저장되며, job 테이블에는 전략/범위/상태 위주 기록
+insert into review_summary_jobs (
+    game_id,
+    status,
+    strategy,
+    from_review_id,
+    to_review_id,
+    input_review_count,
+    chunk_count,
+    started_at
+)
+values (
+    :game_id,
+    'started',
+    :strategy,
+    :from_review_id,
+    :to_review_id,
+    :input_review_count,
+    :chunk_count,
+    now()
+)
+returning id;
+
+update review_summary_jobs
+set
+    status = :status,
+    error_message = :error_message,
+    ended_at = now()
+where id = :job_id;
+
+-- 10) map 단계 chunk 요약 저장
+insert into review_summary_chunks (
+    job_id,
+    chunk_no,
+    input_review_count,
+    prompt_tokens,
+    completion_tokens,
+    chunk_summary_text
+)
+values (
+    :job_id,
+    :chunk_no,
+    :input_review_count,
+    :prompt_tokens,
+    :completion_tokens,
+    :chunk_summary_text
+)
+on conflict (job_id, chunk_no)
+do update set
+    input_review_count = excluded.input_review_count,
+    prompt_tokens = excluded.prompt_tokens,
+    completion_tokens = excluded.completion_tokens,
+    chunk_summary_text = excluded.chunk_summary_text;
+
+-- 11) 최종 요약 저장(현재 버전 갱신)
+update game_review_summaries
+set is_current = false
+where game_id = :game_id
+  and is_current = true;
+
+insert into game_review_summaries (
+    game_id,
+    job_id,
+    summary_version,
+    summary_text,
+    pros_json,
+    cons_json,
+    keywords_json,
+    steam_recommend_ratio,
+    metacritic_critic_avg,
+    metacritic_user_avg,
+    source_review_count,
+    covered_from_review_id,
+    covered_to_review_id,
+    is_current,
+    created_at
+)
+values (
+    :game_id,
+    :job_id,
+    :summary_version,
+    :summary_text,
+    :pros_json,
+    :cons_json,
+    :keywords_json,
+    :steam_recommend_ratio,
+    :metacritic_critic_avg,
+    :metacritic_user_avg,
+    :source_review_count,
+    :covered_from_review_id,
+    :covered_to_review_id,
+    true,
+    now()
+);
