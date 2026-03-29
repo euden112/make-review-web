@@ -49,9 +49,8 @@
 5. AI 요약 구조 
 - game_summary_cursor: 마지막 요약 반영 review_id 기록
 - review_summary_jobs: 요약 배치 작업 상태 추적 (시작/종료, 처리 범위, 청크 개수)
-- review_summary_chunks: map 단계 청크별 요약 + 토큰 정보 저장
+- review_summary_chunks: map 단계 청크별 요약 저장
 - game_review_summaries: 최종 요약 버전 관리 (is_current)
-- 토큰/비용 계산은 Phase 7에서 review_summary_chunks 데이터를 집계하여 구현
 
 6. Sprint 1 완료 검증
 - 동일 데이터 재적재 시 중복 insert가 발생하지 않아야 함

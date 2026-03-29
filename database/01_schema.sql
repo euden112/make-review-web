@@ -11,7 +11,7 @@ begin;
 -- 마지막 commit까지 성공했을 때만 반영된다.
 
 -- [테이블 역할] 플랫폼 마스터
--- Steam, Metacritic 같은 "리뷰 출처"를 표준 코드로 관리하는 기준 테이블.
+-- Steam, Metacritic 같은 리뷰 사이트를 고유 코드(code)로 관리하는 테이블.
 create table if not exists platforms (
     id bigserial primary key,
     code varchar(30) not null unique,
@@ -30,7 +30,7 @@ create table if not exists score_scales (
     created_at timestamptz not null default now()
 );
 
--- [테이블 역할] 리뷰 타입 마스터 (확장성: Tomatometer, verified_purchase 등 추가 가능)
+-- [테이블 역할] 리뷰 타입 마스터 (확장성: 새 플랫폼/타입 추가 시 행만 추가)
 -- user: 일반 사용자 리뷰, critic: 전문가/평론가 리뷰
 create table if not exists review_types (
     id bigserial primary key,
@@ -39,9 +39,10 @@ create table if not exists review_types (
     created_at timestamptz not null default now()
 );
 
--- [테이블 역할] 게임 마스터
--- 서비스 기준 게임 목록. 플랫폼이 달라도 동일 게임을 하나의 엔터티로 관리한다.
--- normalized_title은 검색과 중복 방지를 위한 정규화 키.
+-- [테이블 역할] 게임 마스터   
+-- 서비스에서 사용하는 통합 게임 목록.
+-- 같은 게임이 여러 플랫폼에 있어도 games.id 하나로 식별한다.
+-- normalized_title은 검색/중복 판별용 제목(소문자, 공백 정리 등 전처리된 값).
 create table if not exists games (
     id bigserial primary key,
     canonical_title varchar(255) not null,
@@ -53,7 +54,8 @@ create table if not exists games (
 );
 
 -- [테이블 역할] 외부 식별자 매핑
--- 우리 게임 ID와 플랫폼별 외부 ID(예: Steam app_id, Metacritic slug)를 연결하는 다리.
+-- games.id(내부 통합 게임 ID)와 각 플랫폼의 게임 ID를 매핑하는 테이블.
+-- 예: games.id=10 <-> Steam app_id=570, Metacritic slug='dota-2'
 -- FK로 연결해 존재하지 않는 게임/플랫폼 값이 들어오는 것을 방지한다.
 create table if not exists game_platform_map (
     id bigserial primary key,
@@ -63,7 +65,7 @@ create table if not exists game_platform_map (
     external_game_url text,
     crawled_at timestamptz,
     platform_meta_json jsonb,
-    -- platform_meta_json: 플랫폼별 게임 메타데이터 (ADR-02 JSONB 활용)
+    -- platform_meta_json: 플랫폼별 게임 메타데이터
     -- steam 예: {"price_usd": 19.99, "discount_percent": 0, "tags": ["Action", "RPG"], "recommendation_count": 15000}
     -- metacritic 예: {"score": 78, "user_score": 7.8, "platform_name": "PC"}
     created_at timestamptz not null default now(),
@@ -73,7 +75,7 @@ create table if not exists game_platform_map (
 );
 
 -- [테이블 역할] 운영 로그(ingestion runs)
--- 수집/적재 실행 1회 단위의 영수증.
+-- 수집/적재 작업 1회 실행에 대한 로그 레코드.
 -- 시작/종료 시각, 건수, 오류를 저장해 장애 분석/재시도/주간 리포트 근거로 사용한다.
 create table if not exists ingestion_runs (
     id bigserial primary key,
@@ -102,7 +104,7 @@ create table if not exists external_reviews (
 
     -- 원천 식별 정보
     -- source_review_id: 플랫폼이 제공하는 원본 리뷰 ID (없을 수 있음)
-    -- source_review_key: 우리 쪽에서 만든 안정적인 중복 방지 키 (필수)
+    -- source_review_key: 인위적으로 만든 안정적인 중복 방지 키 (필수)
     source_review_id varchar(150),
     source_review_key varchar(255) not null,
 
@@ -123,7 +125,9 @@ create table if not exists external_reviews (
     helpful_count integer not null default 0,
     playtime_hours numeric(8,2),
     source_meta_json jsonb,
-    -- source_meta_json: 플랫폼별 고유 메타데이터 (정규화 컬럼과 중복 금지, ADR-02 JSONB 활용)
+    -- source_meta_json: 플랫폼별 고유 메타데이터 (정규화된 필드와 중복 금지)
+    -- steam 예: {"author_id": "76561198123456789", "reviewer_level": "verified_buyer", "helpful_percent": 95.0}
+    -- metacritic: 현재 수집 필드 없음 (향후 API 확장 시 고유 필드만 추가, outlet/critic_name 등 수집되지 않음)
     -- 정규화된 필드(playtime_hours, author_name, score)는 위의 표준 컬럼에만 저장, JSONB에는 저장 금지
     -- steam 예: {"author_id": "76561198123456789", "reviewer_level": "verified_buyer", "helpful_percent": 95.0}
     -- metacritic: 현재 수집 필드 없음 (향후 API 확장 시 고유 필드만 추가, outlet/critic_name 등 수집되지 않음)
@@ -263,8 +267,6 @@ create table if not exists review_summary_chunks (
     job_id bigint not null references review_summary_jobs(id) on delete cascade,
     chunk_no integer not null,
     input_review_count integer not null default 0,
-    prompt_tokens integer not null default 0,
-    completion_tokens integer not null default 0,
     chunk_summary_text text not null,
     created_at timestamptz not null default now(),
     constraint uq_summary_chunk unique (job_id, chunk_no)

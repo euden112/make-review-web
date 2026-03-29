@@ -1,9 +1,9 @@
 -- Upsert templates for Sprint 1 ingestion module (확장 가능하도록 수정됨)
 -- Replace :named placeholders with your DB client parameter style
--- 원칙: 재수집을 전제로 INSERT + ON CONFLICT UPDATE 사용
+-- 원칙: 같은 데이터를 다시 수집해도 INSERT + ON CONFLICT UPDATE로 안전하게 반영
 -- 주의: :param 표기법은 라이브러리에 맞게 $1, %s 등으로 변환 필요
 
--- 0) 참조 데이터 조회 (확장성: 새 플랫폼/타입 추가 시 rating_type_code, scale_code만 제공하면 됨)
+-- 0) 참조 데이터 조회 (새 플랫폼 추가 시 review_type_code, scale_code 값만 넘기면 됨)
 -- Review type ID 조회 (type_code: 'user', 'critic' 등)
 select id from review_types where type_code = :review_type_code limit 1;
 
@@ -11,7 +11,7 @@ select id from review_types where type_code = :review_type_code limit 1;
 select id from score_scales where scale_code = :scale_code limit 1;
 
 -- 1) game upsert
--- normalized_title 기준으로 동일 게임 판단
+-- normalized_title이 같으면 같은 게임으로 보고 upsert
 insert into games (
     canonical_title,
     normalized_title,
@@ -32,7 +32,7 @@ do update set
 returning id;
 
 -- 2) game-platform mapping upsert
--- 외부 플랫폼 게임 ID가 같으면 동일 매핑으로 간주
+-- 같은 플랫폼에서 external_game_id가 같으면 같은 게임 매핑으로 처리
 insert into game_platform_map (
     game_id,
     platform_id,
@@ -61,7 +61,7 @@ do update set
 returning id;
 
 -- 3) ingestion run start
--- 실행 시작 로그 생성 후 run_id를 이후 리뷰 upsert에 전달
+-- 수집 작업 시작 로그를 남기고 생성된 run_id를 이후 리뷰 upsert에 사용
 insert into ingestion_runs (
     platform_id,
     game_id,
@@ -90,7 +90,7 @@ returning id;
 -- 새로운 플랫폼 추가 시:
 -- 1. review_type_id: review_types 테이블에서 조회하거나 위 template 0으로 확인
 -- 2. score_scale_id: score_scales 테이블에서 조회하거나 위 template 0으로 확인
--- 3. 트리거가 자동으로 normalized_score_100 계산 (규칙이 있는 경우)
+-- 3. 트리거 규칙이 있으면 normalized_score_100 자동 계산
 insert into external_reviews (
     platform_id,
     game_id,
@@ -137,7 +137,7 @@ values (
 )
 on conflict (platform_id, game_id, source_review_key)
 do update set
-    -- 재수집 시 최신 값으로 갱신
+    -- 이미 존재하는 리뷰면 최신 수집값으로 갱신
     ingestion_run_id = excluded.ingestion_run_id,
     source_review_id = coalesce(excluded.source_review_id, external_reviews.source_review_id),
     review_type_id = excluded.review_type_id,
@@ -158,7 +158,7 @@ do update set
     updated_at = now();
 
 -- 5) ingestion run finish
--- 한 실행 단위의 최종 상태/카운트를 마감 기록
+-- 수집 작업 종료 시 최종 상태/건수/오류 메시지 기록
 update ingestion_runs
 set
     status = :status,
@@ -205,7 +205,7 @@ where r.game_id = :game_id
 order by r.reviewed_at desc nulls last, r.id desc
 limit :n;
 
--- 7) 증분 요약을 위한 cursor 조회/업데이트
+-- 7) 증분 요약용 커서 조회/업데이트
 select last_summarized_review_id, last_summary_version
 from game_summary_cursor
 where game_id = :game_id;
@@ -229,6 +229,7 @@ do update set
     updated_at = now();
 
 -- 8) 증분 처리 대상(delta) 리뷰 조회
+-- 마지막 요약 이후에 추가된 리뷰만 조회
 select r.*
 from external_reviews r
 where r.game_id = :game_id
@@ -237,7 +238,7 @@ where r.game_id = :game_id
 order by r.id asc;
 
 -- 9) 요약 작업(job) 시작/종료
--- 토큰/비용 정보는 review_summary_chunks에 저장되며, job 테이블에는 전략/범위/상태 위주 기록
+-- job 테이블은 상태/범위 중심으로 기록
 insert into review_summary_jobs (
     game_id,
     status,
@@ -268,30 +269,26 @@ set
 where id = :job_id;
 
 -- 10) map 단계 chunk 요약 저장
+-- 각 청크별 요약 결과 저장
 insert into review_summary_chunks (
     job_id,
     chunk_no,
     input_review_count,
-    prompt_tokens,
-    completion_tokens,
     chunk_summary_text
 )
 values (
     :job_id,
     :chunk_no,
     :input_review_count,
-    :prompt_tokens,
-    :completion_tokens,
     :chunk_summary_text
 )
 on conflict (job_id, chunk_no)
 do update set
     input_review_count = excluded.input_review_count,
-    prompt_tokens = excluded.prompt_tokens,
-    completion_tokens = excluded.completion_tokens,
     chunk_summary_text = excluded.chunk_summary_text;
 
 -- 11) 최종 요약 저장(현재 버전 갱신)
+-- 기존 현재 버전은 비활성화하고 새 요약을 현재 버전으로 저장
 update game_review_summaries
 set is_current = false
 where game_id = :game_id
