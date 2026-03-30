@@ -224,8 +224,13 @@ values (
 )
 on conflict (game_id)
 do update set
-    last_summarized_review_id = excluded.last_summarized_review_id,
-    last_summary_version = excluded.last_summary_version,
+    -- 커서 역행 방지: 늦게 끝난 작업이 더 작은 review_id로 덮어쓰지 못하게 한다.
+    last_summarized_review_id = case
+        when game_summary_cursor.last_summarized_review_id is null then excluded.last_summarized_review_id
+        when excluded.last_summarized_review_id is null then game_summary_cursor.last_summarized_review_id
+        else greatest(game_summary_cursor.last_summarized_review_id, excluded.last_summarized_review_id)
+    end,
+    last_summary_version = greatest(game_summary_cursor.last_summary_version, excluded.last_summary_version),
     updated_at = now();
 
 -- 8) 증분 처리 대상(delta) 리뷰 조회
@@ -242,7 +247,6 @@ order by r.id asc;
 insert into review_summary_jobs (
     game_id,
     status,
-    strategy,
     from_review_id,
     to_review_id,
     input_review_count,
@@ -252,7 +256,6 @@ insert into review_summary_jobs (
 values (
     :game_id,
     'started',
-    :strategy,
     :from_review_id,
     :to_review_id,
     :input_review_count,

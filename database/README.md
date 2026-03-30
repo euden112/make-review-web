@@ -62,5 +62,3 @@
 - Metacritic critic 최신 n개 리뷰
 - Metacritic user 최신 n개 리뷰
 - AI 요약 리뷰(현재 버전 1건)
-
-위 조회용 SQL은 02_upsert_templates.sql에 포함되어 있습니다.

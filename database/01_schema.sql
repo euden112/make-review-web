@@ -92,7 +92,7 @@ create table if not exists ingestion_runs (
     constraint ck_ingestion_status check (status in ('started', 'success', 'failed', 'partial'))
 );
 
--- [테이블 역할] 외부 리뷰 본문 저장소(핵심)
+-- [테이블 역할] 외부 리뷰 본문 저장소(핵심)    
 -- 실제 리뷰 원문/정제 텍스트/점수/작성자/작성일을 저장한다.
 -- source_review_key 유니크 제약으로 중복 적재를 막고 upsert 충돌 키로 사용한다.
 -- score_scale, review_type은 관리형 테이블로 참조하여 새 플랫폼 추가 시 테이블 수정 불필요
@@ -244,11 +244,11 @@ create table if not exists game_summary_cursor (
 
 -- [테이블 역할] AI 요약 실행 이력
 -- 배치 작업 상태 추적: 시작/종료, 처리 범위, 청크 개수, 에러 메시지 기록
+-- 운영 정책: 토큰 비용 최소화를 위해 요약 전략은 map_reduce로 고정한다.
 create table if not exists review_summary_jobs (
     id bigserial primary key,
     game_id bigint not null references games(id),
     status varchar(20) not null,
-    strategy varchar(30) not null default 'map_reduce',
     from_review_id bigint references external_reviews(id),
     to_review_id bigint references external_reviews(id),
     input_review_count integer not null default 0,
@@ -257,8 +257,7 @@ create table if not exists review_summary_jobs (
     started_at timestamptz not null default now(),
     ended_at timestamptz,
     created_at timestamptz not null default now(),
-    constraint ck_summary_job_status check (status in ('started', 'success', 'failed', 'partial')),
-    constraint ck_summary_job_strategy check (strategy in ('map_reduce', 'incremental_append', 'full_refresh'))
+    constraint ck_summary_job_status check (status in ('started', 'success', 'failed', 'partial'))
 );
 
 -- [테이블 역할] map 단계 청크 요약 저장
@@ -333,9 +332,9 @@ create index if not exists idx_ingestion_runs_platform_started_at
 create index if not exists idx_external_reviews_game_id_id
     on external_reviews (game_id, id);
 
--- [인덱스 역할] 게임별 현재 요약 버전 조회 가속
-create index if not exists idx_game_review_summaries_current
-    on game_review_summaries (game_id, created_at desc)
+-- [인덱스 역할] 게임별 현재 요약 버전 조회 가속 + 현재 버전 단일성 보장
+create unique index if not exists uq_game_review_summaries_current_one
+    on game_review_summaries (game_id)
     where is_current = true;
 
 -- [인덱스 역할] 요약 잡 이력 최근 조회 가속
