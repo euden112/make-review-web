@@ -4,7 +4,7 @@
 
 ## 📂 디렉토리 구조 및 파일 역할
 
-'''text
+''' text
 backend/
 ├── requirements.txt         # FastAPI, SQLAlchemy, Pydantic 등 서버 구동에 필요한 패키지 목록
 └── app/
