@@ -92,8 +92,8 @@ def run_filter(reviews: list[dict]) -> list[dict]:
 
 # ── 메인 ─────────────────────────────
 if __name__ == '__main__':
-    input_path  = Path('reviews.json')
-    output_path = Path('reviews_filtered.json')
+    input_path  = Path('reviews_metacritic.json')
+    output_path = Path('reviews_metacritic_filtered.json')
 
     with open(input_path, encoding='utf-8') as f:
         data = json.load(f)
