@@ -11,7 +11,7 @@ import httpx
 # 설정
 # ============================================================
 
-INPUT_FILE  = "reviews.json"                                      # 크롤링 파일
+INPUT_FILE  = "reviews_metacritic_filtered.json"                  # 크롤링 파일
 API_URL     = "http://localhost:8000/api/v1/reviews/metacritic"   # FastAPI 엔드포인트
 TIMEOUT     = 30                                                  # 전송 타임아웃(초)
 
