@@ -5,7 +5,7 @@
 ## 📂 디렉토리 구조 및 파일 역할
 
 
-\`\`\`text
+```text
 backend/
 ├── requirements.txt         # FastAPI, SQLAlchemy, Pydantic 등 서버 구동에 필요한 패키지 목록
 └── app/
@@ -19,6 +19,6 @@ backend/
     │   └── steam.py         # Steam 크롤링 데이터 구조 및 타입 검증용 Pydantic 스키마
     └── api/v1/
         └── reviews.py       # 크롤러 데이터 수신(POST) 및 DB 중복 방지 저장(Bulk Upsert)을 담당하는 API 엔드포인트
-\`\`\`
+```
 
 ## 📝 주요 컴포넌트 요약
