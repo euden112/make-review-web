@@ -1,4 +1,4 @@
--- Upsert templates for Sprint 1 ingestion module (확장 가능하도록 수정됨)
+-- Upsert templates for Sprint 1 ingestion module
 -- Replace :named placeholders with your DB client parameter style
 -- 원칙: 같은 데이터를 다시 수집해도 INSERT + ON CONFLICT UPDATE로 안전하게 반영
 -- 주의: :param 표기법은 라이브러리에 맞게 $1, %s 등으로 변환 필요
@@ -80,7 +80,7 @@ values (
 )
 returning id;
 
--- 4) review upsert (확장 가능한 구조)
+-- 4) review upsert
 -- source_review_key 생성 규칙 예시
 -- steam: sha256(author_id + '|' + date_posted + '|' + review_text_clean)
 -- metacritic: sha256(author + '|' + date + '|' + type + '|' + review_text_clean)
