@@ -161,7 +161,6 @@ as $$
 declare
     v_platform_code varchar(30);
     v_review_type_code varchar(30);
-    v_scale_code varchar(20);
     v_score_raw text;
     v_num_text text;
     v_score numeric(10,4);
@@ -173,13 +172,6 @@ begin
     select type_code into v_review_type_code
     from review_types
     where id = new.review_type_id;
-
-    -- score_scale_id이 설정되었으면 해당 scale_code 조회
-    if new.score_scale_id is not null then
-        select scale_code into v_scale_code
-        from score_scales
-        where id = new.score_scale_id;
-    end if;
 
     -- 숫자가 전혀 없는 입력값(N/A, 별점없음, 기호/알파벳-only)은 정규식 추출 전에 null 처리
     -- 하위 캐스팅 단계 예외를 사전에 차단해 트랜잭션 중단을 방지한다.
@@ -239,8 +231,9 @@ begin
             end if;
         end if;
     else
-        -- 향후 플랫폼 확장 시: score_scale_id가 명시되어야 함, 규칙 미정이면 null 허용
-        new.normalized_score_100 := coalesce(new.normalized_score_100, null);
+        -- 향후 플랫폼 확장 시: 규칙 미정이면 normalized_score_100 입력값을 그대로 둔다.
+        -- (입력값이 없으면 null 유지)
+        null;
     end if;
 
     return new;
@@ -317,47 +310,52 @@ create table if not exists game_review_summaries (
 );
 
 -- [JSONB 인덱싱 전략]
--- JSONB GIN 인덱스는 조회 요구가 명확할 때만 추가하여 비용(저장, 삽입 성능)을 최소화한다.
+-- JSONB GIN 인덱스는 구조화된 필터/집계 요구가 실제로 생겼을 때만 추가한다.
+-- JSONB는 유연하지만 쓰기 비용이 크므로, 조회 패턴이 확정되기 전에는 기본 B-Tree 인덱스와 정규 컬럼만으로 버틴다.
 -- 
--- 1. source_meta_json (external_reviews) 인덱스 추가 타이밍:
---    - API가 source_meta_json -> '$.outlet' (비평가 소속사)로 필터링하는 경우
---    - API가 source_meta_json -> '$.playtime_bracket' (플레이 시간 범위)로 집계하는 경우
---    - 추가 시점: EXPLAIN ANALYZE로 seq scan on external_reviews 확인 후
---    CREATE INDEX idx_source_meta_gin ON external_reviews USING gin (source_meta_json);
---
--- 2. platform_meta_json (game_platform_map) 인덱스 추가 타이밍:
---    - API가 platform_meta_json -> '$.price_usd' 범위 검색 등으로 조회하는 경우
---    - 추가 시점: EXPLAIN ANALYZE로 seq scan on game_platform_map 확인 후
---    CREATE INDEX idx_platform_meta_gin ON game_platform_map USING gin (platform_meta_json);
---
--- 3. 조회 요구 없으면 GIN 생략: B-tree 인덱스만으로 충분히 성능이 나오는 경우, JSONB 인덱스는 추가하지 않는다.
+-- [대상] 리뷰 API가 비평가 소속사(outlet), 플레이 시간 구간(playtime_bracket) 같은 리뷰 메타 필드로 필터링/집계할 때 사용한다.
+-- [원리] JSONB GIN은 문서 내부 키를 역색인처럼 찾아가므로, 특정 키/값 경로를 자주 조회할 때 전체 행 스캔을 줄일 수 있다. 다만 삽입/갱신 비용이 증가하므로 EXPLAIN ANALYZE로 실제 seq scan이 확인될 때만 추가한다.
+--   CREATE INDEX idx_source_meta_gin ON external_reviews USING gin (source_meta_json);
 
--- [인덱스 역할] 특정 게임의 최신 리뷰 조회 성능 최적화
+-- [대상] 게임 메타 API가 가격(price_usd), 할인율(discount_percent), 태그(tags)처럼 플랫폼별 부가 메타데이터로 조회할 때 사용한다.
+-- [원리] 플랫폼 메타는 키 종류가 넓을 수 있어 B-Tree 단일 컬럼보다 JSONB GIN이 적합하다. 단, 범위 검색이나 키 존재 검색 수요가 명확해졌을 때만 추가해야 쓰기 성능 저하를 막을 수 있다.
+--   CREATE INDEX idx_platform_meta_gin ON game_platform_map USING gin (platform_meta_json);
+
+-- 조회 요구가 없으면 JSONB GIN은 만들지 않는다. 필요할 때마다 실제 쿼리 패턴을 분석해 추가하는 것을 권장한다.
+
+-- [대상] 프론트엔드의 특정 게임 최신 리뷰 API가 `game_id = ?` 조건으로 리뷰를 가장 최근 순으로 보여줄 때 사용한다.
+-- [원리] B-Tree는 왼쪽부터 순서대로 탐색하므로 `game_id`를 선두에 두고, 그 뒤에 `reviewed_at desc`를 배치해 동일 게임 내에서 필터 후 정렬을 한 번에 처리하도록 설계했다.
 create index if not exists idx_external_reviews_game_reviewed_at
     on external_reviews (game_id, reviewed_at desc);
 
--- [인덱스 역할] 플랫폼+게임 조건 필터 조회 성능 최적화
+-- [대상] 플랫폼+게임 필터 API가 `platform_id`와 `game_id`로 리뷰 목록을 좁혀서 조회할 때 사용한다.
+-- [원리] 동등 조건이 먼저 오는 쿼리에서 두 컬럼을 선두 순서로 배치해 탐색 범위를 빠르게 줄인다. 두 값 모두 필터 키이므로 별도 정렬보다 조회 범위 축소가 우선이다.
 create index if not exists idx_external_reviews_platform_game
     on external_reviews (platform_id, game_id);
 
--- [인덱스 역할] 플랫폼별(review_type_id 포함) 최신 n개 조회 성능 최적화
+-- [대상] 플랫폼/리뷰타입별 최신 n개 리뷰 API가 Steam, Metacritic critic, Metacritic user 목록을 각각 빠르게 뽑을 때 사용한다.
+-- [원리] 앞의 `platform_id`, `review_type_id`, `game_id`는 필터 조건을 먼저 좁히는 용도이고, 마지막 `reviewed_at desc`는 좁혀진 결과를 최신순으로 바로 읽기 위한 정렬 키다.
 create index if not exists idx_external_reviews_platform_type_game_reviewed
     on external_reviews (platform_id, review_type_id, game_id, reviewed_at desc);
 
--- [인덱스 역할] 운영 로그를 최근 실행 순으로 빠르게 조회
+-- [대상] 운영자가 플랫폼별 수집 실행 이력을 최근 시작 시각 순으로 확인하는 모니터링/장애 대응 화면에서 사용한다.
+-- [원리] 먼저 `platform_id`로 대상 플랫폼을 좁히고, 그 안에서 `started_at desc`로 최신 실행부터 읽도록 배치해 최근 로그 조회 비용을 줄인다.
 create index if not exists idx_ingestion_runs_platform_started_at
     on ingestion_runs (platform_id, started_at desc);
 
--- [인덱스 역할] 증분 요약 시 review_id 범위 스캔 가속
+-- [대상] AI 증분 요약 잡이 마지막 요약 이후 추가된 리뷰만 delta 스캔할 때 사용한다.
+-- [원리] `game_id`로 게임 범위를 먼저 고정하고, 그 안에서 `id` 증가 순으로 이어지는 새 리뷰 구간을 빠르게 순회하도록 설계했다.
 create index if not exists idx_external_reviews_game_id_id
     on external_reviews (game_id, id);
 
--- [인덱스 역할] 게임별 현재 요약 버전 조회 가속 + 현재 버전 단일성 보장
+-- [대상] 게임 상세 화면에서 현재 노출 중인 AI 요약을 1건만 읽어올 때 사용한다.
+-- [원리] `game_id`만으로 현재 버전 행을 즉시 찾게 하고, `where is_current = true` 부분 인덱스로 현재본 1건만 존재하도록 강제한다.
 create unique index if not exists uq_game_review_summaries_current_one
     on game_review_summaries (game_id)
     where is_current = true;
 
--- [인덱스 역할] 요약 잡 이력 최근 조회 가속
+-- [대상] 게임별 요약 배치 잡의 최근 실행 이력과 상태를 운영 대시보드에서 조회할 때 사용한다.
+-- [원리] `game_id`로 잡을 먼저 묶고, `started_at desc`로 최신 잡부터 읽도록 해 최근 이력 조회를 빠르게 한다.
 create index if not exists idx_review_summary_jobs_game_started
     on review_summary_jobs (game_id, started_at desc);
 
