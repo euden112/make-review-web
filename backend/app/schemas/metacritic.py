@@ -17,7 +17,7 @@ class MetacriticMeta(BaseModel):
     total: int
     critic_count: int
     user_count: int
-
+    filtered_count: Optional[int] = Field(default=None, description="필터링 후 남은 리뷰 수")
 # 3. 크롤러가 전송하는 최종 형태
 class MetacriticPayload(BaseModel):
     meta: MetacriticMeta
