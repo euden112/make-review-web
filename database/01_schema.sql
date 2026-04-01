@@ -4,6 +4,11 @@
 -- 핵심: PK/FK/UNIQUE/CHECK/INDEX로 데이터 정합성과 성능을 DB 레벨에서 보장한다.
 -- 확장: 플랫폼별 점수 체계 차이(steam binary, critic 100, user 10)와
 --      AI 증분 요약(map-reduce) 운영을 지원한다.
+-- TODO(Crawling): metacritic 크롤러 출력 파일명을 단일 기준으로 통일할 것.
+--   - 현재 문서 기준: reviews_metacritic.json
+--   - 일부 구현/연동 기준: reviews.json
+--   - 파일명 불일치 시 API 적재 누락/오탐 가능성이 있으므로 크롤러 파트에서 반드시 정리 필요.
+-- 백엔드 연동 메모: 크롤러 metacritic 출력 파일명이 문서(reviews_metacritic.json)와 실제(reviews.json) 간 차이가 있으므로 API 연동 시 확인 요망.
 
 begin;
 
@@ -157,6 +162,7 @@ declare
     v_platform_code varchar(30);
     v_review_type_code varchar(30);
     v_scale_code varchar(20);
+    v_score_raw text;
     v_num_text text;
     v_score numeric(10,4);
 begin
@@ -175,9 +181,23 @@ begin
         where id = new.score_scale_id;
     end if;
 
-    v_num_text := substring(coalesce(new.score_raw, '') from '([0-9]+(?:\.[0-9]+)?)');
-    if v_num_text is not null then
-        v_score := v_num_text::numeric;
+    -- 숫자가 전혀 없는 입력값(N/A, 별점없음, 기호/알파벳-only)은 정규식 추출 전에 null 처리
+    -- 하위 캐스팅 단계 예외를 사전에 차단해 트랜잭션 중단을 방지한다.
+    v_score_raw := btrim(coalesce(new.score_raw, ''));
+    if v_score_raw = '' or v_score_raw !~ '[0-9]' then
+        v_num_text := null;
+    else
+        v_num_text := substring(v_score_raw from '([0-9]+(?:\.[0-9]+)?)');
+    end if;
+
+    if v_num_text is not null and btrim(v_num_text) <> '' and v_num_text ~ '^[0-9]+(?:\.[0-9]+)?$' then
+        begin
+            v_score := v_num_text::numeric;
+        exception
+            when others then
+                -- 비정상 숫자 문자열은 캐스팅 실패 대신 null로 처리해 트랜잭션 중단을 방지한다.
+                v_score := null;
+        end;
     else
         v_score := null;
     end if;

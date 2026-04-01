@@ -2,6 +2,10 @@
 -- Replace :named placeholders with your DB client parameter style
 -- 원칙: 같은 데이터를 다시 수집해도 INSERT + ON CONFLICT UPDATE로 안전하게 반영
 -- 주의: :param 표기법은 라이브러리에 맞게 $1, %s 등으로 변환 필요
+-- TODO(Backend): 아래 템플릿 호출은 반드시 ingestion run 단위의 단일 트랜잭션으로 묶어 구현할 것.
+--   경계: [ingestion run start] -> [review upsert 일괄] -> [ingestion run finish]
+--   이유: 부분 성공 상태를 방지하고 실패 시 재처리 가능성을 보장하기 위함.
+-- FastAPI API 연동 시, 각 ingestion run 단위로 트랜잭션을 묶고 source_review_key 생성 규칙을 철저히 지킬 것.
 
 -- 0) 참조 데이터 조회 (새 플랫폼 추가 시 review_type_code, scale_code 값만 넘기면 됨)
 -- Review type ID 조회 (type_code: 'user', 'critic' 등)
@@ -90,7 +94,7 @@ returning id;
 -- 새로운 플랫폼 추가 시:
 -- 1. review_type_id: review_types 테이블에서 조회하거나 위 template 0으로 확인
 -- 2. score_scale_id: score_scales 테이블에서 조회하거나 위 template 0으로 확인
--- 3. 트리거 규칙이 있으면 normalized_score_100 자동 계산
+-- 3. normalized_score_100은 DB 트리거가 전담 계산하므로 파라미터로 넘기지 않는다.
 insert into external_reviews (
     platform_id,
     game_id,
@@ -103,7 +107,6 @@ insert into external_reviews (
     score_raw,
     score_100,
     score_scale_id,
-    normalized_score_100,
     language_code,
     review_text_raw,
     review_text_clean,
@@ -125,7 +128,6 @@ values (
     :score_raw,
     :score_100,
     :score_scale_id,
-    :normalized_score_100,
     :language_code,
     :review_text_raw,
     :review_text_clean,
@@ -146,7 +148,6 @@ do update set
     score_raw = excluded.score_raw,
     score_100 = excluded.score_100,
     score_scale_id = excluded.score_scale_id,
-    normalized_score_100 = excluded.normalized_score_100,
     language_code = excluded.language_code,
     review_text_raw = excluded.review_text_raw,
     review_text_clean = excluded.review_text_clean,
