@@ -1,7 +1,7 @@
 from pydantic import BaseModel, Field
-from typing import List
+from typing import List, Optional
 
-# 1. 개별 리뷰 데이터 (메타크리틱)
+# 1. 크롤러가 보내는 메타크리틱 리뷰 1개의 구조를 정의합니다.
 class MetacriticReview(BaseModel):
     author: str = Field(description="리뷰 작성자")
     score: str = Field(description="부여한 점수 (문자열)")
@@ -9,7 +9,7 @@ class MetacriticReview(BaseModel):
     date: str = Field(description="작성 날짜")
     type: str = Field(description="critic 또는 user")
 
-# 2. 게임 메타데이터 (메타크리틱)
+# 2. 메타크리틱 통계 정보 구조입니다. (정제 파이프라인에서 걸러진 개수 필드 포함)
 class MetacriticMeta(BaseModel):
     game: str
     platform: str
@@ -18,7 +18,8 @@ class MetacriticMeta(BaseModel):
     critic_count: int
     user_count: int
     filtered_count: Optional[int] = Field(default=None, description="필터링 후 남은 리뷰 수")
-# 3. 크롤러가 전송하는 최종 형태
+
+# 3. 크롤러가 최종 전송할 때 사용하는 포장지 구조입니다.
 class MetacriticPayload(BaseModel):
     meta: MetacriticMeta
     reviews: List[MetacriticReview]
