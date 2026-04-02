@@ -41,7 +41,6 @@ insert into game_platform_map (
     game_id,
     platform_id,
     external_game_id,
-    external_game_url,
     crawled_at,
     platform_meta_json,
     updated_at
@@ -50,7 +49,6 @@ values (
     :game_id,
     :platform_id,
     :external_game_id,
-    :external_game_url,
     :crawled_at,
     :platform_meta_json,
     now()
@@ -58,7 +56,6 @@ values (
 on conflict (platform_id, external_game_id)
 do update set
     game_id = excluded.game_id,
-    external_game_url = coalesce(excluded.external_game_url, game_platform_map.external_game_url),
     crawled_at = coalesce(excluded.crawled_at, game_platform_map.crawled_at),
     platform_meta_json = coalesce(excluded.platform_meta_json, game_platform_map.platform_meta_json),
     updated_at = now()
@@ -105,7 +102,6 @@ insert into external_reviews (
     author_name,
     is_recommended,
     score_raw,
-    score_100,
     score_scale_id,
     language_code,
     review_text_raw,
@@ -126,7 +122,6 @@ values (
     :author_name,
     :is_recommended,
     :score_raw,
-    :score_100,
     :score_scale_id,
     :language_code,
     :review_text_raw,
@@ -146,7 +141,6 @@ do update set
     author_name = excluded.author_name,
     is_recommended = excluded.is_recommended,
     score_raw = excluded.score_raw,
-    score_100 = excluded.score_100,
     score_scale_id = excluded.score_scale_id,
     language_code = excluded.language_code,
     review_text_raw = excluded.review_text_raw,

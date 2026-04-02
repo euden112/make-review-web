@@ -67,7 +67,6 @@ create table if not exists game_platform_map (
     game_id bigint not null references games(id),
     platform_id bigint not null references platforms(id),
     external_game_id varchar(120) not null,
-    external_game_url text,
     crawled_at timestamptz,
     platform_meta_json jsonb,
     -- platform_meta_json: 플랫폼별 게임 메타데이터
@@ -118,9 +117,7 @@ create table if not exists external_reviews (
     author_name varchar(255),
     is_recommended boolean,
     score_raw varchar(50),
-    -- score_100: 적재 코드가 직접 넣는 점수(선택)
     -- normalized_score_100: DB 규칙으로 계산되는 공통 100점 축 점수
-    score_100 numeric(5,2),
     score_scale_id bigint references score_scales(id),
     normalized_score_100 numeric(5,2),
     language_code varchar(10),
