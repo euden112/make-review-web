@@ -1,19 +1,24 @@
-Crawling
+# Crawling
 
-파일 설명
+Steam 및 Metacritic 게임 리뷰를 수집하고 FastAPI 서버로 전송하는 크롤러
 
-metacritic_crawler.py : 메타크리틱 리뷰 크롤러
+⚙️ 설치
 
-steam_crawler.py : 스팀 공식 API 기반 유저 리뷰 크롤러
-- 게임 5개(gta5, 엘든링, 배그, 33원정대, 붉은 사막), 유저 리뷰 50개
-- 전처리 포함 (최소 20자 이상, 최대 500자 truncate, 중복 제거)
-- 결과: reviews_steam.json 저장
+```bash
+pip install requests httpx playwright
+playwright install chromium
+```
 
-reviews_metacritic.json : 수집된 리뷰 원본 데이터 - 게임 5개(gta5, 엘든링, 배그, 33원정대, 붉은 사막), 각 전문가/유저 50개
+🚀 사용법
 
-reviews_steam.json : 스팀에서 수집된 리뷰 원본 데이터
-- 게임 5개(gta5, 엘든링, 배그, 33원정대, 붉은 사막), 각 유저 리뷰 50개
+**1. 리뷰 수집**
+```bash
+python steam/steam_crawler.py
+python metacritic/metacritic_crawler.py
+```
 
-send_to_api_steam.py : 스팀 리뷰 데이터 전송
-send_to_api_metacritic.py : 메타크리틱 리뷰 데이터 전송
-- reviews_steam.json → FastAPI /api/v1/reviews/steam 으로 전송
+**2. 서버 전송** (FastAPI가 `localhost:8000` 에서 실행 중이어야 합니다)
+```bash
+python send_to_api.py steam
+python send_to_api.py metacritic
+```
