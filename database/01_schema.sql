@@ -243,21 +243,24 @@ before insert or update on external_reviews
 for each row
 execute function fn_normalize_review_score();
 
--- [테이블 역할] 게임별 증분 요약 커서
+-- [테이블 역할] 게임/언어별 증분 요약 커서
 -- 마지막으로 AI 요약에 반영된 review_id를 기록해 다음 배치에서 delta만 처리한다.
 create table if not exists game_summary_cursor (
-    game_id bigint primary key references games(id),
+    game_id bigint not null references games(id),
+    language_code varchar(10) not null,
     last_summarized_review_id bigint references external_reviews(id),
     last_summary_version integer not null default 0,
-    updated_at timestamptz not null default now()
+    updated_at timestamptz not null default now(),
+    constraint pk_game_summary_cursor primary key (game_id, language_code)
 );
 
 -- [테이블 역할] AI 요약 실행 이력
--- 배치 작업 상태 추적: 시작/종료, 처리 범위, 청크 개수, 에러 메시지 기록
+-- 배치 작업 상태 추적: 시작/종료, 처리 범위, 청크 개수, 언어, 에러 메시지 기록
 -- 운영 정책: 토큰 비용 최소화를 위해 요약 전략은 map_reduce로 고정한다.
 create table if not exists review_summary_jobs (
     id bigserial primary key,
     game_id bigint not null references games(id),
+    language_code varchar(10) not null,
     status varchar(20) not null,
     from_review_id bigint references external_reviews(id),
     to_review_id bigint references external_reviews(id),
@@ -281,11 +284,12 @@ create table if not exists review_summary_chunks (
     constraint uq_summary_chunk unique (job_id, chunk_no)
 );
 
--- [테이블 역할] 게임별 최종 AI 요약 결과 저장
+-- [테이블 역할] 게임/언어별 최종 AI 요약 결과 저장
 -- is_current=true가 현재 프론트에 노출되는 버전이다.
 create table if not exists game_review_summaries (
     id bigserial primary key,
     game_id bigint not null references games(id),
+    language_code varchar(10) not null,
     job_id bigint references review_summary_jobs(id),
     summary_version integer not null,
     summary_text text not null,
@@ -300,7 +304,7 @@ create table if not exists game_review_summaries (
     covered_to_review_id bigint references external_reviews(id),
     is_current boolean not null default true,
     created_at timestamptz not null default now(),
-    constraint uq_game_summary_version unique (game_id, summary_version),
+    constraint uq_game_summary_version unique (game_id, language_code, summary_version),
     constraint ck_ratio_range check (
         steam_recommend_ratio is null or (steam_recommend_ratio >= 0 and steam_recommend_ratio <= 100)
     )
@@ -346,15 +350,15 @@ create index if not exists idx_external_reviews_game_id_id
     on external_reviews (game_id, id);
 
 -- [대상] 게임 상세 화면에서 현재 노출 중인 AI 요약을 1건만 읽어올 때 사용한다.
--- [원리] `game_id`만으로 현재 버전 행을 즉시 찾게 하고, `where is_current = true` 부분 인덱스로 현재본 1건만 존재하도록 강제한다.
+-- [원리] `game_id`와 `language_code`로 현재 버전 행을 즉시 찾게 하고, `where is_current = true` 부분 인덱스로 게임/언어별 현재본 1건만 존재하도록 강제한다.
 create unique index if not exists uq_game_review_summaries_current_one
-    on game_review_summaries (game_id)
+    on game_review_summaries (game_id, language_code)
     where is_current = true;
 
 -- [대상] 게임별 요약 배치 잡의 최근 실행 이력과 상태를 운영 대시보드에서 조회할 때 사용한다.
--- [원리] `game_id`로 잡을 먼저 묶고, `started_at desc`로 최신 잡부터 읽도록 해 최근 이력 조회를 빠르게 한다.
+-- [원리] `game_id`와 `language_code`로 잡을 먼저 묶고, `started_at desc`로 최신 잡부터 읽도록 해 최근 이력 조회를 빠르게 한다.
 create index if not exists idx_review_summary_jobs_game_started
-    on review_summary_jobs (game_id, started_at desc);
+    on review_summary_jobs (game_id, language_code, started_at desc);
 
 -- 기본 플랫폼 시드 데이터
 -- 스키마를 여러 번 실행해도 중복 에러가 나지 않도록 처리

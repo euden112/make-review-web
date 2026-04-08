@@ -5,8 +5,8 @@
 ## Database ERD
 
 리뷰 수집, 적재, 정규화, AI 요약 흐름을 정리한 ERD입니다.
-핵심 테이블은 `external_reviews`이며, 이 테이블을 기준으로 게임/플랫폼 매핑, 수집 실행 이력, 요약 잡, 요약 결과가 연결됩니다.
-중복 방지 키(`source_review_key`), DB 트리거 기반 점수 정규화, 증분 요약 커서 구조까지 함께 확인할 수 있습니다.
+핵심 테이블은 `external_reviews`이며, 이 테이블을 기준으로 게임/플랫폼 매핑, 수집 실행 이력, 언어별 요약 잡, 요약 결과가 연결됩니다.
+중복 방지 키(`source_review_key`), DB 트리거 기반 점수 정규화, 게임/언어별 증분 요약 커서 구조까지 함께 확인할 수 있습니다.
 
 <img src="database_architecture.drawio.svg" alt="Database ERD" />
 
@@ -18,6 +18,7 @@
 - 중복 방지 + Upsert
 - 플랫폼별 점수 체계 정규화
 - AI 증분 요약(map-reduce) 운영 메타데이터 저장
+- 언어별 요약 결과 관리
 
 ## 파일
 
@@ -37,7 +38,7 @@
 - 리뷰 적재: `external_reviews`에 원문, 점수, 작성자, 메타데이터 저장
 - 점수 정규화: `fn_normalize_review_score()` 트리거가 `normalized_score_100` 계산
 - 운영 추적: `ingestion_runs`가 수집 시작/종료/건수를 기록
-- AI 요약: `game_summary_cursor` → `review_summary_jobs` → `review_summary_chunks` → `game_review_summaries` 순으로 처리
+- AI 요약: `game_summary_cursor` → `review_summary_jobs` → `review_summary_chunks` → `game_review_summaries` 순으로 처리하며, `language_code`로 언어별 결과를 분리 관리
 
 1. 중복 방지
 - 리뷰 원천 고유키가 있는 경우: source_review_id 사용
@@ -70,7 +71,7 @@
 - review_summary_jobs: 요약 배치 작업 상태 추적 (시작/종료, 처리 범위, 청크 개수)
 - review_summary_chunks: map 단계 청크별 요약 저장
 - game_review_summaries: 최종 요약 버전 관리 (is_current)
-- `game_review_summaries`는 현재 노출 중인 버전을 `is_current = true`로 관리하고, 게임당 현재본 1건만 유지하도록 설계
+- `game_review_summaries`는 현재 노출 중인 버전을 `is_current = true`로 관리하고, 게임/언어별 현재본 1건만 유지하도록 설계
 
 6. Sprint 1 완료 검증
 - 동일 데이터 재적재 시 중복 insert가 발생하지 않아야 함

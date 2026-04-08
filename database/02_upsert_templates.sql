@@ -203,21 +203,24 @@ limit :n;
 -- 7) 증분 요약용 커서 조회/업데이트
 select last_summarized_review_id, last_summary_version
 from game_summary_cursor
-where game_id = :game_id;
+where game_id = :game_id
+  and language_code = :language_code;
 
 insert into game_summary_cursor (
     game_id,
+    language_code,
     last_summarized_review_id,
     last_summary_version,
     updated_at
 )
 values (
     :game_id,
+    :language_code,
     :last_summarized_review_id,
     :last_summary_version,
     now()
 )
-on conflict (game_id)
+on conflict (game_id, language_code)
 do update set
     -- 커서 역행 방지: 늦게 끝난 작업이 더 작은 review_id로 덮어쓰지 못하게 한다.
     last_summarized_review_id = case
@@ -241,6 +244,7 @@ order by r.id asc;
 -- job 테이블은 상태/범위 중심으로 기록
 insert into review_summary_jobs (
     game_id,
+    language_code,
     status,
     from_review_id,
     to_review_id,
@@ -250,6 +254,7 @@ insert into review_summary_jobs (
 )
 values (
     :game_id,
+    :language_code,
     'started',
     :from_review_id,
     :to_review_id,
@@ -290,10 +295,12 @@ do update set
 update game_review_summaries
 set is_current = false
 where game_id = :game_id
+    and language_code = :language_code
   and is_current = true;
 
 insert into game_review_summaries (
     game_id,
+        language_code,
     job_id,
     summary_version,
     summary_text,
@@ -311,6 +318,7 @@ insert into game_review_summaries (
 )
 values (
     :game_id,
+    :language_code,
     :job_id,
     :summary_version,
     :summary_text,
