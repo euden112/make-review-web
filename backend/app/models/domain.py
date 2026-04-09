@@ -51,6 +51,10 @@ class GamePlatformMap(Base):
     platform_meta_json = Column(JSONB)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    __table_args__ = (
+        UniqueConstraint('platform_id', 'external_game_id', name='uq_game_platform_external_game'),
+        UniqueConstraint('game_id', 'platform_id', name='uq_game_platform_once'),
+    )
 
 # [운영 테이블] 크롤러 수집 성공/실패 여부와 개수를 기록하는 로그 테이블
 class IngestionRun(Base):
@@ -94,3 +98,6 @@ class ExternalReview(Base):
     is_deleted = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    __table_args__ = (
+        UniqueConstraint('platform_id', 'game_id', 'source_review_key', name='uq_external_review_key'),
+    )
