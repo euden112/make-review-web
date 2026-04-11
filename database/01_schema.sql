@@ -4,7 +4,7 @@
 -- 핵심: PK/FK/UNIQUE/CHECK/INDEX로 데이터 정합성과 성능을 DB 레벨에서 보장한다.
 -- 확장: 플랫폼별 점수 체계 차이(steam binary, critic 100, user 10)와
 --      AI 증분 요약(map-reduce) 운영을 지원한다.
--- TODO(Crawling): metacritic 크롤러 출력 파일명을 단일 기준으로 통일할 것.
+-- TODO(Crawling/Backend): Metacritic 크롤러 출력 파일명이 문서(reviews_metacritic.json)와 실제 코드(reviews.json) 간 혼선이 있으므로 백엔드 Ingestion 연동 전에 단일 기준으로 통일할 것.
 --   - 현재 문서 기준: reviews_metacritic.json
 --   - 일부 구현/연동 기준: reviews.json
 --   - 파일명 불일치 시 API 적재 누락/오탐 가능성이 있으므로 크롤러 파트에서 반드시 정리 필요.
@@ -266,6 +266,13 @@ create table if not exists review_summary_jobs (
     to_review_id bigint references external_reviews(id),
     input_review_count integer not null default 0,
     chunk_count integer not null default 0,
+    map_cache_hit integer not null default 0,
+    map_cache_miss integer not null default 0,
+    map_input_tokens integer not null default 0,
+    map_output_tokens integer not null default 0,
+    reduce_input_tokens integer not null default 0,
+    reduce_output_tokens integer not null default 0,
+    evidence_coverage_ratio numeric(5,2),
     error_message text,
     started_at timestamptz not null default now(),
     ended_at timestamptz,
@@ -293,6 +300,10 @@ create table if not exists game_review_summaries (
     job_id bigint references review_summary_jobs(id),
     summary_version integer not null,
     summary_text text not null,
+    representative_reviews_json jsonb,
+    sentiment_overall varchar(16),
+    sentiment_score numeric(5,2),
+    aspect_sentiment_json jsonb,
     pros_json jsonb,
     cons_json jsonb,
     keywords_json jsonb,
@@ -359,6 +370,18 @@ create unique index if not exists uq_game_review_summaries_current_one
 -- [원리] `game_id`와 `language_code`로 잡을 먼저 묶고, `started_at desc`로 최신 잡부터 읽도록 해 최근 이력 조회를 빠르게 한다.
 create index if not exists idx_review_summary_jobs_game_started
     on review_summary_jobs (game_id, language_code, started_at desc);
+
+-- [대상] Map-Reduce 초기 적재에서 Steam 리뷰를 긍/부정 비율로 층화 추출할 때 사용한다.
+-- [원리] 게임/언어/추천여부 필터 후 helpful/playtime 우선순위 정렬을 빠르게 수행하도록 부분 인덱스로 구성한다.
+create index if not exists idx_reviews_sampling_steam
+    on external_reviews (game_id, language_code, is_recommended, helpful_count desc, playtime_hours desc)
+    where is_deleted = false;
+
+-- [대상] Map-Reduce 초기 적재에서 Metacritic 리뷰를 점수 구간 비율로 층화 추출할 때 사용한다.
+-- [원리] 게임/언어/정규화 점수 필터 후 helpful/playtime 우선순위 정렬을 빠르게 수행하도록 부분 인덱스로 구성한다.
+create index if not exists idx_reviews_sampling_meta
+    on external_reviews (game_id, language_code, normalized_score_100, helpful_count desc, playtime_hours desc)
+    where is_deleted = false;
 
 -- 기본 플랫폼 시드 데이터
 -- 스키마를 여러 번 실행해도 중복 에러가 나지 않도록 처리

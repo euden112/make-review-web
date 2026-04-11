@@ -24,12 +24,22 @@
 
 - 01_schema.sql: 테이블/제약/기본 데이터
 - 02_upsert_templates.sql: 적재 모듈에서 바로 사용할 Upsert SQL 템플릿
+- 03_migration_sprint2.sql: 기존 DB를 Sprint 2 스펙(감성 분석/토큰/캐시 지표/샘플링 인덱스)으로 확장하는 additive 마이그레이션
 
 ## 적용 순서
 
 1. PostgreSQL DB 생성
 2. 01_schema.sql 실행
 3. 적재 코드에서 02_upsert_templates.sql의 쿼리 사용
+
+## 기존 DB 업그레이드 순서 (데이터 유지)
+
+1. 기존 DB 백업
+2. 03_migration_sprint2.sql 실행
+3. 애플리케이션이 신규 컬럼에 쓰기 로직을 점진 반영
+
+참고:
+- `create table if not exists`는 기존 테이블의 컬럼을 자동으로 변경하지 않으므로, 이미 운영 중인 DB는 03 마이그레이션 적용이 필요합니다.
 
 ## 설계 핵심
 
