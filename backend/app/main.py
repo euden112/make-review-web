@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1 import reviews
-
+from app.api.v1 import summaries
 # FastAPI 애플리케이션 객체를 생성합니다. 이 객체가 전체 웹 서버의 중심이 됩니다.
 app = FastAPI(
     title="Game Review Aggregator API",
@@ -22,7 +22,8 @@ app.add_middleware(
 # 만들어둔 리뷰 수신용 라우터(API 엔드포인트들)를 메인 앱에 등록하여 연결해 줍니다.
 # 이제 "/api/v1/reviews" 주소로 들어오는 요청은 reviews.py 파일에서 처리하게 됩니다.
 app.include_router(reviews.router, prefix="/api/v1/reviews", tags=["Reviews Data Ingestion"])
-
+# 추가: 메인 앱에 summaries API 연결
+app.include_router(summaries.router, prefix="/api/v1/games", tags=["Summaries"])
 # 서버가 잘 켜졌는지 확인하기 위한 기본(Root) 경로입니다.
 # 브라우저에서 http://localhost:8000 에 접속하면 아래 메시지가 보입니다.
 @app.get("/")
