@@ -101,3 +101,65 @@ class ExternalReview(Base):
     __table_args__ = (
         UniqueConstraint('platform_id', 'game_id', 'source_review_key', name='uq_external_review_key'),
     )
+    
+# ==============================================================================
+# [AI 요약 파이프라인 관련 테이블]
+# ==============================================================================
+
+class GameSummaryCursor(Base):
+    __tablename__ = "game_summary_cursor"
+    game_id = Column(BigInteger, ForeignKey("games.id"), primary_key=True)
+    language_code = Column(String(10), primary_key=True)  # 👈 중요: 복합 프라이머리 키로 추가
+    last_summarized_review_id = Column(BigInteger, ForeignKey("external_reviews.id"))
+    last_summary_version = Column(Integer, nullable=False, default=0)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+class ReviewSummaryJob(Base):
+    __tablename__ = "review_summary_jobs"
+    id = Column(BigInteger, primary_key=True, index=True)
+    game_id = Column(BigInteger, ForeignKey("games.id"), nullable=False)
+    language_code = Column(String(10), nullable=False) # 👈 추가
+    status = Column(String(20), nullable=False)
+    from_review_id = Column(BigInteger, ForeignKey("external_reviews.id"))
+    to_review_id = Column(BigInteger, ForeignKey("external_reviews.id"))
+    input_review_count = Column(Integer, default=0)
+    chunk_count = Column(Integer, default=0)
+    error_message = Column(Text)
+    started_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    ended_at = Column(DateTime(timezone=True))
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+class ReviewSummaryChunk(Base):
+    __tablename__ = "review_summary_chunks"
+    id = Column(BigInteger, primary_key=True, index=True)
+    job_id = Column(BigInteger, ForeignKey("review_summary_jobs.id", ondelete="CASCADE"), nullable=False)
+    chunk_no = Column(Integer, nullable=False)
+    input_review_count = Column(Integer, default=0)
+    chunk_summary_text = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    __table_args__ = (
+        UniqueConstraint('job_id', 'chunk_no', name='uq_summary_chunk'),
+    )
+
+class GameReviewSummary(Base):
+    __tablename__ = "game_review_summaries"
+    id = Column(BigInteger, primary_key=True, index=True)
+    game_id = Column(BigInteger, ForeignKey("games.id"), nullable=False)
+    language_code = Column(String(10), nullable=False) # 👈 추가
+    job_id = Column(BigInteger, ForeignKey("review_summary_jobs.id"))
+    summary_version = Column(Integer, nullable=False)
+    summary_text = Column(Text, nullable=False)
+    pros_json = Column(JSONB)
+    cons_json = Column(JSONB)
+    keywords_json = Column(JSONB)
+    steam_recommend_ratio = Column(Numeric(5, 2))
+    metacritic_critic_avg = Column(Numeric(5, 2))
+    metacritic_user_avg = Column(Numeric(5, 2))
+    source_review_count = Column(Integer, default=0)
+    covered_from_review_id = Column(BigInteger, ForeignKey("external_reviews.id"))
+    covered_to_review_id = Column(BigInteger, ForeignKey("external_reviews.id"))
+    is_current = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    __table_args__ = (
+        UniqueConstraint('game_id', 'language_code', 'summary_version', name='uq_game_summary_version'), # 👈 복합 유니크 키 제약 수정
+    )
