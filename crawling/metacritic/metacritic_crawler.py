@@ -5,6 +5,8 @@ Metacritic Game Review Crawler
   1단계: 규칙 기반 (길이/반복/스팸)
   2단계: 언어 감지 (영어만 통과)
   3단계: 카테고리 분류 (게임 관련 리뷰만 통과 + 카테고리 태깅)
+
+  lang(언어), category(카테고리 목록) 필드 추가됨
 """
 
 import asyncio
