@@ -24,6 +24,9 @@ alter table if exists review_summary_jobs
     add column if not exists evidence_coverage_ratio numeric(5,2);
 
 -- 3) 층화 추출 성능 보강용 partial index
+alter table if exists external_reviews
+    add column if not exists review_categories_json jsonb;
+
 create index if not exists idx_reviews_sampling_steam
     on external_reviews (game_id, language_code, is_recommended, helpful_count desc, playtime_hours desc)
     where is_deleted = false;
@@ -31,5 +34,8 @@ create index if not exists idx_reviews_sampling_steam
 create index if not exists idx_reviews_sampling_meta
     on external_reviews (game_id, language_code, normalized_score_100, helpful_count desc, playtime_hours desc)
     where is_deleted = false;
+
+create index if not exists idx_reviews_categories_json
+    on external_reviews using gin (review_categories_json);
 
 commit;

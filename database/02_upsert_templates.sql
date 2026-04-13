@@ -110,6 +110,7 @@ insert into external_reviews (
     helpful_count,
     playtime_hours,
     source_meta_json,
+    review_categories_json,
     updated_at
 )
 values (
@@ -130,6 +131,7 @@ values (
     coalesce(:helpful_count, 0),
     :playtime_hours,
     :source_meta_json,
+    :review_categories_json,
     now()
 )
 on conflict (platform_id, game_id, source_review_key)
@@ -149,6 +151,7 @@ do update set
     helpful_count = excluded.helpful_count,
     playtime_hours = excluded.playtime_hours,
     source_meta_json = coalesce(excluded.source_meta_json, external_reviews.source_meta_json),
+    review_categories_json = excluded.review_categories_json,
     is_deleted = false,
     updated_at = now();
 

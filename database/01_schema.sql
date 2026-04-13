@@ -96,6 +96,31 @@ create table if not exists ingestion_runs (
     constraint ck_ingestion_status check (status in ('started', 'success', 'failed', 'partial'))
 );
 
+-- [테이블 역할] Ingestion Dead Letter Queue(DLQ)
+-- 적재 실패 건을 건별로 보존해 재처리/장애 분석에 활용한다.
+create table if not exists ingestion_dead_letters (
+    id bigserial primary key,
+    ingestion_run_id bigint references ingestion_runs(id) on delete set null,
+    platform_id bigint references platforms(id),
+    game_id bigint references games(id),
+    source_review_key varchar(255),
+    failure_stage varchar(50) not null,
+    failure_reason text not null,
+    payload_json jsonb,
+    is_retryable boolean not null default true,
+    resolved boolean not null default false,
+    failed_at timestamptz not null default now(),
+    resolved_at timestamptz,
+    created_at timestamptz not null default now()
+);
+
+create index if not exists idx_ingestion_dead_letters_run_failed_at
+    on ingestion_dead_letters (ingestion_run_id, failed_at desc);
+
+create index if not exists idx_ingestion_dead_letters_unresolved
+    on ingestion_dead_letters (resolved, failed_at desc)
+    where resolved = false;
+
 -- [테이블 역할] 외부 리뷰 본문 저장소(핵심)    
 -- 실제 리뷰 원문/정제 텍스트/점수/작성자/작성일을 저장한다.
 -- source_review_key 유니크 제약으로 중복 적재를 막고 upsert 충돌 키로 사용한다.
@@ -127,6 +152,7 @@ create table if not exists external_reviews (
     helpful_count integer not null default 0,
     playtime_hours numeric(8,2),
     source_meta_json jsonb,
+    review_categories_json jsonb,
     -- source_meta_json: 플랫폼별 고유 메타데이터 (정규화된 필드와 중복 금지)
     -- steam 예: {"author_id": "76561198123456789", "reviewer_level": "verified_buyer", "helpful_percent": 95.0}
     -- metacritic: 현재 수집 필드 없음 (향후 API 확장 시 고유 필드만 추가, outlet/critic_name 등 수집되지 않음)
@@ -328,6 +354,11 @@ create table if not exists game_review_summaries (
 -- [대상] 리뷰 API가 비평가 소속사(outlet), 플레이 시간 구간(playtime_bracket) 같은 리뷰 메타 필드로 필터링/집계할 때 사용한다.
 -- [원리] JSONB GIN은 문서 내부 키를 역색인처럼 찾아가므로, 특정 키/값 경로를 자주 조회할 때 전체 행 스캔을 줄일 수 있다. 다만 삽입/갱신 비용이 증가하므로 EXPLAIN ANALYZE로 실제 seq scan이 확인될 때만 추가한다.
 --   CREATE INDEX idx_source_meta_gin ON external_reviews USING gin (source_meta_json);
+
+-- [대상] 프론트엔드가 review_categories_json(예: spam/abuse/bug_report 태그)으로 필터링하는 API에서 사용한다.
+-- [원리] review_categories_json 내부 키/배열 값 탐색 비용을 줄이기 위해 정식 GIN 인덱스를 제공한다.
+create index if not exists idx_external_reviews_review_categories_gin
+    on external_reviews using gin (review_categories_json);
 
 -- [대상] 게임 메타 API가 가격(price_usd), 할인율(discount_percent), 태그(tags)처럼 플랫폼별 부가 메타데이터로 조회할 때 사용한다.
 -- [원리] 플랫폼 메타는 키 종류가 넓을 수 있어 B-Tree 단일 컬럼보다 JSONB GIN이 적합하다. 단, 범위 검색이나 키 존재 검색 수요가 명확해졌을 때만 추가해야 쓰기 성능 저하를 막을 수 있다.
