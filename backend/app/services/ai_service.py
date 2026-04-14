@@ -5,12 +5,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import desc, and_
 
+from pathlib import Path
+
 from app.models.domain import ExternalReview, GameSummaryCursor, ReviewSummaryJob, GameReviewSummary
 from app.core.redis_client import invalidate_summary_cache
 
 # 🚀 핵심: 외부에 있는 ai-pipeline 모듈을 파이썬 경로에 추가하여 가져옵니다.
-AI_PIPELINE_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../ai-pipeline"))
-sys.path.append(AI_PIPELINE_PATH)
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+AI_PIPELINE_PATH = os.path.join(PROJECT_ROOT, "ai-pipeline")
+
+if AI_PIPELINE_PATH not in sys.path:
+    sys.path.append(AI_PIPELINE_PATH)
 
 # ai-pipeline 폴더 내의 모듈들을 import (해당 파일들이 존재한다고 가정)
 try:
