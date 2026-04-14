@@ -16,6 +16,7 @@ INSERT INTO external_reviews (
     helpful_count,
     playtime_hours,
     source_meta_json,
+    review_categories_json,
     updated_at
 )
 SELECT
@@ -36,6 +37,7 @@ SELECT
     COALESCE(x.helpful_count, 0),
     x.playtime_hours,
     x.source_meta_json,
+    x.review_categories_json,
     now()
 FROM jsonb_to_recordset($1::jsonb) AS x(
     platform_id bigint,
@@ -54,7 +56,8 @@ FROM jsonb_to_recordset($1::jsonb) AS x(
     reviewed_at timestamptz,
     helpful_count integer,
     playtime_hours numeric,
-    source_meta_json jsonb
+    source_meta_json jsonb,
+    review_categories_json jsonb
 )
 ON CONFLICT (platform_id, game_id, source_review_key)
 DO UPDATE SET
@@ -72,5 +75,6 @@ DO UPDATE SET
     helpful_count = EXCLUDED.helpful_count,
     playtime_hours = EXCLUDED.playtime_hours,
     source_meta_json = COALESCE(EXCLUDED.source_meta_json, external_reviews.source_meta_json),
+    review_categories_json = EXCLUDED.review_categories_json,
     is_deleted = false,
     updated_at = now();

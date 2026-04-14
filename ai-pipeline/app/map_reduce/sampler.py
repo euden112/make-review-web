@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import floor
+import re
 from typing import Sequence
 
 
@@ -15,6 +16,7 @@ class ReviewRow:
     normalized_score_100: float | None
     helpful_count: int
     playtime_hours: float | None
+    review_categories: list[str] | None = None
 
 
 def allocate(total: int, ratios: dict[str, float]) -> dict[str, int]:
@@ -33,6 +35,26 @@ def quality_score(row: ReviewRow) -> float:
     return (1.8 * (playtime + 1.0) ** 0.5) + (1.2 * (helpful + 1.0) ** 0.5)
 
 
+def is_spam_review(text: str) -> bool:
+    cleaned = (text or "").strip()
+    if len(cleaned) < 15 or len(cleaned) > 5000:
+        return True
+
+    words = cleaned.split()
+    if len(words) < 5:
+        return True
+
+    if re.search(r"(.)\1{5,}", cleaned):
+        return True
+
+    if len(words) >= 6:
+        unique_ratio = len(set(words)) / len(words)
+        if unique_ratio < 0.4:
+            return True
+
+    return False
+
+
 def stratified_select_reviews(
     rows: Sequence[ReviewRow],
     steam_ratio: tuple[int, int],
@@ -40,11 +62,19 @@ def stratified_select_reviews(
     total_target: int = 300,
     steam_budget_ratio: float = 0.5,
 ) -> list[ReviewRow]:
-    steam_budget = int(total_target * steam_budget_ratio)
-    metacritic_budget = total_target - steam_budget
+    filtered_rows = [row for row in rows if not is_spam_review(row.review_text_clean)]
 
-    steam_rows = [row for row in rows if row.platform_code == "steam"]
-    metacritic_rows = [row for row in rows if row.platform_code == "metacritic"]
+    steam_rows = [row for row in filtered_rows if row.platform_code == "steam"]
+    metacritic_rows = [row for row in filtered_rows if row.platform_code == "metacritic"]
+
+    total_valid_rows = len(filtered_rows)
+    if total_valid_rows > 0:
+        dynamic_steam_budget_ratio = len(steam_rows) / total_valid_rows
+    else:
+        dynamic_steam_budget_ratio = steam_budget_ratio
+
+    steam_budget = int(total_target * dynamic_steam_budget_ratio)
+    metacritic_budget = total_target - steam_budget
 
     pos_cnt, neg_cnt = steam_ratio
     steam_total = max(pos_cnt + neg_cnt, 1)
@@ -102,7 +132,7 @@ def stratified_select_reviews(
     if len(selected) < total_target:
         used_ids = {row.id for row in selected}
         fallback = sorted(
-            [row for row in rows if row.id not in used_ids],
+            [row for row in filtered_rows if row.id not in used_ids],
             key=quality_score,
             reverse=True,
         )

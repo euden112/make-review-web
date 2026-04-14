@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import httpx
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from app.cache.redis_cache import RedisCache
 
@@ -45,10 +46,39 @@ async def summarize_chunk_with_ollama(
             "num_predict": 500,
         },
     }
+    return await _summarize_chunk_with_ollama_with_retry(
+        client=client,
+        base_url=base_url,
+        payload=payload,
+        timeout_sec=timeout_sec,
+    )
+
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=1, max=8),
+    retry=retry_if_exception_type((httpx.TimeoutException, httpx.HTTPError, ValueError)),
+    reraise=True,
+)
+async def _summarize_chunk_with_ollama_with_retry(
+    *,
+    client: httpx.AsyncClient,
+    base_url: str,
+    payload: dict[str, Any],
+    timeout_sec: int,
+) -> str:
     response = await client.post(f"{base_url}/api/generate", json=payload, timeout=timeout_sec)
     response.raise_for_status()
+
     data = response.json()
-    return data.get("response", "").strip()
+    if not isinstance(data, dict):
+        raise ValueError("Invalid Ollama response type: expected JSON object")
+
+    summary = str(data.get("response", "")).strip()
+    if not summary:
+        raise ValueError("Ollama response is missing 'response' text")
+
+    return summary
 
 
 async def run_map_stage(
