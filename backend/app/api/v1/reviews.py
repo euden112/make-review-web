@@ -93,6 +93,7 @@ async def receive_metacritic_data(payload: Dict[str, MetacriticPayload], db: Asy
                 "review_text_clean": rev.body,
                 "helpful_count": getattr(rev, 'helpful_count', 0),
                 "source_meta_json": {},
+                "language_code": getattr(rev, 'language', 'ko') or 'ko',
                 "reviewed_at": parsed_date,
                 "is_deleted": False,
                 "updated_at": datetime.utcnow()
