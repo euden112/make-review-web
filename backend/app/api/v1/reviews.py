@@ -5,6 +5,8 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy import func  # 👈 func.coalesce 사용을 위해 추가 임포트
+
 from app.schemas.metacritic import MetacriticPayload
 from app.schemas.steam import SteamPayload
 from app.core.database import get_db
@@ -92,7 +94,8 @@ async def receive_metacritic_data(payload: Dict[str, MetacriticPayload], db: Asy
                 "score_raw": rev.score,
                 "review_text_clean": rev.body,
                 "helpful_count": getattr(rev, 'helpful_count', 0),
-                "source_meta_json": {},
+                "source_meta_json": getattr(rev, 'source_meta_json', {}),
+                "review_categories_json": getattr(rev, 'review_categories', []),
                 "language_code": getattr(rev, 'language', 'ko') or 'ko',
                 "reviewed_at": parsed_date,
                 "is_deleted": False,
@@ -111,13 +114,20 @@ async def receive_metacritic_data(payload: Dict[str, MetacriticPayload], db: Asy
                     score_raw=stmt.excluded.score_raw,
                     review_text_clean=stmt.excluded.review_text_clean,
                     reviewed_at=stmt.excluded.reviewed_at,
+                    
+                  
+                    helpful_count=stmt.excluded.helpful_count,
+                    source_meta_json=func.coalesce(stmt.excluded.source_meta_json, ExternalReview.source_meta_json),
+                    review_categories_json=stmt.excluded.review_categories_json,
+                    language_code=stmt.excluded.language_code,
+                    
                     is_deleted=False,
                     updated_at=datetime.utcnow()
                 )
             )
             await db.execute(stmt)
 
-        # 6. IngestionRun 완료 기록 (fetched_count 추가)
+        # 6. IngestionRun 완료 기록
         run.status = "success"
         run.fetched_count = len(game_data.reviews)
         run.inserted_count = len(reviews_data)
@@ -193,6 +203,13 @@ async def receive_steam_data(payload: Dict[str, SteamPayload], db: AsyncSession 
                 "is_recommended": rev.is_recommended,
                 "review_text_clean": rev.review_text,
                 "playtime_hours": rev.playtime_hours,
+                
+                # 👈 수정: 누락되었던 필드 및 기본값 로직 추가
+                "helpful_count": getattr(rev, 'helpful_count', 0),
+                "source_meta_json": getattr(rev, 'source_meta_json', {}),
+                "review_categories_json": getattr(rev, 'review_categories', []),
+                "language_code": getattr(rev, 'language', 'ko') or 'ko',
+                
                 "reviewed_at": parsed_date,
                 "is_deleted": False,
                 "updated_at": datetime.utcnow()
@@ -205,11 +222,20 @@ async def receive_steam_data(payload: Dict[str, SteamPayload], db: AsyncSession 
                 index_elements=['platform_id', 'game_id', 'source_review_key'],
                 set_=dict(
                     ingestion_run_id=stmt.excluded.ingestion_run_id,
+                    review_type_id=stmt.excluded.review_type_id,
+                    score_raw=stmt.excluded.score_raw,
                     author_name=stmt.excluded.author_name,
                     is_recommended=stmt.excluded.is_recommended,
                     playtime_hours=stmt.excluded.playtime_hours,
                     review_text_clean=stmt.excluded.review_text_clean,
                     reviewed_at=stmt.excluded.reviewed_at,
+                    
+                    # 👈 수정: 누락되었던 필드 업데이트 반영
+                    helpful_count=stmt.excluded.helpful_count,
+                    source_meta_json=func.coalesce(stmt.excluded.source_meta_json, ExternalReview.source_meta_json),
+                    review_categories_json=stmt.excluded.review_categories_json,
+                    language_code=stmt.excluded.language_code,
+                    
                     is_deleted=False,
                     updated_at=datetime.utcnow()
                 )
