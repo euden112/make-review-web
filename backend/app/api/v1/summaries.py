@@ -59,6 +59,10 @@ async def get_latest_summary(
         "pros": summary.pros_json,
         "cons": summary.cons_json,
         "keywords": summary.keywords_json,
+        "representative_reviews": summary.representative_reviews_json,
+        "sentiment_overall": summary.sentiment_overall,
+        "sentiment_score": float(summary.sentiment_score) if summary.sentiment_score is not None else None,
+        "aspect_sentiment": summary.aspect_sentiment_json,
         "updated_at": summary.created_at.isoformat()
     }
     
