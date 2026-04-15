@@ -248,6 +248,7 @@ order by r.id asc;
 insert into review_summary_jobs (
     game_id,
     language_code,
+    spam_rule_version,
     status,
     from_review_id,
     to_review_id,
@@ -258,6 +259,7 @@ insert into review_summary_jobs (
 values (
     :game_id,
     :language_code,
+    :spam_rule_version,
     'started',
     :from_review_id,
     :to_review_id,

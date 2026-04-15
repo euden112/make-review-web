@@ -287,6 +287,7 @@ create table if not exists review_summary_jobs (
     id bigserial primary key,
     game_id bigint not null references games(id),
     language_code varchar(10) not null,
+    spam_rule_version varchar(64),
     status varchar(20) not null,
     from_review_id bigint references external_reviews(id),
     to_review_id bigint references external_reviews(id),

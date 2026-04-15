@@ -21,6 +21,7 @@ alter table if exists review_summary_jobs
     add column if not exists map_output_tokens integer not null default 0,
     add column if not exists reduce_input_tokens integer not null default 0,
     add column if not exists reduce_output_tokens integer not null default 0,
+    add column if not exists spam_rule_version varchar(64),
     add column if not exists evidence_coverage_ratio numeric(5,2);
 
 -- 3) 층화 추출 성능 보강용 partial index
