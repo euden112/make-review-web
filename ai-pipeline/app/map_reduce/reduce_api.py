@@ -14,6 +14,8 @@ class FinalSummary:
     aspect_scores: dict[str, Any]
     representative_reviews: list[dict[str, Any]]
     full_text: str
+    error_code: str | None = None
+    is_retryable: bool | None = None
 
 
 REDUCE_SYSTEM_PROMPT = """
@@ -46,6 +48,20 @@ def _safe_parse_json(text: str) -> dict[str, Any]:
 
 class ReduceParseError(ValueError):
     pass
+
+
+def classify_reduce_error(exc: Exception) -> tuple[str, bool]:
+    if isinstance(exc, ReduceParseError):
+        return ("parse_error", False)
+
+    message = str(exc).lower()
+    if isinstance(exc, TimeoutError) or "timeout" in message or "timed out" in message:
+        return ("timeout", True)
+
+    if "quota" in message or "rate limit" in message or "429" in message:
+        return ("quota", False)
+
+    return ("upstream_unavailable", True)
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True)
@@ -96,17 +112,15 @@ async def run_reduce_stage(
             representative_reviews=parsed["representative_reviews"],
             full_text=parsed["full_text"],
         )
-    except ReduceParseError as e:
-        return FinalSummary(
-            one_liner="요약 생성 중 파싱 오류가 발생했습니다.",
-            aspect_scores={},
-            representative_reviews=[],
-            full_text=f"ErrorCode=parse_error; detail={str(e)}",
-        )
     except Exception as e:
+        error_code, is_retryable = classify_reduce_error(e)
         return FinalSummary(
             one_liner="요약 생성 중 오류가 발생했습니다.",
             aspect_scores={},
             representative_reviews=[],
-            full_text=f"ErrorCode=upstream_unavailable; detail={str(e)}",
+            full_text=(
+                f"ErrorCode={error_code}; retryable={str(is_retryable).lower()}; detail={str(e)}"
+            ),
+            error_code=error_code,
+            is_retryable=is_retryable,
         )

@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from types import SimpleNamespace
 
 import pytest
 
 from app.map_reduce.map_local import MapResult
 from app.map_reduce.pipeline import run_hybrid_summary_pipeline
-from app.map_reduce.reduce_api import FinalSummary
-from app.map_reduce.sampler import ReviewRow
+from app.map_reduce.reduce_api import FinalSummary, ReduceParseError, classify_reduce_error
+from app.map_reduce.rules import is_spam_review
+from app.map_reduce.sampler import ReviewRow, stratified_select_reviews
 
 
 class InMemoryAsyncCache:
@@ -119,3 +121,137 @@ async def test_hybrid_summary_pipeline_with_mocked_io() -> None:
     payload = asdict(final)
     assert isinstance(payload["representative_reviews"], list)
     assert payload["full_text"] == "synthetic summary body"
+
+
+@pytest.mark.asyncio
+async def test_hybrid_summary_pipeline_accepts_backend_rows_and_none_cache() -> None:
+    # Backend compatibility: rows without platform_code and cache=None.
+    rows = [
+        SimpleNamespace(
+            id=1,
+            platform_id=10,
+            language_code="ko",
+            review_text_clean="전투 타격감이 좋고 그래픽이 준수합니다.",
+            is_recommended=True,
+            normalized_score_100=None,
+            helpful_count=12,
+            playtime_hours=18.5,
+            review_categories_json=["graphics"],
+        ),
+        SimpleNamespace(
+            id=2,
+            platform_id=20,
+            language_code="ko",
+            review_text_clean="최적화 이슈가 있고 프레임 드랍이 있습니다.",
+            is_recommended=None,
+            normalized_score_100=45,
+            helpful_count=7,
+            playtime_hours=None,
+            review_categories_json=["optimization"],
+        ),
+    ]
+
+    observed: dict[str, int] = {}
+
+    async def mock_map_runner(**kwargs):
+        chunks = kwargs["chunks"]
+        observed["chunk_count"] = len(chunks)
+        return [
+            MapResult(chunk_no=chunk.chunk_no, summary=f"chunk {chunk.chunk_no}", cached=False)
+            for chunk in chunks
+        ]
+
+    async def mock_reduce_runner(**kwargs):
+        return FinalSummary(
+            one_liner="전반적으로 장단점이 공존합니다.",
+            aspect_scores={},
+            representative_reviews=[],
+            full_text="mocked",
+        )
+
+    result = await run_hybrid_summary_pipeline(
+        game_id=100,
+        language_code="ko",
+        all_reviews=rows,
+        steam_ratio=(1, 0),
+        metacritic_ratio=(0, 0, 1),
+        cache=None,
+        ollama_base_url="http://localhost:11434",
+        local_model_name="gemma4",
+        reduce_api_key="dummy-key",
+        reduce_model_name="gemini-2.0-flash",
+        map_runner=mock_map_runner,
+        reduce_runner=mock_reduce_runner,
+    )
+
+    assert result.full_text == "mocked"
+    assert observed["chunk_count"] >= 1
+
+
+def test_spam_rule_boundary_399_400_401() -> None:
+    text_399 = ("spam " * 80).strip()
+    text_400 = ("spam " * 79) + "spamx"
+    text_401 = ("spam " * 79) + "spamxx"
+
+    assert len(text_399) == 399
+    assert len(text_400) == 400
+    assert len(text_401) == 401
+
+    assert is_spam_review(text_399) is True
+    assert is_spam_review(text_400) is True
+    assert is_spam_review(text_401) is False
+
+
+def test_classify_reduce_error_codes() -> None:
+    assert classify_reduce_error(ReduceParseError("invalid json")) == ("parse_error", False)
+    assert classify_reduce_error(TimeoutError("request timeout")) == ("timeout", True)
+    assert classify_reduce_error(RuntimeError("quota exceeded 429")) == ("quota", False)
+    assert classify_reduce_error(RuntimeError("service unavailable")) == (
+        "upstream_unavailable",
+        True,
+    )
+
+
+def test_stratified_selection_prefers_non_spam_and_high_quality() -> None:
+    rows = [
+        ReviewRow(
+            id=1,
+            platform_code="steam",
+            language_code="ko",
+            review_text_clean="정말 훌륭한 전투 시스템과 탐험 요소",
+            is_recommended=True,
+            normalized_score_100=None,
+            helpful_count=15,
+            playtime_hours=20.0,
+        ),
+        ReviewRow(
+            id=2,
+            platform_code="steam",
+            language_code="ko",
+            review_text_clean="spam spam spam spam spam spam spam spam spam",
+            is_recommended=False,
+            normalized_score_100=None,
+            helpful_count=999,
+            playtime_hours=1.0,
+        ),
+        ReviewRow(
+            id=3,
+            platform_code="metacritic",
+            language_code="ko",
+            review_text_clean="스토리와 연출은 좋지만 최적화는 아쉽습니다",
+            is_recommended=None,
+            normalized_score_100=72,
+            helpful_count=8,
+            playtime_hours=None,
+        ),
+    ]
+
+    selected = stratified_select_reviews(
+        rows,
+        steam_ratio=(1, 1),
+        metacritic_bin_ratio=(0, 1, 0),
+        total_target=2,
+    )
+
+    assert len(selected) == 2
+    assert all(not is_spam_review(row.review_text_clean) for row in selected)
