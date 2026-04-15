@@ -339,3 +339,17 @@ values (
     true,
     now()
 );
+
+-- 12) General 우선 재분류 대상 조회 템플릿
+-- 목적: review_categories_json에 General이 포함된 리뷰를 재분류 배치의 우선 입력으로 사용
+-- 파라미터:
+-- :game_id, :language_code, :days_back, :limit
+select r.*
+from external_reviews r
+where r.game_id = :game_id
+    and r.language_code = :language_code
+    and r.is_deleted = false
+    and r.reviewed_at >= now() - (:days_back || ' days')::interval
+    and coalesce(r.review_categories_json, '[]'::jsonb) @> '["General"]'::jsonb
+order by r.reviewed_at desc nulls last, r.helpful_count desc, r.id desc
+limit :limit;

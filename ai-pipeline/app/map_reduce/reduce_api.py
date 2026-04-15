@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import google.generativeai as genai
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 
 @dataclass(slots=True)
@@ -43,6 +44,21 @@ def _safe_parse_json(text: str) -> dict[str, Any]:
     return json.loads(raw)
 
 
+class ReduceParseError(ValueError):
+    pass
+
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True)
+async def _generate_reduce_response(model: genai.GenerativeModel, user_prompt: str):
+    return await model.generate_content_async(
+        user_prompt,
+        generation_config=genai.types.GenerationConfig(
+            temperature=0.2,
+            response_mime_type="application/json",
+        ),
+    )
+
+
 async def run_reduce_stage(
     *,
     api_key: str,
@@ -66,26 +82,31 @@ async def run_reduce_stage(
     )
 
     try:
-        response = await model.generate_content_async(
-            user_prompt,
-            generation_config=genai.types.GenerationConfig(
-                temperature=0.2,
-                response_mime_type="application/json",
-            ),
-        )
+        response = await _generate_reduce_response(model, user_prompt)
 
         raw_text = (response.text or "").strip()
-        parsed = _safe_parse_json(raw_text)
+        try:
+            parsed = _safe_parse_json(raw_text)
+        except Exception as exc:
+            raise ReduceParseError(str(exc)) from exc
+
         return FinalSummary(
             one_liner=parsed["one_liner"],
             aspect_scores=parsed["aspect_scores"],
             representative_reviews=parsed["representative_reviews"],
             full_text=parsed["full_text"],
         )
+    except ReduceParseError as e:
+        return FinalSummary(
+            one_liner="요약 생성 중 파싱 오류가 발생했습니다.",
+            aspect_scores={},
+            representative_reviews=[],
+            full_text=f"ErrorCode=parse_error; detail={str(e)}",
+        )
     except Exception as e:
         return FinalSummary(
             one_liner="요약 생성 중 오류가 발생했습니다.",
             aspect_scores={},
             representative_reviews=[],
-            full_text=f"Error: {str(e)}",
+            full_text=f"ErrorCode=upstream_unavailable; detail={str(e)}",
         )
