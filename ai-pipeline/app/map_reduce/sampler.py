@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import floor
-import re
 from typing import Sequence
+
+from app.map_reduce.rules import is_spam_review
 
 
 @dataclass(slots=True)
@@ -33,26 +34,6 @@ def quality_score(row: ReviewRow) -> float:
     playtime = float(row.playtime_hours or 0.0)
     helpful = float(row.helpful_count or 0)
     return (1.8 * (playtime + 1.0) ** 0.5) + (1.2 * (helpful + 1.0) ** 0.5)
-
-
-def is_spam_review(text: str) -> bool:
-    cleaned = (text or "").strip()
-    if len(cleaned) < 15 or len(cleaned) > 5000:
-        return True
-
-    words = cleaned.split()
-    if len(words) < 5:
-        return True
-
-    if re.search(r"(.)\1{5,}", cleaned):
-        return True
-
-    if len(words) >= 6:
-        unique_ratio = len(set(words)) / len(words)
-        if unique_ratio < 0.4:
-            return True
-
-    return False
 
 
 def stratified_select_reviews(
