@@ -1,50 +1,26 @@
 import { useState, useEffect} from 'react'
 import { useNavigate } from 'react-router-dom'
+import Navbar from './Navbar'
 
 // 임시 게임 데이터
-const MOCK_GAMES = Array.from({ length: 18 }, (_, i) => ({
-  id: i + 1,
-  canonical_title: `게임 제목 ${i + 1}`,
-  cover_image: null,
-  description: '게임에 대한 간단한 소개 문구가 들어갈 자리입니다.',
-  rating: 5
-}))
-
-// 네비게이션 바
-function Navbar() {
-  return (
-    <nav
-      style={{
-        position: 'sticky',
-        top: 0,
-        zIndex: 100,
-        background: '#0d2d63',
-        borderBottom: '1px solid #173d7d',
-        padding: '0 48px',
-        height: '64px',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-      }}
-    >
-      <div
-        style={{
-          color: '#ffffff',
-          fontSize: '24px',
-          fontWeight: '700',
-          letterSpacing: '-0.5px',
-          cursor: 'pointer',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '10px',
-        }}
-      >
-        <span>🎮</span>
-        <span>게임 리뷰</span>
-      </div>
-    </nav>
-  )
-}
+const MOCK_GAMES = [
+  {
+    id: 1,
+    canonical_title: '엘든 링',
+    cover_image: 'https://cdn.cloudflare.steamstatic.com/steam/apps/1245620/library_600x900.jpg',
+    hero_image: 'https://cdn.cloudflare.steamstatic.com/steam/apps/1245620/header.jpg',
+    description: 'AI 한줄 요약',
+    rating: 5,
+  },
+  ...Array.from({ length: 17 }, (_, i) => ({
+    id: i + 2,
+    canonical_title: `게임 제목 ${i + 2}`,
+    cover_image: null,
+    hero_image: null,
+    description: '게임에 대한 간단한 AI 요약 문구가 들어갈 자리입니다.',
+    rating: 5,
+  }))
+]
 
 // 메인 배너
 const BANNERS = MOCK_GAMES.slice(0, 5)
@@ -59,7 +35,7 @@ function HeroBanner() {
       setCurrent((prev) => (prev + 1) % BANNERS.length)
     }, 4000)
     return () => clearInterval(timer)
-  }, [])
+  }, [current])
 
   const banner = BANNERS[current]
 
@@ -68,21 +44,36 @@ function HeroBanner() {
       style={{
         position: 'relative',
         width: '100%',
-        height: '360px',
-        background: banner.cover_image
-          ? `linear-gradient(rgba(5,15,35,0.5), rgba(5,15,35,0.5)), url(${banner.cover_image})`
-          : 'linear-gradient(135deg, #0d2d63 0%, #1a1a2e 100%)',
-        backgroundSize: 'cover',
-        backgroundPosition: 'center',
+        height: '440px',
+        background: 'linear-gradient(135deg, #0d2d63 0%, #1a1a2e 100%)',
+        overflow: 'hidden',
         display: 'flex',
         flexDirection: 'column',
         justifyContent: 'flex-start',
         paddingTop: '40px',
-        transition: 'background 0.5s ease',
       }}
     >
+      {banner.hero_image && (
+        <img
+          key={banner.id}
+          src={banner.hero_image}
+          alt=""
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            width: '100%',
+            height: '100%',
+            objectFit: 'cover',
+            objectPosition: 'top',
+            opacity: 0.5,
+            zIndex: 0,
+          }}
+        />
+      )}
+
       {/* 배너 내용 */}
-      <div style={{ padding: '0 48px', maxWidth: '700px' }}>
+      <div style={{ padding: '0 48px', maxWidth: '700px', position: 'relative', zIndex: 1 }}>
         <div
           style={{
             display: 'inline-block',
@@ -102,7 +93,7 @@ function HeroBanner() {
         <h1
           style={{
             margin: 0,
-            color: '#ffffff',
+            color: '#e0e0e0',
             fontSize: '52px',
             fontWeight: '800',
             lineHeight: 1.1,
@@ -124,7 +115,7 @@ function HeroBanner() {
           {banner.description}
         </p>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '12px', marginBottom: '16px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '110px', marginBottom: '16px' }}>
         <span style={{ color: '#ffb020', fontSize: '20px', fontWeight: '800' }}>
         {banner.rating ? `${banner.rating}.0` : '-'}
         </span>
@@ -148,7 +139,7 @@ function HeroBanner() {
           onClick={() => navigate(`/games/${banner.id}`)}
           style={{
             background: '#1565d8',
-            color: '#ffffff',
+            color: '#e0e0e0',
             border: 'none',
             borderRadius: '8px',
             padding: '12px 20px',
@@ -170,6 +161,7 @@ function HeroBanner() {
           transform: 'translateX(-50%)',
           display: 'flex',
           gap: '8px',
+          zIndex: 1,
         }}
       >
         {BANNERS.map((_, i) => (
@@ -180,7 +172,7 @@ function HeroBanner() {
               width: i === current ? '24px' : '8px',
               height: '8px',
               borderRadius: '4px',
-              background: i === current ? '#ffffff' : 'rgba(255,255,255,0.35)',
+              background: i === current ? '#e0e0e0' : 'rgba(255,255,255,0.35)',
               cursor: 'pointer',
               transition: 'all 0.3s ease',
             }}
@@ -211,7 +203,7 @@ function StarRating({ rating }) {
 }
 
 // 게임 카드
-function GameCard({ game, onClick }) {
+function GameCard({ game, onClick, isDark }) {
   const [hovered, setHovered] = useState(false)
 
   return (
@@ -219,10 +211,10 @@ function GameCard({ game, onClick }) {
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{
-        background: '#ffffff',
+        background: isDark ? '#1e1e2e' : '#ffffff',
         borderRadius: '8px',
         overflow: 'hidden',
-        border: '1px solid #e5e7eb',
+        border: isDark ? '1px solid #2a2a3e' : '1px solid #e5e7eb',
         boxShadow: hovered
           ? '0 8px 20px rgba(0,0,0,0.10)'
           : '0 2px 8px rgba(0,0,0,0.06)',
@@ -237,7 +229,7 @@ function GameCard({ game, onClick }) {
         style={{
           width: '95px',
           minWidth: '95px',
-          background: '#f3f4f6',
+          background: isDark ? '#2a2a3e' : '#f3f4f6',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
@@ -275,7 +267,7 @@ function GameCard({ game, onClick }) {
           >
             <h2
               style={{
-                color: '#111827',
+                color: isDark ? '#e0e0e0' : '#111827',
                 fontSize: '15px',
                 fontWeight: '700',
                 margin: 0,
@@ -291,7 +283,7 @@ function GameCard({ game, onClick }) {
             <div
               style={{
                 background: '#f5a623',
-                color: '#ffffff',
+                color: '#eeeeee',
                 fontSize: '12px',
                 fontWeight: '700',
                 borderRadius: '4px',
@@ -308,7 +300,7 @@ function GameCard({ game, onClick }) {
 
           <p
             style={{
-              color: '#4b5563',
+              color: isDark ? '#cccccc' : '#4b5563',
               fontSize: '11px',
               lineHeight: '1.4',
               margin: 0,
@@ -326,7 +318,7 @@ function GameCard({ game, onClick }) {
           onClick={() => onClick(game)}
           style={{
             background: hovered ? '#0b5ed7' : '#1565d8',
-            color: '#ffffff',
+            color: '#e0e0e0',
             border: 'none',
             borderRadius: '4px',
             padding: '6px 10px',
@@ -345,7 +337,7 @@ function GameCard({ game, onClick }) {
 }
 
 // 메인 페이지
-function GameListPage() {
+function GameListPage({ isDark, toggleDark }) {
   const [games] = useState(MOCK_GAMES)
   const navigate = useNavigate()
 
@@ -354,8 +346,8 @@ function GameListPage() {
   }
 
   return (
-    <div style={{ minHeight: '100vh', background: '#f5f6f8' }}>
-      <Navbar />
+    <div style={{ minHeight: '100vh', background: isDark ? '#0f0f1a' : '#f5f6f8' }}>
+      <Navbar isDark={isDark} toggleDark={toggleDark} />
       <HeroBanner />
 
       <div style={{ padding: '40px 48px' }}>
@@ -369,7 +361,7 @@ function GameListPage() {
         >
           <h2
             style={{
-              color: '#111111',
+              color: isDark ? '#e0e0e0' : '#111111',
               fontSize: '28px',
               fontWeight: '800',
               margin: 0,
@@ -388,7 +380,7 @@ function GameListPage() {
           }}
         >
           {games.map((game) => (
-            <GameCard key={game.id} game={game} onClick={handleCardClick} />
+            <GameCard key={game.id} game={game} onClick={handleCardClick} isDark={isDark} />
           ))}
         </div>
       </div>
