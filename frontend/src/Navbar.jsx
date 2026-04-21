@@ -4,48 +4,18 @@ function Navbar({ isDark, toggleDark }) {
   const navigate = useNavigate()
 
   return (
-    <nav
-      style={{
-        position: 'sticky',
-        top: 0,
-        zIndex: 100,
-        background: isDark ? '#1a1a2e' : '#ffffff',
-        borderBottom: isDark ? '1px solid #2a2a3e' : '1px solid #e5e7eb',
-        padding: '0 48px',
-        height: '64px',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-      }}
-    >
+    <nav className="sticky top-0 z-50 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700 px-12 h-16 flex items-center justify-between">
       <div
         onClick={() => navigate('/')}
-        style={{
-          color: isDark ? '#e0e0e0' : '#111827',
-          fontSize: '24px',
-          fontWeight: '700',
-          letterSpacing: '-0.5px',
-          cursor: 'pointer',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '10px',
-        }}
+        className="text-gray-900 dark:text-gray-100 text-2xl font-bold cursor-pointer flex items-center gap-2"
       >
         <span>🎮</span>
         <span>게임 리뷰</span>
       </div>
 
-      {/* 다크모드 토글 버튼 */}
       <button
         onClick={toggleDark}
-        style={{
-          background: isDark ? '#2a2a3e' : '#f3f4f6',
-          border: 'none',
-          borderRadius: '8px',
-          padding: '8px 12px',
-          cursor: 'pointer',
-          fontSize: '18px',
-        }}
+        className="bg-gray-100 dark:bg-gray-700 border-none rounded-lg px-3 py-2 cursor-pointer text-lg"
       >
         {isDark ? '☀️' : '🌙'}
       </button>

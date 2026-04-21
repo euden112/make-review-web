@@ -1,8 +1,7 @@
-import { useState, useEffect} from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import Navbar from './Navbar'
 
-// 임시 게임 데이터
 const MOCK_GAMES = [
   {
     id: 1,
@@ -22,14 +21,12 @@ const MOCK_GAMES = [
   }))
 ]
 
-// 메인 배너
 const BANNERS = MOCK_GAMES.slice(0, 5)
 
 function HeroBanner() {
   const [current, setCurrent] = useState(0)
   const navigate = useNavigate()
 
-  // 4초마다 자동으로 다음 배너로
   useEffect(() => {
     const timer = setInterval(() => {
       setCurrent((prev) => (prev + 1) % BANNERS.length)
@@ -40,141 +37,69 @@ function HeroBanner() {
   const banner = BANNERS[current]
 
   return (
-    <section
-      style={{
-        position: 'relative',
-        width: '100%',
-        height: '440px',
-        background: 'linear-gradient(135deg, #0d2d63 0%, #1a1a2e 100%)',
-        overflow: 'hidden',
-        display: 'flex',
-        flexDirection: 'column',
-        justifyContent: 'flex-start',
-        paddingTop: '40px',
-      }}
+    <section className="relative w-full h-[440px] overflow-hidden flex flex-col justify-start pt-10"
+      style={{ background: 'linear-gradient(135deg, #0d2d63 0%, #1a1a2e 100%)' }}
     >
       {banner.hero_image && (
         <img
           key={banner.id}
           src={banner.hero_image}
           alt=""
-          style={{
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            width: '100%',
-            height: '100%',
-            objectFit: 'cover',
-            objectPosition: 'top',
-            opacity: 0.5,
-            zIndex: 0,
-          }}
+          className="absolute top-0 left-0 w-full h-full object-cover object-top opacity-50 z-0"
         />
       )}
 
       {/* 배너 내용 */}
-      <div style={{ padding: '0 48px', maxWidth: '700px', position: 'relative', zIndex: 1 }}>
-        <div
-          style={{
-            display: 'inline-block',
-            background: 'rgba(255, 176, 32, 0.15)',
-            color: '#ffb020',
-            border: '1px solid rgba(255, 176, 32, 0.35)',
-            borderRadius: '20px',
-            padding: '6px 12px',
-            fontSize: '12px',
-            fontWeight: '700',
-            marginBottom: '18px',
-          }}
+      <div className="px-12 max-w-2xl relative z-10">
+        <div className="inline-block rounded-full px-3 py-1 text-xs font-bold mb-4"
+          style={{ background: 'rgba(255,176,32,0.15)', color: '#ffb020', border: '1px solid rgba(255,176,32,0.35)' }}
         >
           추천 게임
         </div>
 
-        <h1
-          style={{
-            margin: 0,
-            color: '#e0e0e0',
-            fontSize: '52px',
-            fontWeight: '800',
-            lineHeight: 1.1,
-            letterSpacing: '-1px',
-          }}
+        <h1 className="text-5xl font-extrabold leading-tight tracking-tight m-0"
+          style={{ color: '#e0e0e0' }}
         >
           {banner.canonical_title}
         </h1>
 
-        <p
-          style={{
-            marginTop: '16px',
-            marginBottom: '22px',
-            color: '#e6edf8',
-            fontSize: '16px',
-            lineHeight: 1.6,
-          }}
-        >
+        <p className="mt-4 mb-5 text-base leading-relaxed" style={{ color: '#e6edf8' }}>
           {banner.description}
         </p>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '110px', marginBottom: '16px' }}>
-        <span style={{ color: '#ffb020', fontSize: '20px', fontWeight: '800' }}>
-        {banner.rating ? `${banner.rating}.0` : '-'}
-        </span>
-        <span style={{ color: '#ffffff', fontSize: '16px' }}>/ 5.0</span>
-        <div style={{ display: 'flex', gap: '2px' }}>
-        {[1, 2, 3, 4, 5].map((star) => (
-        <span
-        key={star}
-        style={{
-          fontSize: '20px',
-          color: banner.rating && star <= banner.rating ? '#ffb020' : 'rgba(255,255,255,0.3)',
-        }}
-      >
-        ★
-      </span>
-    ))}
-  </div>
-</div>
+        <div className="flex items-center gap-2 mt-28 mb-4">
+          <span className="text-xl font-extrabold" style={{ color: '#ffb020' }}>
+            {banner.rating ? `${banner.rating}.0` : '-'}
+          </span>
+          <span className="text-base text-white">/ 5.0</span>
+          <div className="flex gap-0.5">
+            {[1, 2, 3, 4, 5].map((star) => (
+              <span key={star} className="text-xl"
+                style={{ color: banner.rating && star <= banner.rating ? '#ffb020' : 'rgba(255,255,255,0.3)' }}
+              >★</span>
+            ))}
+          </div>
+        </div>
 
         <button
           onClick={() => navigate(`/games/${banner.id}`)}
-          style={{
-            background: '#1565d8',
-            color: '#e0e0e0',
-            border: 'none',
-            borderRadius: '8px',
-            padding: '12px 20px',
-            fontSize: '14px',
-            fontWeight: '700',
-            cursor: 'pointer',
-          }}
+          className="bg-blue-700 hover:bg-blue-800 text-white border-none rounded-lg px-5 py-3 text-sm font-bold cursor-pointer"
+          style={{ color: '#e0e0e0' }}
         >
           AI 리뷰 요약 보기
         </button>
       </div>
 
-      {/* 하단 점 인디케이터 */}
-      <div
-        style={{
-          position: 'absolute',
-          bottom: '20px',
-          left: '50%',
-          transform: 'translateX(-50%)',
-          display: 'flex',
-          gap: '8px',
-          zIndex: 1,
-        }}
-      >
+      {/* 인디케이터 */}
+      <div className="absolute bottom-5 left-1/2 -translate-x-1/2 flex gap-2 z-10">
         {BANNERS.map((_, i) => (
           <div
             key={i}
             onClick={() => setCurrent(i)}
+            className="h-2 rounded-full cursor-pointer transition-all duration-300"
             style={{
               width: i === current ? '24px' : '8px',
-              height: '8px',
-              borderRadius: '4px',
               background: i === current ? '#e0e0e0' : 'rgba(255,255,255,0.35)',
-              cursor: 'pointer',
-              transition: 'all 0.3s ease',
             }}
           />
         ))}
@@ -183,151 +108,58 @@ function HeroBanner() {
   )
 }
 
-// 별점
 function StarRating({ rating }) {
   return (
-    <div style={{ display: 'flex', gap: '2px' }}>
+    <div className="flex gap-0.5">
       {[1, 2, 3, 4, 5].map((star) => (
-        <span
-          key={star}
-          style={{
-            fontSize: '15px',
-            color: rating && star <= rating ? '#f5a623' : '#d9d9d9',
-          }}
-        >
-          ★
-        </span>
+        <span key={star} className="text-sm"
+          style={{ color: rating && star <= rating ? '#f5a623' : '#d9d9d9' }}
+        >★</span>
       ))}
     </div>
   )
 }
 
-// 게임 카드
-function GameCard({ game, onClick, isDark }) {
+function GameCard({ game, onClick }) {
   const [hovered, setHovered] = useState(false)
 
   return (
     <div
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
-      style={{
-        background: isDark ? '#1e1e2e' : '#ffffff',
-        borderRadius: '8px',
-        overflow: 'hidden',
-        border: isDark ? '1px solid #2a2a3e' : '1px solid #e5e7eb',
-        boxShadow: hovered
-          ? '0 8px 20px rgba(0,0,0,0.10)'
-          : '0 2px 8px rgba(0,0,0,0.06)',
-        transition: 'all 0.2s ease',
-        transform: hovered ? 'translateY(-2px)' : 'translateY(0)',
-        display: 'flex',
-        flexDirection: 'row',
-        height: '140px',
-      }}
+      className={`bg-white dark:bg-[#1e1e2e] rounded-lg overflow-hidden border border-gray-200 dark:border-[#2a2a3e] flex flex-row h-36 cursor-pointer transition-all duration-200 ${hovered ? 'shadow-lg -translate-y-0.5' : 'shadow-sm'}`}
     >
-      <div
-        style={{
-          width: '95px',
-          minWidth: '95px',
-          background: isDark ? '#2a2a3e' : '#f3f4f6',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}
-      >
+      {/* 커버 이미지 */}
+      <div className="w-24 min-w-[95px] bg-gray-100 dark:bg-[#2a2a3e] flex items-center justify-center">
         {game.cover_image ? (
-          <img
-            src={game.cover_image}
-            alt={game.canonical_title}
-            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-          />
+          <img src={game.cover_image} alt={game.canonical_title} className="w-full h-full object-cover" />
         ) : (
-          <span style={{ color: '#9ca3af', fontSize: '11px' }}>No Image</span>
+          <span className="text-gray-400 text-xs">No Image</span>
         )}
       </div>
 
-      <div
-        style={{
-          padding: '12px',
-          display: 'flex',
-          flexDirection: 'column',
-          justifyContent: 'space-between',
-          flexGrow: 1,
-          overflow: 'hidden',
-        }}
-      >
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'flex-start',
-              gap: '8px',
-            }}
-          >
-            <h2
-              style={{
-                color: isDark ? '#e0e0e0' : '#111827',
-                fontSize: '15px',
-                fontWeight: '700',
-                margin: 0,
-                whiteSpace: 'nowrap',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                flex: 1,
-              }}
-            >
+      {/* 카드 내용 */}
+      <div className="p-3 flex flex-col justify-between flex-1 overflow-hidden">
+        <div className="flex flex-col gap-1.5">
+          <div className="flex justify-between items-start gap-2">
+            <h2 className="text-gray-900 dark:text-[#e0e0e0] text-sm font-bold m-0 truncate flex-1">
               {game.canonical_title}
             </h2>
-
-            <div
-              style={{
-                background: '#f5a623',
-                color: '#eeeeee',
-                fontSize: '12px',
-                fontWeight: '700',
-                borderRadius: '4px',
-                padding: '3px 7px',
-                minWidth: '38px',
-                textAlign: 'center',
-              }}
-            >
+            <div className="bg-[#f5a623] text-[#eeeeee] text-xs font-bold rounded px-1.5 py-0.5 min-w-[38px] text-center">
               {game.rating ? `${game.rating}.0` : '-'}
             </div>
           </div>
 
           <StarRating rating={game.rating} />
 
-          <p
-            style={{
-              color: isDark ? '#cccccc' : '#4b5563',
-              fontSize: '11px',
-              lineHeight: '1.4',
-              margin: 0,
-              display: '-webkit-box',
-              WebkitLineClamp: 2,
-              WebkitBoxOrient: 'vertical',
-              overflow: 'hidden',
-            }}
-          >
+          <p className="text-xs leading-snug m-0 line-clamp-2 text-gray-500 dark:text-[#cccccc]">
             {game.description}
           </p>
         </div>
 
         <button
           onClick={() => onClick(game)}
-          style={{
-            background: hovered ? '#0b5ed7' : '#1565d8',
-            color: '#e0e0e0',
-            border: 'none',
-            borderRadius: '4px',
-            padding: '6px 10px',
-            fontSize: '11px',
-            fontWeight: '700',
-            cursor: 'pointer',
-            transition: 'background 0.2s ease',
-            alignSelf: 'flex-start',
-          }}
+          className={`text-[#e0e0e0] border-none rounded px-2.5 py-1.5 text-xs font-bold cursor-pointer transition-colors duration-200 self-start ${hovered ? 'bg-blue-700' : 'bg-blue-600'}`}
         >
           → AI 리뷰 요약 보기
         </button>
@@ -336,7 +168,6 @@ function GameCard({ game, onClick, isDark }) {
   )
 }
 
-// 메인 페이지
 function GameListPage({ isDark, toggleDark }) {
   const [games] = useState(MOCK_GAMES)
   const navigate = useNavigate()
@@ -346,41 +177,18 @@ function GameListPage({ isDark, toggleDark }) {
   }
 
   return (
-    <div style={{ minHeight: '100vh', background: isDark ? '#0f0f1a' : '#f5f6f8' }}>
+    <div className="min-h-screen bg-gray-100 dark:bg-[#0f0f1a]">
       <Navbar isDark={isDark} toggleDark={toggleDark} />
       <HeroBanner />
 
-      <div style={{ padding: '40px 48px' }}>
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            marginBottom: '24px',
-          }}
-        >
-          <h2
-            style={{
-              color: isDark ? '#e0e0e0' : '#111111',
-              fontSize: '28px',
-              fontWeight: '800',
-              margin: 0,
-            }}
-          >
-            전체 게임 리뷰
-          </h2>
+      <div className="px-12 py-10">
+        <h2 className="text-gray-900 dark:text-[#e0e0e0] text-2xl font-extrabold mb-6">
+          전체 게임 리뷰
+        </h2>
 
-        </div>
-
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
-            gap: '18px',
-          }}
-        >
+        <div className="grid grid-cols-3 gap-5">
           {games.map((game) => (
-            <GameCard key={game.id} game={game} onClick={handleCardClick} isDark={isDark} />
+            <GameCard key={game.id} game={game} onClick={handleCardClick} />
           ))}
         </div>
       </div>

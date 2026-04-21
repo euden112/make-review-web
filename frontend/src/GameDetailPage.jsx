@@ -2,7 +2,6 @@ import { useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import Navbar from './Navbar'
 
-// 임시 게임 데이터 
 const MOCK_GAMES = [
   {
     id: 1,
@@ -31,172 +30,99 @@ function GameDetailPage({ isDark, toggleDark }) {
     window.scrollTo(0, 0)
   }, [])
 
-  if (!game) return <div style={{ padding: '40px' }}>게임을 찾을 수 없습니다.</div>
+  if (!game) return <div className="p-10">게임을 찾을 수 없습니다.</div>
 
   return (
-    <div style={{ minHeight: '100vh', background: isDark ? '#0f0f1a' : '#f5f6f8' }}>
-
-       <Navbar isDark={isDark} toggleDark={toggleDark} />
+    <div className="min-h-screen bg-gray-100 dark:bg-[#0f0f1a]">
+      <Navbar isDark={isDark} toggleDark={toggleDark} />
 
       {/* 게임 배너 */}
-      <section style={{
-        position: 'relative',
-        height: '440px',
-        background: 'linear-gradient(135deg, #0d2d63 0%, #1a1a2e 100%)',
-        overflow: 'hidden',
-        padding: '48px',
-        display: 'flex',
-        gap: '40px',
-        alignItems: 'center',
-      }}>
+      <section className="relative h-[440px] overflow-hidden flex gap-10 items-center px-12"
+        style={{ background: 'linear-gradient(135deg, #0d2d63 0%, #1a1a2e 100%)' }}
+      >
         {game.hero_image && (
           <img
             src={game.hero_image}
             alt=""
-            style={{
-              position: 'absolute',
-              top: 0,
-              left: 0,
-              width: '100%',
-              height: '100%',
-              objectFit: 'cover',
-              objectPosition: 'top',
-              opacity: 0.5,
-              zIndex: 0,
-            }}
+            className="absolute top-0 left-0 w-full h-full object-cover object-top opacity-50 z-0"
           />
         )}
-        
+
         {/* 뒤로가기 */}
-        <div style={{ position: 'absolute', top: '16px', right: '24px' }}>
+        <div className="absolute top-4 right-6 z-10">
           <span
             onClick={() => navigate('/')}
-            style={{ color: 'rgba(255,255,255,0.7)', fontSize: '13px', cursor: 'pointer' }}
+            className="text-white/70 text-xs cursor-pointer hover:text-white transition-colors"
           >
             ← 목록으로 돌아가기
           </span>
         </div>
 
         {/* 게임 커버 이미지 */}
-        <div style={{
-          position: 'relative',
-          zIndex: 1,
-          width: '160px',
-          minWidth: '160px',
-          height: '220px',
-          background: '#2a2a3e',
-          borderRadius: '8px',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          flexShrink: 0,
-        }}>
+        <div className="relative z-10 w-40 min-w-[160px] h-56 bg-[#2a2a3e] rounded-lg flex items-center justify-center shrink-0">
           {game.cover_image
-            ? <img src={game.cover_image} alt={game.canonical_title} style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '8px' }} />
-            : <span style={{ color: '#555', fontSize: '12px' }}>No Image</span>
+            ? <img src={game.cover_image} alt={game.canonical_title} className="w-full h-full object-cover rounded-lg" />
+            : <span className="text-gray-500 text-xs">No Image</span>
           }
         </div>
 
         {/* 게임 정보 */}
-        <div style={{ position: 'relative', zIndex: 1 }}>
-          <h1 style={{ color: '#ffffff', fontSize: '42px', fontWeight: '800', margin: '0 0 12px' }}>
+        <div className="relative z-10">
+          <h1 className="text-white text-4xl font-extrabold mb-3">
             {game.canonical_title}
           </h1>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px' }}>
-            <span style={{ color: '#ffb020', fontSize: '22px', fontWeight: '800' }}>
+          <div className="flex items-center gap-2 mb-4">
+            <span className="text-xl font-extrabold" style={{ color: '#ffb020' }}>
               {game.rating ? `${game.rating}.0` : '-'}
             </span>
-            <span style={{ color: '#ffffff', fontSize: '16px' }}>/ 5.0</span>
-            <div style={{ display: 'flex', gap: '2px' }}>
+            <span className="text-white text-base">/ 5.0</span>
+            <div className="flex gap-0.5">
               {[1, 2, 3, 4, 5].map((star) => (
-                <span key={star} style={{
-                  fontSize: '22px',
-                  color: game.rating && star <= game.rating ? '#ffb020' : 'rgba(255,255,255,0.3)',
-                }}>★</span>
+                <span key={star} className="text-xl"
+                  style={{ color: game.rating && star <= game.rating ? '#ffb020' : 'rgba(255,255,255,0.3)' }}
+                >★</span>
               ))}
             </div>
           </div>
 
-          <p style={{ color: '#e6edf8', fontSize: '15px', lineHeight: 1.6, marginBottom: '24px', maxWidth: '600px' }}>
+          <p className="text-sm leading-relaxed mb-6 max-w-xl" style={{ color: '#e6edf8' }}>
             {game.description}
           </p>
-
         </div>
       </section>
 
       {/* 리뷰 요약 블록들 */}
-      <div style={{ padding: '32px 48px', display: 'flex', flexDirection: 'column', gap: '24px' }}>
+      <div className="px-12 py-8 flex flex-col gap-6">
 
         {/* 블록 1 */}
-        <div style={{
-          background: isDark ? '#1e1e2e' : '#ffffff',
-          borderRadius: '12px',
-          padding: '28px',
-          border: isDark ? '1px solid #2a2a3e' : '1px solid #e5e7eb',
-          boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
-        }}>
-          <h2 style={{ fontSize: '16px', fontWeight: '700', color: isDark ? '#e0e0e0' : '#111827', marginBottom: '12px' }}>
-            예시 블록
-          </h2>
-          <div style={{ height: '80px', background: isDark ? '#2a2a3e' : '#f9fafb', borderRadius: '8px' }} />
+        <div className="bg-white dark:bg-[#1e1e2e] rounded-xl p-7 border border-gray-200 dark:border-[#2a2a3e] shadow-sm">
+          <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0] mb-3">예시 블록</h2>
+          <div className="h-20 bg-gray-50 dark:bg-[#2a2a3e] rounded-lg" />
         </div>
 
         {/* 블록 2 */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
-          <div style={{
-            background: isDark ? '#1e1e2e' : '#ffffff',
-            borderRadius: '12px',
-            padding: '28px',
-            border: isDark ? '1px solid #2a2a3e' : '1px solid #e5e7eb',
-            boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
-          }}>
-            <h2 style={{ fontSize: '16px', fontWeight: '700', color: isDark ? '#e0e0e0' : '#111827', marginBottom: '12px' }}>
-              예시 블록
-            </h2>
-            <div style={{ height: '80px', background: isDark ? '#2a2a3e' : '#f9fafb', borderRadius: '8px' }} />
+        <div className="grid grid-cols-2 gap-6">
+          <div className="bg-white dark:bg-[#1e1e2e] rounded-xl p-7 border border-gray-200 dark:border-[#2a2a3e] shadow-sm">
+            <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0] mb-3">예시 블록</h2>
+            <div className="h-20 bg-gray-50 dark:bg-[#2a2a3e] rounded-lg" />
           </div>
-
-          <div style={{
-            background: isDark ? '#1e1e2e' : '#ffffff',
-            borderRadius: '12px',
-            padding: '28px',
-            border: isDark ? '1px solid #2a2a3e' : '1px solid #e5e7eb',
-            boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
-          }}>
-            <h2 style={{ fontSize: '16px', fontWeight: '700', color: isDark ? '#e0e0e0' : '#111827', marginBottom: '12px' }}>
-              예시 블록
-            </h2>
-            <div style={{ height: '80px', background: isDark ? '#2a2a3e' : '#f9fafb', borderRadius: '8px' }} />
+          <div className="bg-white dark:bg-[#1e1e2e] rounded-xl p-7 border border-gray-200 dark:border-[#2a2a3e] shadow-sm">
+            <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0] mb-3">예시 블록</h2>
+            <div className="h-20 bg-gray-50 dark:bg-[#2a2a3e] rounded-lg" />
           </div>
         </div>
 
         {/* 블록 3 */}
-        <div style={{
-          background: isDark ? '#1e1e2e' : '#ffffff',
-          borderRadius: '12px',
-          padding: '28px',
-          border: isDark ? '1px solid #2a2a3e' : '1px solid #e5e7eb',
-          boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
-        }}>
-          <h2 style={{ fontSize: '16px', fontWeight: '700', color: isDark ? '#e0e0e0' : '#111827', marginBottom: '12px' }}>
-            예시 블록
-          </h2>
-          <div style={{ height: '80px', background: isDark ? '#2a2a3e' : '#f9fafb', borderRadius: '8px' }} />
+        <div className="bg-white dark:bg-[#1e1e2e] rounded-xl p-7 border border-gray-200 dark:border-[#2a2a3e] shadow-sm">
+          <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0] mb-3">예시 블록</h2>
+          <div className="h-20 bg-gray-50 dark:bg-[#2a2a3e] rounded-lg" />
         </div>
 
         {/* 블록 4 */}
-        <div style={{
-          background: isDark ? '#1e1e2e' : '#ffffff',
-          borderRadius: '12px',
-          padding: '28px',
-          border: isDark ? '1px solid #2a2a3e' : '1px solid #e5e7eb',
-          boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
-        }}>
-          <h2 style={{ fontSize: '16px', fontWeight: '700', color: isDark ? '#e0e0e0' : '#111827', marginBottom: '12px' }}>
-            예시 블록
-          </h2>
-          <div style={{ height: '60px', background: isDark ? '#2a2a3e' : '#f9fafb', borderRadius: '8px' }} />
+        <div className="bg-white dark:bg-[#1e1e2e] rounded-xl p-7 border border-gray-200 dark:border-[#2a2a3e] shadow-sm">
+          <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0] mb-3">예시 블록</h2>
+          <div className="h-16 bg-gray-50 dark:bg-[#2a2a3e] rounded-lg" />
         </div>
 
       </div>
