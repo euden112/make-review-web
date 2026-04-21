@@ -6,6 +6,10 @@
 - 페이지 간 라우팅
 - 다크모드 지원 (localStorage 저장)
 
+## 기술 스택
+- React + Vite
+- Tailwind CSS v3
+  
 ## 로컬 실행 방법
 1. 이 레포지토리 클론
    git clone https://github.com/euden112/make-review-web.git
@@ -26,7 +30,7 @@
 1. vercel.com 접속 → GitHub 계정으로 로그인
 2. Add New Project 클릭
 3. make-review-web 레포지토리 선택 후 Import 클릭
-4. Root Directory 설정에서 frontend 선택 (중요!)
+4. Root Directory 설정에서 frontend 선택 (중요)
 5. Deploy 클릭
 6. 배포 완료 후 생성된 URL을 아래에 추가
 
