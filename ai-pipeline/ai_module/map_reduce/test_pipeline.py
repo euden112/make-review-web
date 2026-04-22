@@ -5,11 +5,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.map_reduce.map_local import MapResult
-from app.map_reduce.pipeline import run_hybrid_summary_pipeline
-from app.map_reduce.reduce_api import FinalSummary, ReduceParseError, classify_reduce_error
-from app.map_reduce.rules import is_spam_review
-from app.map_reduce.sampler import ReviewRow, stratified_select_reviews
+from ai_module.map_reduce import map_local
+from ai_module.map_reduce.map_local import MapResult
+from ai_module.map_reduce.pipeline import run_hybrid_summary_pipeline
+from ai_module.map_reduce.reduce_api import FinalSummary, ReduceParseError, classify_reduce_error
+from ai_module.map_reduce.rules import is_spam_review
+from ai_module.map_reduce.sampler import ReviewRow, stratified_select_reviews
 
 
 class InMemoryAsyncCache:
@@ -131,7 +132,7 @@ async def test_hybrid_summary_pipeline_accepts_backend_rows_and_none_cache() -> 
             id=1,
             platform_id=10,
             language_code="ko",
-            review_text_clean="전투 타격감이 좋고 그래픽이 준수합니다.",
+            review_text_clean="?íŹ ?ę˛Šę°??ě˘ęł  ęˇ¸ë?˝ě´ ě¤?íŠ?ë¤.",
             is_recommended=True,
             normalized_score_100=None,
             helpful_count=12,
@@ -142,7 +143,7 @@ async def test_hybrid_summary_pipeline_accepts_backend_rows_and_none_cache() -> 
             id=2,
             platform_id=20,
             language_code="ko",
-            review_text_clean="최적화 이슈가 있고 프레임 드랍이 있습니다.",
+            review_text_clean="ěľě ???´ěę° ?ęł  ?ë ???ë???ěľ?ë¤.",
             is_recommended=None,
             normalized_score_100=45,
             helpful_count=7,
@@ -163,7 +164,7 @@ async def test_hybrid_summary_pipeline_accepts_backend_rows_and_none_cache() -> 
 
     async def mock_reduce_runner(**kwargs):
         return FinalSummary(
-            one_liner="전반적으로 장단점이 공존합니다.",
+            one_liner="?ë°?ěźëĄ??Ľë¨?ě´ ęłľěĄ´?Šë??",
             aspect_scores={},
             representative_reviews=[],
             full_text="mocked",
@@ -186,6 +187,44 @@ async def test_hybrid_summary_pipeline_accepts_backend_rows_and_none_cache() -> 
 
     assert result.full_text == "mocked"
     assert observed["chunk_count"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_run_map_stage_keeps_successful_chunks_when_one_fails(monkeypatch) -> None:
+    class DummyCache:
+        def __init__(self) -> None:
+            self._store: dict[str, str] = {}
+
+        async def get(self, key: str) -> str | None:
+            return self._store.get(key)
+
+        async def set(self, key: str, value: str, ttl_sec: int = 0) -> None:
+            self._store[key] = value
+
+    chunks = [
+        SimpleNamespace(chunk_no=1, text="first chunk"),
+        SimpleNamespace(chunk_no=2, text="second chunk"),
+    ]
+
+    async def fake_summarize_chunk_with_ollama(**kwargs):
+        if kwargs["prompt"].startswith("Summarize the following game review chunk") and "second chunk" in kwargs["prompt"]:
+            raise RuntimeError("synthetic failure")
+        return "summary"
+
+    monkeypatch.setattr(map_local, "summarize_chunk_with_ollama", fake_summarize_chunk_with_ollama)
+
+    results = await map_local.run_map_stage(
+        game_id=1,
+        language_code="en",
+        chunks=chunks,
+        model_name="gemma4",
+        prompt_version="v1",
+        cache=DummyCache(),
+        ollama_base_url="http://localhost:11434",
+    )
+
+    assert [item.chunk_no for item in results] == [1]
+    assert results[0].cached is False
 
 
 def test_spam_rule_boundary_399_400_401() -> None:
@@ -218,7 +257,7 @@ def test_stratified_selection_prefers_non_spam_and_high_quality() -> None:
             id=1,
             platform_code="steam",
             language_code="ko",
-            review_text_clean="정말 훌륭한 전투 시스템과 탐험 요소",
+            review_text_clean="?ë§ ?ë????íŹ ?ě¤?ęłź ?í ?ě",
             is_recommended=True,
             normalized_score_100=None,
             helpful_count=15,
@@ -238,7 +277,7 @@ def test_stratified_selection_prefers_non_spam_and_high_quality() -> None:
             id=3,
             platform_code="metacritic",
             language_code="ko",
-            review_text_clean="스토리와 연출은 좋지만 최적화는 아쉽습니다",
+            review_text_clean="",
             is_recommended=None,
             normalized_score_100=72,
             helpful_count=8,

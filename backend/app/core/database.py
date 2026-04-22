@@ -1,9 +1,13 @@
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import declarative_base, sessionmaker
+import os
 
 # 데이터베이스에 접속하기 위한 주소입니다.
 # FastAPI가 멈추지 않고 여러 요청을 동시에 처리할 수 있도록 비동기(asyncpg) 드라이버를 사용합니다.
-DATABASE_URL = "postgresql+asyncpg://postgres:password@localhost:5432/review_db"
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    "postgresql+asyncpg://postgres:password@localhost:5432/review_db",
+)
 
 # 데이터베이스와 실제 통신을 담당하는 '엔진(Engine)'을 생성합니다.
 engine = create_async_engine(DATABASE_URL, echo=False)

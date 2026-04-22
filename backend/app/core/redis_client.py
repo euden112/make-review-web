@@ -1,8 +1,14 @@
 import json
+import os
 import redis.asyncio as redis
 
-# Redis 서버 연결 (로컬 환경 기준)
-redis_db = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
+# Redis 서버 연결 (기본 localhost, 필요 시 환경변수로 변경)
+redis_db = redis.Redis(
+    host=os.getenv("REDIS_HOST", "localhost"),
+    port=int(os.getenv("REDIS_PORT", "6379")),
+    db=int(os.getenv("REDIS_DB", "0")),
+    decode_responses=True,
+)
 
 async def get_summary_cache(game_id: int, language: str):
     """Redis에서 요약본 캐시 조회"""

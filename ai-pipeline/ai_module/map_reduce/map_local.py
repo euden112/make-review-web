@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 from dataclasses import dataclass
 from typing import Any
 
 import httpx
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
-from app.cache.redis_cache import RedisCache
+from ai_module.cache.redis_cache import RedisCache
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -35,15 +39,17 @@ async def summarize_chunk_with_ollama(
     base_url: str,
     model_name: str,
     prompt: str,
-    timeout_sec: int = 90,
+    keep_alive: str = "10m",
+    timeout_sec: int = 300,
 ) -> str:
     payload: dict[str, Any] = {
         "model": model_name,
         "prompt": prompt,
         "stream": False,
+        "keep_alive": keep_alive,
         "options": {
             "temperature": 0.2,
-            "num_predict": 500,
+            "num_predict": 256,
         },
     }
     return await _summarize_chunk_with_ollama_with_retry(
@@ -65,7 +71,7 @@ async def _summarize_chunk_with_ollama_with_retry(
     client: httpx.AsyncClient,
     base_url: str,
     payload: dict[str, Any],
-    timeout_sec: int,
+    timeout_sec: int = 300,
 ) -> str:
     response = await client.post(f"{base_url}/api/generate", json=payload, timeout=timeout_sec)
     response.raise_for_status()
@@ -90,13 +96,13 @@ async def run_map_stage(
     prompt_version: str,
     cache: RedisCache,
     ollama_base_url: str,
-    max_concurrency: int = 4,
+    max_concurrency: int = 1,
 ) -> list[MapResult]:
     semaphore = asyncio.Semaphore(max_concurrency)
 
     async with httpx.AsyncClient() as client:
 
-        async def worker(chunk) -> MapResult:
+        async def worker(chunk) -> MapResult | None:
             key = make_chunk_cache_key(
                 game_id,
                 language_code,
@@ -113,17 +119,36 @@ async def run_map_stage(
                 "Include pros, cons, technical issues(optimization, bugs), and evidence review_id.\n\n"
                 f"{chunk.text}"
             )
-            async with semaphore:
-                summary = await summarize_chunk_with_ollama(
-                    client=client,
-                    base_url=ollama_base_url,
-                    model_name=model_name,
-                    prompt=prompt,
-                )
+            try:
+                async with semaphore:
+                    summary = await summarize_chunk_with_ollama(
+                        client=client,
+                        base_url=ollama_base_url,
+                        model_name=model_name,
+                        prompt=prompt,
+                    )
+            except Exception as exc:
+                logger.warning("map chunk %s failed: %s", chunk.chunk_no, exc)
+                return None
 
-            await cache.set(key, summary)
+            try:
+                await cache.set(key, summary)
+            except Exception as exc:
+                logger.warning("cache write failed for chunk %s: %s", chunk.chunk_no, exc)
+
             return MapResult(chunk_no=chunk.chunk_no, summary=summary, cached=False)
 
         results = await asyncio.gather(*(worker(chunk) for chunk in chunks))
 
-    return sorted(results, key=lambda item: item.chunk_no)
+    successful_results = [item for item in results if item is not None]
+    if not successful_results:
+        raise RuntimeError("All map-stage chunk summaries failed")
+
+    if len(successful_results) != len(results):
+        logger.warning(
+            "map stage completed with %d/%d successful chunks",
+            len(successful_results),
+            len(results),
+        )
+
+    return sorted(successful_results, key=lambda item: item.chunk_no)

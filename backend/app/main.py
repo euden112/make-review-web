@@ -1,7 +1,16 @@
+import logging
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1 import reviews
 from app.api.v1 import summaries
+
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+
 # FastAPI 애플리케이션 객체를 생성합니다. 이 객체가 전체 웹 서버의 중심이 됩니다.
 app = FastAPI(
     title="Game Review Aggregator API",

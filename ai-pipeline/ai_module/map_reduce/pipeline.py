@@ -3,10 +3,10 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from app.map_reduce.chunker import chunk_reviews_by_chars
-from app.map_reduce.map_local import run_map_stage
-from app.map_reduce.reduce_api import FinalSummary, run_reduce_stage
-from app.map_reduce.sampler import ReviewRow, stratified_select_reviews
+from ai_module.map_reduce.chunker import chunk_reviews_by_chars
+from ai_module.map_reduce.map_local import run_map_stage, MapResult
+from ai_module.map_reduce.reduce_api import FinalSummary, run_reduce_stage
+from ai_module.map_reduce.sampler import ReviewRow, stratified_select_reviews
 
 
 MapRunner = Callable[..., Awaitable[list[Any]]]
@@ -84,12 +84,13 @@ async def run_hybrid_summary_pipeline(
     local_model_name: str,
     reduce_api_key: str,
     reduce_model_name: str,
+    prior_summary_text: str | None = None,
     map_runner: MapRunner | None = None,
     reduce_runner: ReduceRunner | None = None,
-) -> FinalSummary:
+) -> tuple[list[MapResult], FinalSummary]:
     normalized_reviews = _normalize_reviews(all_reviews, language_code)
     if not normalized_reviews:
-        return FinalSummary(
+        return [], FinalSummary(
             one_liner="요약 가능한 리뷰가 없습니다.",
             aspect_scores={},
             representative_reviews=[],
@@ -128,11 +129,16 @@ async def run_hybrid_summary_pipeline(
         ollama_base_url=ollama_base_url,
     )
 
+    map_summaries = [result.summary for result in map_results]
+    if prior_summary_text:
+        # Keep a compact long-term memory to avoid unbounded reduce input growth.
+        map_summaries.insert(0, f"[previous_summary]\n{prior_summary_text[:1200]}")
+
     final = await reduce_func(
         api_key=reduce_api_key,
         model_name=reduce_model_name,
         language_code=language_code,
-        map_summaries=[result.summary for result in map_results],
+        map_summaries=map_summaries,
     )
 
-    return final
+    return map_results, final

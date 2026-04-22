@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from math import floor
 from typing import Sequence
 
-from app.map_reduce.rules import is_spam_review
+from ai_module.map_reduce.rules import is_spam_review
 
 
 @dataclass(slots=True)

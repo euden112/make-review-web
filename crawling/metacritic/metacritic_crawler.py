@@ -12,6 +12,7 @@ Metacritic Game Review Crawler
 import asyncio
 import json
 import re
+from pathlib import Path
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -34,40 +35,38 @@ GAME_TITLES = [
 PLATFORM             = "pc"
 MAX_CRITIC_REVIEWS   = 50
 MAX_USER_REVIEWS     = 50
-OUTPUT_FILE          = "reviews_metacritic.json"
 HEADLESS             = True
 MAX_CONCURRENT_GAMES = 2
 
 # 전처리 설정
 MIN_BODY_LENGTH = 20
-MAX_BODY_LENGTH = 500
+MAX_BODY_LENGTH = 8000
 
 # 필터 설정
 MIN_LENGTH    = 15
-MAX_LENGTH    = 5000
+MAX_LENGTH    = 8000
 MIN_WORDS     = 5
 REPEAT_LIMIT  = 5
 UNIQUE_RATIO  = 0.4
 MAX_URLS      = 2
 
+# 카테고리 분류 임계값
 CATEGORY_THRESHOLD = 0.30
 
-# ============================================================
-# 게임 카테고리 (영어 키워드)
-# ============================================================
+# 게임 리뷰 카테고리
 GAME_CATEGORIES = {
-    "그래픽":       ["graphics", "visual", "art style", "beautiful", "stunning", "ugly", "resolution", "textures"],
-    "조작감":       ["controls", "gameplay feel", "responsive", "clunky", "input lag", "movement", "mechanics"],
-    "스토리/세계관": ["story", "narrative", "plot", "lore", "world building", "atmosphere", "characters", "writing"],
-    "최적화":       ["optimization", "fps", "performance", "lag", "stuttering", "loading", "frame rate"],
-    "난이도":       ["difficulty", "hard", "easy", "challenging", "punishing", "frustrating"],
-    "콘텐츠 양":    ["content", "playtime", "hours", "replay", "endgame", "dlc", "update"],
-    "사운드/음악":  ["soundtrack", "ost", "music", "sound effects", "voice acting", "audio"],
-    "가성비":       ["worth", "price", "value", "expensive", "cheap", "refund", "sale", "overpriced"],
-    "멀티플레이":   ["multiplayer", "coop", "online", "pvp", "matchmaking", "server"],
-    "밸런스":       ["balance", "overpowered", "underpowered", "nerf", "buff", "meta", "broken"],
-    "버그/안정성":  ["bug", "crash", "glitch", "broken", "stable", "patch", "fix", "error"],
-    "접근성":       ["tutorial", "beginner", "ui", "ux", "accessible", "confusing", "intuitive"],
+    "그래픽": ["graphics", "visual", "art style", "beautiful", "stunning", "ugly", "resolution", "textures"],
+    "조작감": ["controls", "gameplay feel", "responsive", "clunky", "input lag", "movement", "mechanics"],
+    "스토리/세계관": ["story", "narrative", "plot", "lore", "world building", "setting", "atmosphere", "characters", "writing", "immersive"],
+    "최적화": ["optimization", "fps", "performance", "lag", "stuttering", "loading", "frame rate"],
+    "난이도": ["difficulty", "hard", "easy", "challenging", "punishing", "souls-like", "frustrating"],
+    "콘텐츠 양": ["content", "playtime", "hours", "replay", "endgame", "dlc", "update", "postgame"],
+    "사운드/음악": ["soundtrack", "ost", "music", "sound effects", "voice acting", "audio", "bgm"],
+    "가성비": ["worth", "price", "value", "expensive", "cheap", "refund", "sale", "overpriced"],
+    "멀티플레이": ["multiplayer", "coop", "online", "pvp", "matchmaking", "server", "co-op"],
+    "밸런스": ["balance", "overpowered", "underpowered", "nerf", "buff", "meta", "fair", "broken"],
+    "버그/안정성": ["bug", "crash", "glitch", "broken", "stable", "patch", "fix", "error"],
+    "접근성": ["tutorial", "beginner", "ui", "ux", "accessible", "confusing", "intuitive", "learning curve"],
 }
 
 BASE_URL = "https://www.metacritic.com"
@@ -120,8 +119,9 @@ def rule_based_filter(text: str) -> FilterResult:
         return FilterResult(False, "rule", "too_few_words")
     if re.search(rf'(.)\1{{{REPEAT_LIMIT},}}', text):
         return FilterResult(False, "rule", "repeated_chars")
-    if len(words) >= 6 and len(set(words)) / len(words) < UNIQUE_RATIO:
-        return FilterResult(False, "rule", "word_repetition")
+    if len(text) <= 400:
+        if len(words) >= 6 and len(set(words)) / len(words) < UNIQUE_RATIO:
+            return FilterResult(False, "rule", "word_repetition")
     if len(re.findall(r'https?://', text)) >= MAX_URLS:
         return FilterResult(False, "rule", "spam_url")
 
@@ -152,11 +152,14 @@ def category_filter(text: str) -> FilterResult:
     for category, keywords in GAME_CATEGORIES.items():
         keyword_embs = model.encode(keywords, convert_to_tensor=True)
         sims = util.cos_sim(review_emb, keyword_embs)[0]
-        if sims.max().item() >= CATEGORY_THRESHOLD:
+        max_sim = sims.max().item()
+
+        if max_sim >= CATEGORY_THRESHOLD:
             matched.append(category)
 
     if not matched:
         return FilterResult(False, "category", "no_category_matched")
+
     return FilterResult(True, "category", "pass", categories=matched)
 
 # ============================================================
@@ -269,8 +272,8 @@ async def parse_card(page, card) -> dict | None:
             "score":      score,
             "body":       body,
             "date":       date,
-            "lang":       result.lang,
-            "categories": result.categories,
+            "language":   result.lang,
+            "review_categories": result.categories,
         }
 
     except Exception:
@@ -362,13 +365,16 @@ async def collect_reviews(game, platform, max_critic, max_user, context):
 # ============================================================
 
 async def main():
+    timestamp = datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')
+    base_dir = Path(__file__).resolve().parent
+    output_file = base_dir / f"metacritic_reviews_raw_{timestamp}.json"
     print("=" * 55)
     print(f"  게임 목록  : {', '.join(GAME_TITLES)}")
     print(f"  플랫폼     : {PLATFORM}")
     print(f"  언어 정책  : 영어(en)만 수집")
     print(f"  전문가     : 게임당 최대 {MAX_CRITIC_REVIEWS}개")
     print(f"  유저       : 게임당 최대 {MAX_USER_REVIEWS}개")
-    print(f"  저장파일   : {OUTPUT_FILE}")
+    print(f"  저장파일   : {output_file}")
     print("=" * 55)
 
     all_output: dict = {}
@@ -399,6 +405,10 @@ async def main():
             "meta": {
                 "game":         game,
                 "platform":     PLATFORM,
+                    "platform_code": "metacritic",
+                    "schema_version": "1.0",
+                    "collected_at": datetime.utcnow().strftime('%Y%m%dT%H%M%SZ'),
+                    "record_count": len(reviews),
                 "lang_policy":  "en_only",
                 "crawled_at":   datetime.now().isoformat(),
                 "total":        len(reviews),
@@ -408,7 +418,7 @@ async def main():
             "reviews": reviews,
         }
 
-    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+    with open(output_file, "w", encoding="utf-8") as f:
         json.dump(all_output, f, ensure_ascii=False, indent=2)
 
     print("\n" + "=" * 55)
@@ -416,7 +426,7 @@ async def main():
     for game, data in all_output.items():
         m = data["meta"]
         print(f"  {game}: 전문가 {m['critic_count']}개 / 유저 {m['user_count']}개")
-    print(f"\n  {OUTPUT_FILE} 저장 완료")
+    print(f"\n  {output_file} 저장 완료")
     print("=" * 55)
 
 

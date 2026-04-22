@@ -19,7 +19,7 @@ async def trigger_summarization(
 ):
     """AI 요약 파이프라인 트리거 (비동기 큐 삽입)"""
     # 백그라운드에서 ai-pipeline을 가동하도록 지시합니다.
-    background_tasks.add_task(run_ai_pipeline_task, game_id, language, db)
+    background_tasks.add_task(run_ai_pipeline_task, game_id, language)
     return {
         "status": "processing", 
         "message": f"게임 {game_id}의 AI 요약 작업이 비동기로 시작되었습니다."

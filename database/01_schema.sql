@@ -59,8 +59,7 @@ create table if not exists games (
 );
 
 -- [테이블 역할] 외부 식별자 매핑
--- games.id(내부 통합 게임 ID)와 각 플랫폼의 게임 ID를 매핑하는 테이블.
--- 예: games.id=10 <-> Steam app_id=570, Metacritic slug='dota-2'
+-- games.id(내부 통합 게임 ID)와 각 플랫폼의 게임 ID를 매핑하는 테이블.\
 -- FK로 연결해 존재하지 않는 게임/플랫폼 값이 들어오는 것을 방지한다.
 create table if not exists game_platform_map (
     id bigserial primary key,
