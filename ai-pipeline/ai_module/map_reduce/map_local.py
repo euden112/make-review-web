@@ -42,14 +42,18 @@ async def summarize_chunk_with_ollama(
     keep_alive: str = "10m",
     timeout_sec: int = 300,
 ) -> str:
+    # /api/chat handles the model's chat template internally and returns
+    # plain text in message.content — avoids the empty-response bug seen
+    # with /api/generate on instruction-tuned models (e.g. Gemma4).
     payload: dict[str, Any] = {
         "model": model_name,
-        "prompt": prompt,
+        "messages": [{"role": "user", "content": prompt}],
         "stream": False,
         "keep_alive": keep_alive,
         "options": {
             "temperature": 0.2,
-            "num_predict": 256,
+            "num_predict": 2048,
+            "num_ctx": 8192,
         },
     }
     return await _summarize_chunk_with_ollama_with_retry(
@@ -73,16 +77,21 @@ async def _summarize_chunk_with_ollama_with_retry(
     payload: dict[str, Any],
     timeout_sec: int = 300,
 ) -> str:
-    response = await client.post(f"{base_url}/api/generate", json=payload, timeout=timeout_sec)
+    response = await client.post(f"{base_url}/api/chat", json=payload, timeout=timeout_sec)
     response.raise_for_status()
 
     data = response.json()
     if not isinstance(data, dict):
         raise ValueError("Invalid Ollama response type: expected JSON object")
 
-    summary = str(data.get("response", "")).strip()
+    summary = str(data.get("message", {}).get("content", "")).strip()
     if not summary:
-        raise ValueError("Ollama response is missing 'response' text")
+        stop_reason = (data.get("done_reason") or data.get("stop_reason") or "unknown")
+        raise ValueError(
+            f"Ollama chat response is empty (done_reason={stop_reason}, "
+            f"prompt_eval_count={data.get('prompt_eval_count')}, "
+            f"eval_count={data.get('eval_count')})"
+        )
 
     return summary
 

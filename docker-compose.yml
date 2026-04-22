@@ -65,7 +65,7 @@ services:
       - REDIS_PORT=6379
       - REDIS_DB=0
       - OLLAMA_BASE_URL=http://ollama:11434
-      - LOCAL_MAP_MODEL=gemma4:e4b
+      - LOCAL_MAP_MODEL=gemma4:e2b
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - PYTHONPATH=/workspace/backend:/workspace/ai-pipeline
     command: sh -c "pip install -r requirements.txt && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
