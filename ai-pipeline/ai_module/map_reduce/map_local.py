@@ -53,7 +53,7 @@ async def summarize_chunk_with_ollama(
         "options": {
             "temperature": 0.2,
             "num_predict": 2048,
-            "num_ctx": 8192,
+            "num_ctx": 4096,
         },
     }
     return await _summarize_chunk_with_ollama_with_retry(

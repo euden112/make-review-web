@@ -108,7 +108,7 @@ async def run_hybrid_summary_pipeline(
         normalized_reviews,
         steam_ratio=steam_ratio,
         metacritic_bin_ratio=metacritic_bin_ratio,
-        total_target=300,
+        total_target=200,
     )
 
     chunks = chunk_reviews_by_chars(
