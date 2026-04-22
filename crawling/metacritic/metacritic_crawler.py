@@ -9,6 +9,7 @@ Metacritic Game Review Crawler
   lang(언어), category(카테고리 목록) 필드 추가됨
 """
 
+import argparse
 import asyncio
 import json
 import re
@@ -272,7 +273,7 @@ async def parse_card(page, card) -> dict | None:
             "score":      score,
             "body":       body,
             "date":       date,
-            "language":   result.lang,
+            "language":   "en",
             "review_categories": result.categories,
         }
 
@@ -365,11 +366,17 @@ async def collect_reviews(game, platform, max_critic, max_user, context):
 # ============================================================
 
 async def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--games", nargs="+", metavar="SLUG", help="크롤링할 게임 슬러그 (기본: 전체)")
+    args = parser.parse_args()
+
+    game_titles = [g for g in GAME_TITLES if not args.games or g in args.games]
+
     timestamp = datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')
     base_dir = Path(__file__).resolve().parent
     output_file = base_dir / f"metacritic_reviews_raw_{timestamp}.json"
     print("=" * 55)
-    print(f"  게임 목록  : {', '.join(GAME_TITLES)}")
+    print(f"  게임 목록  : {', '.join(game_titles)}")
     print(f"  플랫폼     : {PLATFORM}")
     print(f"  언어 정책  : 영어(en)만 수집")
     print(f"  전문가     : 게임당 최대 {MAX_CRITIC_REVIEWS}개")
@@ -397,7 +404,7 @@ async def main():
                     context=context,
                 )
 
-        results = await asyncio.gather(*[run_game(g) for g in GAME_TITLES])
+        results = await asyncio.gather(*[run_game(g) for g in game_titles])
         await browser.close()
 
     for game, reviews in results:
