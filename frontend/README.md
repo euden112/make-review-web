@@ -39,3 +39,4 @@
 
 ## 배포 URL
 (배포 후 URL 추가 예정)
+https://make-review-web.vercel.app/
