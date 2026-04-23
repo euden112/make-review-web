@@ -8,6 +8,7 @@ Steam Game Review Crawler
     3단계: 카테고리 분류 (게임 관련 리뷰만 통과 + 카테고리 태깅)
 """
 
+import argparse
 import re
 import requests
 import json
@@ -33,11 +34,11 @@ GAME_TITLES = {                        # { metacritic slug : steam app_id }
     "crimson-desert"                  : "1048510",
 }
 PLATFORM         = "pc"
-LANGUAGE         = "all"               # 한/영/중 모두 수집 후 필터링
+LANGUAGE         = "english"           # Steam API 레벨에서 영어만 요청 (langdetect 오분류 우회)
 MAX_USER_REVIEWS = 50
 
-# 허용 언어 (한/영/중)
-ALLOWED_LANGS = ["ko", "en", "zh-cn", "zh-tw"]
+# 허용 언어
+ALLOWED_LANGS = ["en"]
 
 # 전처리 설정
 MIN_BODY_LENGTH = 20
@@ -284,7 +285,7 @@ def parse_review(raw: dict) -> dict | None:
         "review_text"    : body,
         "playtime_hours" : round(author_info.get("playtime_forever", 0) / 60, 1),
         "date_posted"    : date,
-        "language"      : result.lang,
+        "language"      : "en",
         "review_categories": result.categories,
     }
 
@@ -352,11 +353,17 @@ def collect_game(slug: str, app_id: str) -> dict:
 # ============================================================
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--games", nargs="+", metavar="SLUG", help="크롤링할 게임 슬러그 (기본: 전체)")
+    args = parser.parse_args()
+
+    game_titles = {k: v for k, v in GAME_TITLES.items() if not args.games or k in args.games}
+
     timestamp = datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')
     base_dir = Path(__file__).resolve().parent
     output_file = base_dir / f"steam_reviews_raw_{timestamp}.json"
     print("=" * 55)
-    print(f"  게임 수      : {len(GAME_TITLES)}")
+    print(f"  게임 수      : {len(game_titles)}")
     print(f"  언어 정책    : 한국어 / 영어 / 중국어 독립 파이프라인")
     print(f"  유저 리뷰    : 게임당 최대 {MAX_USER_REVIEWS}개")
     print(f"  본문 최소    : {MIN_BODY_LENGTH}자")
@@ -366,7 +373,7 @@ def main():
 
     all_output: dict = {}
 
-    for slug, app_id in GAME_TITLES.items():
+    for slug, app_id in game_titles.items():
         all_output[slug] = collect_game(slug, app_id)
         time.sleep(2.0)
 

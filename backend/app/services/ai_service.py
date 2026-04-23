@@ -155,7 +155,7 @@ async def run_ai_pipeline_task(game_id: int, language_code: str):
                 metacritic_ratio=(meta_pos, meta_mix, meta_neg),
                 cache=None,
                 ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
-                local_model_name=os.getenv("LOCAL_MAP_MODEL", "gemma4"),
+                local_model_name=os.getenv("LOCAL_MAP_MODEL", "gemma3:4b"),
                 reduce_api_key=os.getenv("GEMINI_API_KEY", ""),
                 reduce_model_name="gemini-2.5-flash-lite",
                 prior_summary_text=prior_summary_text,

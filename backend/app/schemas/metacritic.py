@@ -8,7 +8,7 @@ class MetacriticReview(BaseModel):
     body: str = Field(description="리뷰 본문")
     date: str = Field(description="작성 날짜")
     type: str = Field(description="critic 또는 user")
-    language: Optional[str] = Field(default="ko", validation_alias=AliasChoices("language", "lang"), description="리뷰 작성 언어")
+    language: Optional[str] = Field(default="en", validation_alias=AliasChoices("language", "lang"), description="리뷰 작성 언어")
     helpful_count: Optional[int] = Field(default=0, description="도움됨 투표 수")
     review_categories: Optional[List[str]] = Field(default_factory=list, description="리뷰 카테고리")
 
