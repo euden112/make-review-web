@@ -25,6 +25,8 @@ class FinalSummary:
     pros: list[str] = field(default_factory=list)
     cons: list[str] = field(default_factory=list)
     keywords: list[str] = field(default_factory=list)
+    input_tokens: int = 0
+    output_tokens: int = 0
     error_code: str | None = None
     is_retryable: bool | None = None
 
@@ -124,6 +126,8 @@ async def run_reduce_stage(
     map_summaries: list[str],
     max_items: int = 24,
     timeout_sec: int = 180,
+    score_anchors: dict[str, float | None] | None = None,
+    category_frequency: list[tuple[str, int]] | None = None,
 ) -> FinalSummary:
     logger.info(
         "reduce stage started: language=%s summaries=%d max_items=%d timeout_sec=%d",
@@ -151,8 +155,29 @@ async def run_reduce_stage(
     )
 
     picked = [item[:900] for item in map_summaries[:max_items]]
+
+    anchor_block = ""
+    if score_anchors:
+        anchor_block += "[score_anchors]\n"
+        if score_anchors.get("steam_recommend_ratio") is not None:
+            anchor_block += f"steam_recommend_ratio: {score_anchors['steam_recommend_ratio']:.2f}%\n"
+        if score_anchors.get("metacritic_critic_avg") is not None:
+            anchor_block += f"metacritic_critic_avg: {score_anchors['metacritic_critic_avg']:.2f}\n"
+        if score_anchors.get("metacritic_user_avg") is not None:
+            anchor_block += f"metacritic_user_avg: {score_anchors['metacritic_user_avg']:.2f}\n"
+        anchor_block += "\n"
+
+    category_block = ""
+    if category_frequency:
+        category_block += "[category_frequency]\n"
+        for category, count in category_frequency:
+            category_block += f"{category}: {count}\n"
+        category_block += "\n"
+
     user_prompt = (
         f"language={language_code}\n"
+        f"{anchor_block}"
+        f"{category_block}"
         "Integrate map summaries into a final sentiment-aware game review summary.\n"
         "Ensure aspect_scores and representative_reviews are grounded in evidence.\n\n"
         + "\n\n".join([f"[map_{idx+1}] {item}" for idx, item in enumerate(picked)])
@@ -182,6 +207,8 @@ async def run_reduce_stage(
             pros=_to_string_list(parsed.get("pros", [])),
             cons=_to_string_list(parsed.get("cons", [])),
             keywords=_to_string_list(parsed.get("keywords", [])),
+            input_tokens=int(response.usage_metadata.prompt_token_count or 0),
+            output_tokens=int(response.usage_metadata.candidates_token_count or 0),
         )
     except Exception as e:
         error_code, is_retryable = classify_reduce_error(e)

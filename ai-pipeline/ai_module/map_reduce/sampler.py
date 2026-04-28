@@ -17,7 +17,31 @@ class ReviewRow:
     normalized_score_100: float | None
     helpful_count: int
     playtime_hours: float | None
-    review_categories: list[str] | None = None
+    review_categories: list[dict[str, Any]] | None = None
+
+
+def _normalize_review_categories(value: Any) -> list[dict[str, Any]] | None:
+    if not isinstance(value, list):
+        return None
+
+    normalized: list[dict[str, Any]] = []
+    for item in value:
+        if isinstance(item, dict):
+            category = str(item.get("category", "")).strip()
+            if not category:
+                continue
+            normalized.append(
+                {
+                    "category": category,
+                    "sentiment": str(item.get("sentiment", "")).strip() or None,
+                }
+            )
+        elif isinstance(item, str):
+            category = item.strip()
+            if category:
+                normalized.append({"category": category, "sentiment": None})
+
+    return normalized
 
 
 def allocate(total: int, ratios: dict[str, float]) -> dict[str, int]:

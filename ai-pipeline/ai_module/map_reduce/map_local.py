@@ -20,6 +20,8 @@ class MapResult:
     chunk_no: int
     summary: str
     cached: bool
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 
 def make_chunk_cache_key(
@@ -41,7 +43,7 @@ async def summarize_chunk_with_ollama(
     prompt: str,
     keep_alive: str = "10m",
     timeout_sec: int = 300,
-) -> str:
+    ) -> tuple[str, int, int]:
     # /api/chat handles the model's chat template internally and returns
     # plain text in message.content — avoids the empty-response bug seen
     # with /api/generate on instruction-tuned models (e.g. Gemma4).
@@ -76,7 +78,7 @@ async def _summarize_chunk_with_ollama_with_retry(
     base_url: str,
     payload: dict[str, Any],
     timeout_sec: int = 300,
-) -> str:
+    ) -> tuple[str, int, int]:
     response = await client.post(f"{base_url}/api/chat", json=payload, timeout=timeout_sec)
     response.raise_for_status()
 
@@ -93,7 +95,11 @@ async def _summarize_chunk_with_ollama_with_retry(
             f"eval_count={data.get('eval_count')})"
         )
 
-    return summary
+    return (
+        summary,
+        int(data.get("prompt_eval_count", 0) or 0),
+        int(data.get("eval_count", 0) or 0),
+    )
 
 
 async def run_map_stage(
@@ -130,7 +136,7 @@ async def run_map_stage(
             )
             try:
                 async with semaphore:
-                    summary = await summarize_chunk_with_ollama(
+                    summary, input_tokens, output_tokens = await summarize_chunk_with_ollama(
                         client=client,
                         base_url=ollama_base_url,
                         model_name=model_name,
@@ -145,7 +151,13 @@ async def run_map_stage(
             except Exception as exc:
                 logger.warning("cache write failed for chunk %s: %s", chunk.chunk_no, exc)
 
-            return MapResult(chunk_no=chunk.chunk_no, summary=summary, cached=False)
+            return MapResult(
+                chunk_no=chunk.chunk_no,
+                summary=summary,
+                cached=False,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+            )
 
         results = await asyncio.gather(*(worker(chunk) for chunk in chunks))
 

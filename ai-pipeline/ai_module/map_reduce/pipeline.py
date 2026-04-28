@@ -79,6 +79,8 @@ async def run_hybrid_summary_pipeline(
     all_reviews: list[Any],
     steam_ratio: tuple[int, int],
     metacritic_ratio: tuple[int, int, int],
+    score_anchors: dict[str, float | None] | None = None,
+    category_frequency: list[tuple[str, int]] | None = None,
     cache,
     ollama_base_url: str,
     local_model_name: str,
@@ -139,6 +141,8 @@ async def run_hybrid_summary_pipeline(
         model_name=reduce_model_name,
         language_code=language_code,
         map_summaries=map_summaries,
+        score_anchors=score_anchors,
+        category_frequency=category_frequency,
     )
 
     return map_results, final
