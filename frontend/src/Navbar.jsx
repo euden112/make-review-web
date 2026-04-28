@@ -9,7 +9,7 @@ function Navbar({ isDark, toggleDark }) {
         onClick={() => navigate('/')}
         className="text-gray-900 dark:text-gray-100 text-2xl font-bold cursor-pointer flex items-center gap-2"
       >
-        <span>🎮</span>
+        <span></span>
         <span>게임 리뷰</span>
       </div>
 
