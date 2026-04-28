@@ -38,5 +38,4 @@
 6. 배포 완료 후 생성된 URL을 아래에 추가
 
 ## 배포 URL
-(배포 후 URL 추가 예정)
 https://make-review-web.vercel.app/
