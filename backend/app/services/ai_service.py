@@ -138,7 +138,8 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
 
     """
 
-    db_lang_key = "unified" if mode == "unified" else language_code
+    cursor_language_code = "unified" if mode == "unified" else language_code
+    review_language = None if mode == "unified" else language_code
 
     logger.info(
 
@@ -157,6 +158,13 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
         try:
 
             # 1. 커서 확인
+            # Sprint 3: Cursor 조회에 summary_type 필터 추가
+            # 이유: 동일 game_id에서 unified vs regional 커서 혼동 방지
+            #   - m001 마이그레이션으로 summary_type 컬럼 추가
+            #   - (game_id, language_code) PK에 summary_type 메타 필드 추가
+            #   - 예: (game_id=100, language_code="unified") unified 요약용
+            #         (game_id=100, language_code="ko") 한국어 지역별 요약용
+            # DB 구조: m005 이후 PK 재정의 예정, 현재는 보수적 유지
 
             cursor = (await db.execute(
 
@@ -166,7 +174,8 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
 
                         GameSummaryCursor.game_id == game_id,
 
-                        GameSummaryCursor.language_code == db_lang_key,
+                        GameSummaryCursor.summary_type == mode,  # Sprint 3 추가
+                        GameSummaryCursor.language_code == cursor_language_code,
 
                     )
 
@@ -365,10 +374,20 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
             for review in summary_reviews:
 
                 for item in (review.review_categories_json or []):
+                    # Sprint 3: 카테고리 포맷 호환성 처리
+                    # 이유: 기존 리뷰는 문자열 배열 ["그래픽", "조작감"]이지만
+                    #       신규 크롤러는 객체 배열 [{"category": "그래픽", "sentiment": "positive"}, ...] 형식
+                    # 목표: 마이그레이션 기간 중 둘 다 지원
+                    # TODO(m005 이후): isinstance(item, str) 조건 제거 가능 (신규 포맷만 지원)
+                    if isinstance(item, dict):
+                        category = item.get("category")
+                    elif isinstance(item, str):
+                        category = item
+                    else:
+                        category = None
 
-                    if isinstance(item, dict) and "category" in item:
-
-                        category_freq[item["category"]] += 1
+                    if category:
+                        category_freq[str(category)] += 1
 
             top_categories = category_freq.most_common(8)
 
@@ -400,7 +419,7 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
 
                 game_id=game_id,
 
-                language_code=db_lang_key,
+                language_code=cursor_language_code,
 
                 status="started",
 
@@ -422,6 +441,13 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
 
             # 8. 기존 요약본 확인
 
+            # Sprint 3: 요약 조회 로직 변경
+            # 이유: 기존 language_code="unified" 워크어라운드 제거 (비표준)
+            #       정식 필드 (summary_type, review_language)로 전환
+            # 개선: 스키마 명확화 + 쿼리 의도 명시
+            # 예시:
+            #   - unified: summary_type="unified" AND review_language IS NULL
+            #   - regional: summary_type="regional" AND review_language="ko"
             existing_summary = (await db.execute(
 
                 select(GameReviewSummary).where(
@@ -430,7 +456,8 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
 
                         GameReviewSummary.game_id == game_id,
 
-                        GameReviewSummary.language_code == db_lang_key,
+                        GameReviewSummary.summary_type == mode,  # Sprint 3 추가
+                        GameReviewSummary.review_language.is_(None) if review_language is None else GameReviewSummary.review_language == review_language,  # Sprint 3 추가
 
                         GameReviewSummary.is_current == True,
 
@@ -476,6 +503,10 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
 
                 prior_summary_text=prior_summary_text,
 
+                # Sprint 3: Gemini 자율 생성 항목 근거 제공
+                score_anchors=score_anchors,              # Steam 추천율, Metacritic 점수 → sentiment_score 앵커링
+                category_frequency=top_categories,        # 실제 리뷰 카테고리 빈도 → keywords 앵커링
+
             )
 
 
@@ -504,11 +535,13 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
 
             job.map_input_tokens = sum(getattr(r, "input_tokens", 0) for r in map_results)
 
+            # Sprint 3: 토큰 사용량 기록
+            # 이유: 운영 비용 추적 & 캐시 효율 모니터링 (기존 컬럼 재활용)
             job.map_output_tokens = sum(getattr(r, "output_tokens", 0) for r in map_results)
 
-            job.reduce_input_tokens = getattr(ai_result, "reduce_input_tokens", 0)
+            job.reduce_input_tokens = getattr(ai_result, "input_tokens", 0)  # Gemini prompt_token_count
 
-            job.reduce_output_tokens = getattr(ai_result, "reduce_output_tokens", 0)
+            job.reduce_output_tokens = getattr(ai_result, "output_tokens", 0)  # Gemini candidates_token_count
 
 
 
@@ -522,7 +555,8 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
 
                         GameReviewSummary.game_id == game_id,
 
-                        GameReviewSummary.language_code == db_lang_key,
+                        GameReviewSummary.summary_type == mode,
+                        GameReviewSummary.review_language.is_(None) if review_language is None else GameReviewSummary.review_language == review_language,
 
                     )
 
@@ -578,11 +612,22 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
 
 
 
+            # Sprint 3: 요약 메타데이터 기록 변경
+            # 이유: unified/regional 구분 명확화 + 향후 조회 용이
+            # 변경:
+            #   - language_code: 기존 유지 (레거시, m005 제거 예정)
+            #   - summary_type: 신규 추가 (unified|regional 모드 명시)
+            #   - review_language: 신규 추가 (unified→NULL, regional→언어코드)
+            # 활용: 향후 조회시 summary_type + review_language로 구분
             new_summary = GameReviewSummary(
 
                 game_id=game_id,
 
-                language_code=db_lang_key,
+                language_code=cursor_language_code,      # 레거시 필드
+
+                summary_type=mode,                        # Sprint 3 추가
+
+                review_language=review_language,
 
                 job_id=job.id,
 
@@ -636,22 +681,23 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
 
             if _HAS_GEMINI_RELIABILITY:
 
+                # Sprint 3: Gemini 출력 신뢰도 평가 (결정론적, 추가 LLM 호출 없음)
+            # 이유: 파이프라인 실행마다 결과 품질을 정량화 → 운영 모니터링용
+            # 지표:
+            #   - schema_compliance: 9개 필드 채움 비율 (0.0~1.0)
+            #   - hallucination_score: 인용된 review_id 실존 비율 (0.0~1.0)
+            #   - sentiment_consistency: 레이블 vs 점수 범위 일치 (0|1)
+            #   - anchor_deviation: |sentiment_score - steam_ratio| / 100
+            # 활용: 운영 임계값 설정 (schema_compliance < 0.8 → 경고)
                 reliability = compute_gemini_reliability(
-
                     ai_result=ai_result,
-
                     input_reviews=new_reviews,
-
                     steam_recommend_ratio=steam_recommend_ratio,
-
                 )
 
                 job.schema_compliance = reliability.schema_compliance
-
                 job.hallucination_score = reliability.hallucination_score
-
                 job.sentiment_consistency = reliability.sentiment_consistency
-
                 job.anchor_deviation = reliability.anchor_deviation
 
             else:
@@ -668,8 +714,12 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
 
                 selected_texts = [r.review_text_clean for r in summary_reviews[:50] if r.review_text_clean]
 
-                loop = asyncio.get_event_loop()
-
+                loop = asyncio.get_running_loop()
+                # Sprint 3: 의미 유사도 계산 (다국어 임베딩)
+                # 이유: 요약이 원본 리뷰를 얼마나 잘 반영하는지 측정
+                # 방식: 리뷰 평균 embedding vs 요약 embedding → cosine similarity (0.0~1.0)
+                # 모델: paraphrase-multilingual-MiniLM-L12-v2 (50개 언어 지원)
+                # 주의: 동기 CPU 연산이므로 run_in_executor로 감싸서 이벤트 루프 블로킹 방지
                 similarity = await loop.run_in_executor(
 
                     None,
@@ -691,6 +741,14 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
 
 
             # 16. 커서 최신화
+            # 수정됨(Sprint 3): 이 블록은 Sprint 3에서 업데이트되어
+            # summary_type 메타필드가 커서/조회 파이프라인에 포함되도록 변경되었습니다.
+            # Sprint 3: 커서 메타데이터 통합 (summary_type 기록)
+            # 이유: 다음 파이프라인 실행 시 unified/regional 구분 명확화
+            # 변경:
+            #   - language_code: 기존 유지 (PK, "unified" 또는 언어코드)
+            #   - summary_type: 신규 기록 ("unified" 또는 "regional")
+            # 활용: Cursor 조회 시 (위 #1 참고) summary_type 필터로 구분
 
             if cursor:
 
@@ -706,7 +764,8 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
 
                     game_id=game_id,
 
-                    language_code=db_lang_key,
+                    language_code=cursor_language_code,
+                    summary_type=mode,
 
                     last_summarized_review_id=new_max_review_id,
 
@@ -726,7 +785,7 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
 
                 "ai pipeline finished: game_id=%s mode=%s language=%s job_id=%s",
 
-                game_id, mode, db_lang_key, job.id,
+                game_id, mode, cursor_language_code, job.id,
 
             )
 
@@ -734,7 +793,7 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
 
             # 17. Redis 캐시 무효화
 
-            await invalidate_summary_cache(game_id, db_lang_key)
+            await invalidate_summary_cache(game_id, cursor_language_code)
 
 
 
@@ -760,6 +819,6 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
 
                 "ai pipeline failed: game_id=%s mode=%s language=%s error=%s",
 
-                game_id, mode, db_lang_key, e,
+                game_id, mode, cursor_language_code, e,
 
             )

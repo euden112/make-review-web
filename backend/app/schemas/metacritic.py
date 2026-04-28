@@ -10,7 +10,10 @@ class MetacriticReview(BaseModel):
     type: str = Field(description="critic 또는 user")
     language: Optional[str] = Field(default="en", validation_alias=AliasChoices("language", "lang"), description="리뷰 작성 언어")
     helpful_count: Optional[int] = Field(default=0, description="도움됨 투표 수")
-    review_categories: Optional[List[str]] = Field(default_factory=list, description="리뷰 카테고리")
+    review_categories: Optional[List[str]] = Field(
+        default_factory=list,
+        description="리뷰 카테고리 JSON 배열. Sprint 3에서는 [{category, sentiment}, ...] 형식",
+    )
 
 # 2. 메타크리틱 통계 정보 구조입니다. (정제 파이프라인에서 걸러진 개수 필드 포함)
 class MetacriticMeta(BaseModel):
