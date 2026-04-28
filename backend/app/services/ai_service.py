@@ -473,7 +473,7 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
 
             # 9. 하이브리드 파이프라인 실행
 
-            reduce_language = "ko" if mode == "unified" else language_code
+            reduce_language = "ko"
 
             logger.info("ai pipeline summary generation started: game_id=%s mode=%s job_id=%s", game_id, mode, job.id)
 
@@ -490,6 +490,8 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
                 steam_ratio=(steam_pos, steam_neg),
 
                 metacritic_ratio=(meta_pos, meta_mix, meta_neg),
+
+                regional=(mode == "regional"),
 
                 cache=get_redis_cache(),
 

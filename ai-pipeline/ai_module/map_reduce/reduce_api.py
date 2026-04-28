@@ -54,6 +54,18 @@ If there is no evidence for a specific aspect in the input, do not fabricate it;
 No markdown, no code fences.
 """.strip()
 
+REGIONAL_REDUCE_SYSTEM_PROMPT = """
+You are a game review synthesis engine.
+Return JSON only with keys: one_liner, full_text.
+No markdown, no code fences.
+""".strip()
+
+_REGION_NAMES: dict[str, str] = {
+    "en": "English-speaking",
+    "ko": "Korean-speaking",
+    "zh": "Chinese-speaking",
+}
+
 
 def _safe_parse_json(text: str) -> dict[str, Any]:
     raw = text.strip()
@@ -128,6 +140,7 @@ async def run_reduce_stage(
     timeout_sec: int = 180,
     score_anchors: dict[str, float | None] | None = None,
     category_frequency: list[tuple[str, int]] | None = None,
+    regional: bool = False,
 ) -> FinalSummary:
     logger.info(
         "reduce stage started: language=%s summaries=%d max_items=%d timeout_sec=%d",
@@ -149,39 +162,55 @@ async def run_reduce_stage(
         )
 
     genai.configure(api_key=api_key)
+    system_prompt = REGIONAL_REDUCE_SYSTEM_PROMPT if regional else REDUCE_SYSTEM_PROMPT
     model = genai.GenerativeModel(
         model_name=model_name,
-        system_instruction=REDUCE_SYSTEM_PROMPT,
+        system_instruction=system_prompt,
     )
 
     picked = [item[:900] for item in map_summaries[:max_items]]
 
-    anchor_block = ""
-    if score_anchors:
-        anchor_block += "[score_anchors]\n"
-        if score_anchors.get("steam_recommend_ratio") is not None:
-            anchor_block += f"steam_recommend_ratio: {score_anchors['steam_recommend_ratio']:.2f}%\n"
-        if score_anchors.get("metacritic_critic_avg") is not None:
-            anchor_block += f"metacritic_critic_avg: {score_anchors['metacritic_critic_avg']:.2f}\n"
-        if score_anchors.get("metacritic_user_avg") is not None:
-            anchor_block += f"metacritic_user_avg: {score_anchors['metacritic_user_avg']:.2f}\n"
-        anchor_block += "\n"
+    if regional:
+        region = _REGION_NAMES.get(language_code, f"{language_code}-speaking")
+        user_prompt = (
+            "language=ko\n"
+            f"Briefly summarize how {region} players perceive this game in 2-3 sentences.\n"
+            "Focus on what makes their perspective distinctive compared to the general consensus.\n"
+            "Output in Korean.\n\n"
+            + "\n\n".join([f"[map_{idx+1}] {item}" for idx, item in enumerate(picked)])
+        )
+    else:
+        anchor_block = ""
+        if score_anchors:
+            anchor_block += "[score_anchors]\n"
+            if score_anchors.get("steam_recommend_ratio") is not None:
+                anchor_block += f"steam_recommend_ratio: {score_anchors['steam_recommend_ratio']:.2f}%\n"
+            if score_anchors.get("metacritic_critic_avg") is not None:
+                anchor_block += f"metacritic_critic_avg: {score_anchors['metacritic_critic_avg']:.2f}\n"
+            if score_anchors.get("metacritic_user_avg") is not None:
+                anchor_block += f"metacritic_user_avg: {score_anchors['metacritic_user_avg']:.2f}\n"
+            anchor_block += "\n"
 
-    category_block = ""
-    if category_frequency:
-        category_block += "[category_frequency]\n"
-        for category, count in category_frequency:
-            category_block += f"{category}: {count}\n"
-        category_block += "\n"
+        category_block = ""
+        if category_frequency:
+            category_block += "[category_frequency]\n"
+            for category, count in category_frequency:
+                category_block += f"{category}: {count}\n"
+            category_block += "\n"
 
-    user_prompt = (
-        f"language={language_code}\n"
-        f"{anchor_block}"
-        f"{category_block}"
-        "Integrate map summaries into a final sentiment-aware game review summary.\n"
-        "Ensure aspect_scores and representative_reviews are grounded in evidence.\n\n"
-        + "\n\n".join([f"[map_{idx+1}] {item}" for idx, item in enumerate(picked)])
-    )
+        user_prompt = (
+            f"language={language_code}\n"
+            f"{anchor_block}"
+            f"{category_block}"
+            "representative_reviews 선택 기준:\n"
+            "1. helpful_count 높은 리뷰 우선\n"
+            "2. playtime_hours 10시간 이상 리뷰 우선\n"
+            "3. 긍정/부정 균형 (각 1~2개)\n"
+            "4. 직접 인용 가능한 길이 (50-200자)\n\n"
+            "Integrate map summaries into a final sentiment-aware game review summary.\n"
+            "Ensure aspect_scores and representative_reviews are grounded in evidence.\n\n"
+            + "\n\n".join([f"[map_{idx+1}] {item}" for idx, item in enumerate(picked)])
+        )
 
     try:
         response = await asyncio.wait_for(
@@ -197,6 +226,17 @@ async def run_reduce_stage(
             raise ReduceParseError(str(exc)) from exc
 
         logger.info("reduce stage completed successfully")
+        token_in = int(response.usage_metadata.prompt_token_count or 0)
+        token_out = int(response.usage_metadata.candidates_token_count or 0)
+        if regional:
+            return FinalSummary(
+                one_liner=parsed["one_liner"],
+                aspect_scores={},
+                representative_reviews=[],
+                full_text=parsed["full_text"],
+                input_tokens=token_in,
+                output_tokens=token_out,
+            )
         return FinalSummary(
             one_liner=parsed["one_liner"],
             aspect_scores=parsed["aspect_scores"],
@@ -207,8 +247,8 @@ async def run_reduce_stage(
             pros=_to_string_list(parsed.get("pros", [])),
             cons=_to_string_list(parsed.get("cons", [])),
             keywords=_to_string_list(parsed.get("keywords", [])),
-            input_tokens=int(response.usage_metadata.prompt_token_count or 0),
-            output_tokens=int(response.usage_metadata.candidates_token_count or 0),
+            input_tokens=token_in,
+            output_tokens=token_out,
         )
     except Exception as e:
         error_code, is_retryable = classify_reduce_error(e)
