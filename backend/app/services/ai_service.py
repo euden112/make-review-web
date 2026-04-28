@@ -499,9 +499,9 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
 
                 local_model_name=os.getenv("LOCAL_MAP_MODEL", "gemma3:4b"),
 
-                reduce_api_key=os.getenv("GEMINI_API_KEY", ""),
+                reduce_api_key=os.getenv("GROQ_API_KEY", ""),
 
-                reduce_model_name="gemini-2.5-flash-lite",
+                reduce_model_name=os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
 
                 prior_summary_text=prior_summary_text,
 

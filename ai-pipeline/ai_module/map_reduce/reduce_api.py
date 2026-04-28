@@ -6,7 +6,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-import google.generativeai as genai
+from groq import AsyncGroq
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 
@@ -120,13 +120,20 @@ def classify_reduce_error(exc: Exception) -> tuple[str, bool]:
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True)
-async def _generate_reduce_response(model: genai.GenerativeModel, user_prompt: str):
-    return await model.generate_content_async(
-        user_prompt,
-        generation_config=genai.types.GenerationConfig(
-            temperature=0.2,
-            response_mime_type="application/json",
-        ),
+async def _generate_reduce_response(
+    client: AsyncGroq,
+    model_name: str,
+    system_prompt: str,
+    user_prompt: str,
+):
+    return await client.chat.completions.create(
+        model=model_name,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        response_format={"type": "json_object"},
+        temperature=0.2,
     )
 
 
@@ -161,13 +168,8 @@ async def run_reduce_stage(
             is_retryable=False,
         )
 
-    genai.configure(api_key=api_key)
+    client = AsyncGroq(api_key=api_key)
     system_prompt = REGIONAL_REDUCE_SYSTEM_PROMPT if regional else REDUCE_SYSTEM_PROMPT
-    model = genai.GenerativeModel(
-        model_name=model_name,
-        system_instruction=system_prompt,
-    )
-
     picked = [item[:900] for item in map_summaries[:max_items]]
 
     if regional:
@@ -214,11 +216,11 @@ async def run_reduce_stage(
 
     try:
         response = await asyncio.wait_for(
-            _generate_reduce_response(model, user_prompt),
+            _generate_reduce_response(client, model_name, system_prompt, user_prompt),
             timeout=timeout_sec,
         )
 
-        raw_text = (response.text or "").strip()
+        raw_text = (response.choices[0].message.content or "").strip()
         logger.info("reduce stage response received: %d chars", len(raw_text))
         try:
             parsed = _safe_parse_json(raw_text)
@@ -226,8 +228,9 @@ async def run_reduce_stage(
             raise ReduceParseError(str(exc)) from exc
 
         logger.info("reduce stage completed successfully")
-        token_in = int(response.usage_metadata.prompt_token_count or 0)
-        token_out = int(response.usage_metadata.candidates_token_count or 0)
+        token_in = int(response.usage.prompt_tokens or 0)
+        token_out = int(response.usage.completion_tokens or 0)
+
         if regional:
             return FinalSummary(
                 one_liner=parsed["one_liner"],
