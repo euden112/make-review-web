@@ -501,7 +501,7 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
 
                 reduce_api_key=os.getenv("GROQ_API_KEY", ""),
 
-                reduce_model_name=os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
+                reduce_model_name=os.getenv("GROQ_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct"),
 
                 prior_summary_text=prior_summary_text,
 
