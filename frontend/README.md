@@ -1,32 +1,43 @@
-# React + Vite
+# 게임 리뷰 - Frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+## 프로젝트
+게임 리뷰 aggregation 및 AI 요약 웹사이트의 프론트엔드
 
-Currently, two official plugins are available:
+## 구현 사항
+- 게임 목록 페이지 (히어로 배너 슬라이드, 게임 카드 그리드)
+- 게임 상세 페이지 (리뷰 요약 블록)
+- 페이지 간 라우팅
+- 다크모드 지원 (localStorage 저장)
+- 공통 Navbar 컴포넌트 분리
+- 필터링 검색 기능
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## 기술 스택
+- React + Vite
+- Tailwind CSS v3
 
-## React Compiler
+## 로컬 실행 방법
+1. 이 레포지토리 클론
+   git clone https://github.com/euden112/make-review-web.git
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+2. frontend 폴더로 이동
+   cd make-review-web/frontend
 
-## Expanding the ESLint configuration
+3. 패키지 설치
+   npm install
 
-<<<<<<< HEAD
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
-=======
+4. 개발 서버 실행
+   npm run dev
+
 5. 브라우저에서 접속
    http://localhost:5173
 
-## Vercel 배포 방법 (팀장용)
+## Vercel 배포 방법 
 1. vercel.com 접속 → GitHub 계정으로 로그인
 2. Add New Project 클릭
 3. make-review-web 레포지토리 선택 후 Import 클릭
-4. Root Directory 설정에서 frontend 선택 (중요)
+4. Root Directory 설정에서 frontend 선택 (중요!)
 5. Deploy 클릭
 6. 배포 완료 후 생성된 URL을 아래에 추가
 
 ## 배포 URL
 https://make-review-web.vercel.app/
->>>>>>> 98085db5cab2a551abd4b48d0ef0526ad5a05c50
