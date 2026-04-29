@@ -25,3 +25,7 @@ async def invalidate_summary_cache(game_id: int, language: str):
     """새로운 요약이 생성되면 기존 캐시 파기"""
     key = f"game_summary:{game_id}:{language}"
     await redis_db.delete(key)
+
+def get_redis_cache():
+    """AI 파이프라인(Map 단계)에서 Redis 클라이언트 인스턴스에 직접 접근하기 위한 의존성 함수"""
+    return redis_db
