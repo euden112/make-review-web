@@ -35,7 +35,7 @@ REDUCE_SYSTEM_PROMPT = """
 You are a game review synthesis engine.
 Return JSON only.
 Required keys:
-- one_liner: string
+- one_liner: one sentence overall verdict (Korean)
 - aspect_scores: {
     graphics: {label, score},
     controls: {label, score},
@@ -43,13 +43,14 @@ Required keys:
     content: {label, score},
     price_value: {label, score}
   }
+  scores are 0.0–10.0; label is a short Korean adjective (e.g. "우수함", "보통")
 - representative_reviews: [{source, review_id, quote, reason}]
 - sentiment_overall: one of [positive, mixed, negative]
 - sentiment_score: number in range 0..100
-- pros: [string]
-- cons: [string]
-- keywords: [string]
-- full_text: string
+- pros: [string] at least 3 items
+- cons: [string] at least 2 items
+- keywords: [string] 5–8 items
+- full_text: 4–6 sentences in Korean covering (1) overall impression, (2) standout strengths with specific examples, (3) notable weaknesses or caveats, (4) who this game is for. Do NOT repeat the one_liner verbatim.
 If there is no evidence for a specific aspect in the input, do not fabricate it; omit that aspect or rate it as neutral.
 No markdown, no code fences.
 """.strip()
@@ -210,6 +211,7 @@ async def run_reduce_stage(
             "3. 긍정/부정 균형 (각 1~2개)\n"
             "4. 직접 인용 가능한 길이 (50-200자)\n\n"
             "Integrate map summaries into a final sentiment-aware game review summary.\n"
+            "full_text: write 4–6 sentences in Korean. Cover overall impression, specific strengths with examples, weaknesses, and target audience. Must differ from one_liner.\n"
             "Ensure aspect_scores and representative_reviews are grounded in evidence.\n\n"
             + "\n\n".join([f"[map_{idx+1}] {item}" for idx, item in enumerate(picked)])
         )

@@ -126,7 +126,7 @@ async def get_pipeline_tasks(game_id: int, db) -> list[tuple[str, str | None]]:
 
 
 
-async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | None = None):
+async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | None = None, force: bool = False):
 
     """AI 요약 파이프라인 실행.
 
@@ -185,7 +185,13 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
 
             last_review_id = cursor.last_summarized_review_id if cursor else 0
 
-            logger.info("ai pipeline cursor loaded: game_id=%s mode=%s last_review_id=%s", game_id, mode, last_review_id)
+            # force=True: 커서를 무시하고 전체 리뷰 재처리
+            # 오류 후 재실행 또는 강제 재생성 시 사용
+            if force and last_review_id:
+                logger.info("ai pipeline force mode: resetting cursor game_id=%s mode=%s last_review_id=%s→0", game_id, mode, last_review_id)
+                last_review_id = 0
+
+            logger.info("ai pipeline cursor loaded: game_id=%s mode=%s last_review_id=%s force=%s", game_id, mode, last_review_id, force)
 
 
 
@@ -218,10 +224,41 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
             logger.info("ai pipeline new reviews: game_id=%s mode=%s count=%s", game_id, mode, len(new_reviews))
 
             if not new_reviews:
+                # 커서는 있지만 현재 요약이 없는 경우 (이전 실행이 AI 이후 DB 단계에서 실패한 경우)
+                # → 전체 리뷰를 대상으로 자동 재처리
+                has_current_summary = (await db.execute(
+                    select(GameReviewSummary.id).where(
+                        and_(
+                            GameReviewSummary.game_id == game_id,
+                            GameReviewSummary.summary_type == mode,
+                            GameReviewSummary.review_language.is_(None) if review_language is None
+                            else GameReviewSummary.review_language == review_language,
+                            GameReviewSummary.is_current == True,
+                        )
+                    )
+                )).scalar_one_or_none()
 
-                logger.info("ai pipeline skipped: no new reviews for game_id=%s mode=%s", game_id, mode)
+                if has_current_summary:
+                    logger.info("ai pipeline skipped: no new reviews for game_id=%s mode=%s", game_id, mode)
+                    return
 
-                return
+                logger.info(
+                    "ai pipeline auto-recovery: cursor exists but no current summary, reprocessing all reviews "
+                    "game_id=%s mode=%s", game_id, mode
+                )
+                last_review_id = 0
+                new_reviews = (await db.execute(
+                    select(ExternalReview).where(and_(*[
+                        ExternalReview.game_id == game_id,
+                        ExternalReview.id > last_review_id,
+                        ExternalReview.is_deleted == False,
+                        *([ExternalReview.language_code == language_code] if mode == "regional" else []),
+                    ]))
+                )).scalars().all()
+
+                if not new_reviews:
+                    logger.info("ai pipeline skipped: truly no reviews for game_id=%s mode=%s", game_id, mode)
+                    return
 
 
 
