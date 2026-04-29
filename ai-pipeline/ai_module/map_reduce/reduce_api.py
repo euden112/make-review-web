@@ -192,14 +192,14 @@ async def run_reduce_stage(
                 anchor_block += f"metacritic_critic_avg: {score_anchors['metacritic_critic_avg']:.2f}\n"
             if score_anchors.get("metacritic_user_avg") is not None:
                 anchor_block += f"metacritic_user_avg: {score_anchors['metacritic_user_avg']:.2f}\n"
-            anchor_block += "\n"
+            anchor_block += "→ sentiment_score must be calibrated to these numbers.\n\n"
 
         category_block = ""
         if category_frequency:
             category_block += "[category_frequency]\n"
             for category, count in category_frequency:
-                category_block += f"{category}: {count}\n"
-            category_block += "\n"
+                category_block += f"{category}: {count}회\n"
+            category_block += "→ keywords must include top-frequency categories above.\n\n"
 
         user_prompt = (
             f"language={language_code}\n"

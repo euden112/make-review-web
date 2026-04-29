@@ -15,6 +15,7 @@ services:
       - ./database/04_migration_sprint3_m001.sql:/docker-entrypoint-initdb.d/04_migration_sprint3_m001.sql
       - ./database/05_migration_sprint3_m002.sql:/docker-entrypoint-initdb.d/05_migration_sprint3_m002.sql
       - ./database/06_migration_sprint3_m003.sql:/docker-entrypoint-initdb.d/06_migration_sprint3_m003.sql
+      - ./database/07_migration_sprint3_m005.sql:/docker-entrypoint-initdb.d/07_migration_sprint3_m005.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s
