@@ -27,5 +27,5 @@ async def invalidate_summary_cache(game_id: int, language: str):
     await redis_db.delete(key)
 
 def get_redis_cache():
-    """Map 단계 캐시용 Redis 인스턴스 반환"""
+    """AI 파이프라인(Map 단계)에서 Redis 클라이언트 인스턴스에 직접 접근하기 위한 의존성 함수"""
     return redis_db
