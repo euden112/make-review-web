@@ -7,7 +7,7 @@ const MOCK_GAMES = [
     id: 1,
     canonical_title: '엘든 링',
     cover_image: 'https://cdn.cloudflare.steamstatic.com/steam/apps/1245620/library_600x900.jpg',
-    hero_image: 'https://cdn.cloudflare.steamstatic.com/steam/apps/1245620/header.jpg',
+    hero_image: 'https://cdn.cloudflare.steamstatic.com/steam/apps/1245620/library_hero.jpg',
     description: 'AI 한줄 요약',
     rating: 5,
   },
