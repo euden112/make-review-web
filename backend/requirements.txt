@@ -7,4 +7,4 @@ greenlet>=3.0.0
 redis
 httpx
 tenacity
-google-generativeai
+groq

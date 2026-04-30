@@ -45,12 +45,17 @@ def compute_gemini_reliability(
     schema_compliance = sum(1 for check in checks if check) / len(checks)
 
     input_ids = {getattr(review, "id", None) for review in input_reviews}
-    cited_ids = [
+    cited_ids_raw = [
         item.get("review_id")
         for item in ai_result.representative_reviews
         if isinstance(item, dict) and item.get("review_id") is not None
     ]
-    cited_ids = [review_id for review_id in cited_ids if review_id is not None]
+    cited_ids = []
+    for rid in cited_ids_raw:
+        try:
+            cited_ids.append(int(rid))
+        except (TypeError, ValueError):
+            pass
     hallucination_score = (
         sum(1 for review_id in cited_ids if review_id in input_ids) / len(cited_ids)
         if cited_ids

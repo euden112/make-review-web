@@ -171,7 +171,7 @@ def show_review_counts(label: str = "현재 DB 리뷰 현황"):
             """
             SELECT g.normalized_title, COUNT(rv.id)
             FROM games g
-            LEFT JOIN reviews rv ON rv.game_id = g.id
+            LEFT JOIN external_reviews rv ON rv.game_id = g.id
             GROUP BY g.normalized_title
             ORDER BY COUNT(rv.id) DESC;
             """,
@@ -184,7 +184,7 @@ def show_review_counts(label: str = "현재 DB 리뷰 현황"):
             "docker", "exec", "capstone_postgres",
             "psql", "-U", "postgres", "-d", "review_db",
             "-t", "-A",
-            "-c", "SELECT COUNT(*) FROM reviews;",
+            "-c", "SELECT COUNT(*) FROM external_reviews;",
         ],
         capture_output=True,
         text=True,
@@ -195,7 +195,7 @@ def show_review_counts(label: str = "현재 DB 리뷰 현황"):
     for line in r.stdout.strip().splitlines():
         parts = line.strip().split("\t", 1)
         if len(parts) == 2:
-            name, cnt = parts[1].strip(), parts[0].strip()
+            name, cnt = parts[0].strip(), parts[1].strip()
             bar = f"{C}{'█' * min(int(cnt) // 10, 40)}{RESET}"
             print(f"   {name:<36} {bar}  {B}{cnt}{RESET}개")
     if total.isdigit():
@@ -286,23 +286,22 @@ def get_game_ids() -> dict[str, int]:
 
 
 # ─── 요약 트리거 & 폴링 ──────────────────────────────────────────────────────
-def trigger_summarize(game_id: int, lang: str) -> int:
+def trigger_summarize(game_id: int, force: bool = False) -> int:
     r = httpx.post(
         f"{BACKEND_URL}/api/v1/games/{game_id}/summarize",
-        params={"language": lang},
+        params={"force": "true"} if force else None,
         timeout=15,
     )
     return r.status_code
 
 
-def poll_summary(game_id: int, lang: str, timeout: int = 600) -> dict | None:
+def poll_summary(game_id: int, timeout: int = 600) -> dict | None:
     deadline = time.time() + timeout
     dots = 0
     while time.time() < deadline:
         try:
             r = httpx.get(
-                f"{BACKEND_URL}/api/v1/games/{game_id}",
-                params={"language": lang},
+                f"{BACKEND_URL}/api/v1/games/{game_id}/summary",
                 timeout=10,
             )
             if r.status_code == 200:
@@ -323,7 +322,7 @@ def poll_summary(game_id: int, lang: str, timeout: int = 600) -> dict | None:
 
 # ─── 결과 출력 ────────────────────────────────────────────────────────────────
 def _aspect_bar(score: float) -> str:
-    filled = int(score / 10)
+    filled = min(10, max(0, round(score)))
     return f"{G}{'█' * filled}{D}{'░' * (10 - filled)}{RESET}"
 
 
@@ -343,7 +342,7 @@ def display_summary(slug: str, data: dict):
 
     # 한 줄 요약
     lines = summary_text.splitlines()
-    one_liner = lines[0].lstrip("*").strip() if lines else "(요약 없음)"
+    one_liner = lines[0].strip("*").strip() if lines else "(요약 없음)"
     print(f"\n  {B}{C}{one_liner}{RESET}\n")
 
     # 본문
@@ -424,6 +423,8 @@ def main():
                         help="요약할 게임 슬러그 (기본: grand-theft-auto-v + elden-ring)")
     parser.add_argument("--timeout", type=int, default=600, metavar="SEC",
                         help="요약 대기 최대 시간(초) (기본: 600)")
+    parser.add_argument("--force", action="store_true",
+                        help="커서를 무시하고 전체 리뷰 강제 재처리 (오류 후 재실행 시 사용)")
     args = parser.parse_args()
 
     target_games: list[str] = args.games or DEMO_GAMES
@@ -434,16 +435,17 @@ def main():
 
     # ── STEP 1: 환경 변수 확인 ────────────────────────────────────────────────
     step(1, "환경 변수 확인")
-    gemini_key = os.environ.get("GEMINI_API_KEY", "")
-    if not gemini_key:
+    groq_key = os.environ.get("GROQ_API_KEY", "")
+    if not groq_key:
         abort(
-            "GEMINI_API_KEY 환경변수가 설정되지 않았습니다.\n"
-            "       export GEMINI_API_KEY=your_key_here"
+            "GROQ_API_KEY 환경변수가 설정되지 않았습니다.\n"
+            "       export GROQ_API_KEY=your_key_here"
         )
-    ok("GEMINI_API_KEY 확인")
+    ok("GROQ_API_KEY 확인")
     model = os.environ.get("LOCAL_MAP_MODEL", "gemma3:4b")
+    groq_model = os.environ.get("GROQ_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
     ok(f"LOCAL_MAP_MODEL = {model}  (Map 단계 로컬 추론)")
-    ok(f"Reduce 단계 = Gemini API")
+    ok(f"Reduce 단계 = Groq API  ({groq_model})")
 
     # ── STEP 2: Docker 서비스 기동 ────────────────────────────────────────────
     step(2, "Docker 서비스 기동")
@@ -500,11 +502,11 @@ def main():
     # ── STEP 8: AI 요약 파이프라인 트리거 ─────────────────────────────────────
     step(8, f"AI Map-Reduce 요약 파이프라인 시작  (언어: {args.lang})")
     info(f"Map  단계: {model} (Ollama 로컬 추론) — 청크별 요약")
-    info(f"Reduce 단계: Gemini API — 최종 구조화 요약")
+    info(f"Reduce 단계: Groq API ({groq_model}) — 최종 구조화 요약")
     print()
     for slug, gid in targets.items():
         name = GAME_DISPLAY_NAMES.get(slug, slug)
-        code = trigger_summarize(gid, args.lang)
+        code = trigger_summarize(gid, force=args.force)
         ok(f"[{gid}]  {name}  →  HTTP {code}")
 
     # ── STEP 9: 결과 대기 & 비교 출력 ─────────────────────────────────────────
@@ -516,7 +518,7 @@ def main():
     for slug, gid in targets.items():
         name = GAME_DISPLAY_NAMES.get(slug, slug)
         info(f"대기 중: {name}")
-        data = poll_summary(gid, args.lang, timeout=args.timeout)
+        data = poll_summary(gid, timeout=args.timeout)
         if data:
             results[slug] = data
             ok(f"완료: {name}")

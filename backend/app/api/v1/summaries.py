@@ -1,6 +1,6 @@
 import logging
 
-from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException
+from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import and_
@@ -20,15 +20,21 @@ async def trigger_summarization(
     game_id: int,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
+    force: bool = Query(False, description="커서를 무시하고 전체 리뷰 재처리"),
 ):
-    """AI 요약 파이프라인 트리거 — unified 1개 + regional N개 일괄 등록"""
+    """AI 요약 파이프라인 트리거 — unified 1개 + regional N개 일괄 등록
+
+    force=true: 커서 위치를 무시하고 전체 리뷰를 다시 처리합니다.
+    오류 후 재실행하거나 요약을 강제 재생성할 때 사용합니다.
+    """
     tasks = await get_pipeline_tasks(game_id, db)
     for mode, lang in tasks:
-        background_tasks.add_task(run_ai_pipeline_task, game_id, mode, lang)
+        background_tasks.add_task(run_ai_pipeline_task, game_id, mode, lang, force=force)
     return {
         "status": "processing",
         "message": f"게임 {game_id}의 AI 요약 작업이 비동기로 시작되었습니다.",
         "tasks": [{"mode": m, "language_code": l} for m, l in tasks],
+        "force": force,
     }
 
 

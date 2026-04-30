@@ -29,6 +29,7 @@ from app.models.domain import (
 )
 
 from app.core.redis_client import invalidate_summary_cache, get_redis_cache
+from ai_module.cache.redis_cache import RedisCache
 
 from app.core.database import AsyncSessionLocal
 
@@ -126,7 +127,7 @@ async def get_pipeline_tasks(game_id: int, db) -> list[tuple[str, str | None]]:
 
 
 
-async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | None = None):
+async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | None = None, force: bool = False):
 
     """AI 요약 파이프라인 실행.
 
@@ -157,14 +158,7 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
 
         try:
 
-            # 1. 커서 확인
-            # Sprint 3: Cursor 조회에 summary_type 필터 추가
-            # 이유: 동일 game_id에서 unified vs regional 커서 혼동 방지
-            #   - m001 마이그레이션으로 summary_type 컬럼 추가
-            #   - (game_id, language_code) PK에 summary_type 메타 필드 추가
-            #   - 예: (game_id=100, language_code="unified") unified 요약용
-            #         (game_id=100, language_code="ko") 한국어 지역별 요약용
-            # DB 구조: m005 이후 PK 재정의 예정, 현재는 보수적 유지
+            # 1. 커서 확인 (PK: game_id + language_code, summary_type는 추가 필터)
 
             cursor = (await db.execute(
 
@@ -185,7 +179,13 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
 
             last_review_id = cursor.last_summarized_review_id if cursor else 0
 
-            logger.info("ai pipeline cursor loaded: game_id=%s mode=%s last_review_id=%s", game_id, mode, last_review_id)
+            # force=True: 커서를 무시하고 전체 리뷰 재처리
+            # 오류 후 재실행 또는 강제 재생성 시 사용
+            if force and last_review_id:
+                logger.info("ai pipeline force mode: resetting cursor game_id=%s mode=%s last_review_id=%s→0", game_id, mode, last_review_id)
+                last_review_id = 0
+
+            logger.info("ai pipeline cursor loaded: game_id=%s mode=%s last_review_id=%s force=%s", game_id, mode, last_review_id, force)
 
 
 
@@ -218,10 +218,41 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
             logger.info("ai pipeline new reviews: game_id=%s mode=%s count=%s", game_id, mode, len(new_reviews))
 
             if not new_reviews:
+                # 커서는 있지만 현재 요약이 없는 경우 (이전 실행이 AI 이후 DB 단계에서 실패한 경우)
+                # → 전체 리뷰를 대상으로 자동 재처리
+                has_current_summary = (await db.execute(
+                    select(GameReviewSummary.id).where(
+                        and_(
+                            GameReviewSummary.game_id == game_id,
+                            GameReviewSummary.summary_type == mode,
+                            GameReviewSummary.review_language.is_(None) if review_language is None
+                            else GameReviewSummary.review_language == review_language,
+                            GameReviewSummary.is_current == True,
+                        )
+                    )
+                )).scalar_one_or_none()
 
-                logger.info("ai pipeline skipped: no new reviews for game_id=%s mode=%s", game_id, mode)
+                if has_current_summary:
+                    logger.info("ai pipeline skipped: no new reviews for game_id=%s mode=%s", game_id, mode)
+                    return
 
-                return
+                logger.info(
+                    "ai pipeline auto-recovery: cursor exists but no current summary, reprocessing all reviews "
+                    "game_id=%s mode=%s", game_id, mode
+                )
+                last_review_id = 0
+                new_reviews = (await db.execute(
+                    select(ExternalReview).where(and_(*[
+                        ExternalReview.game_id == game_id,
+                        ExternalReview.id > last_review_id,
+                        ExternalReview.is_deleted == False,
+                        *([ExternalReview.language_code == language_code] if mode == "regional" else []),
+                    ]))
+                )).scalars().all()
+
+                if not new_reviews:
+                    logger.info("ai pipeline skipped: truly no reviews for game_id=%s mode=%s", game_id, mode)
+                    return
 
 
 
@@ -378,7 +409,7 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
                     # 이유: 기존 리뷰는 문자열 배열 ["그래픽", "조작감"]이지만
                     #       신규 크롤러는 객체 배열 [{"category": "그래픽", "sentiment": "positive"}, ...] 형식
                     # 목표: 마이그레이션 기간 중 둘 다 지원
-                    # TODO(m005 이후): isinstance(item, str) 조건 제거 가능 (신규 포맷만 지원)
+                    # 크롤러가 신규 포맷(dict)으로 전환되면 isinstance(item, str) 분기 제거 가능
                     if isinstance(item, dict):
                         category = item.get("category")
                     elif isinstance(item, str):
@@ -419,8 +450,6 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
 
                 game_id=game_id,
 
-                language_code=cursor_language_code,
-
                 status="started",
 
                 input_review_count=len(summary_reviews),
@@ -440,14 +469,6 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
 
 
             # 8. 기존 요약본 확인
-
-            # Sprint 3: 요약 조회 로직 변경
-            # 이유: 기존 language_code="unified" 워크어라운드 제거 (비표준)
-            #       정식 필드 (summary_type, review_language)로 전환
-            # 개선: 스키마 명확화 + 쿼리 의도 명시
-            # 예시:
-            #   - unified: summary_type="unified" AND review_language IS NULL
-            #   - regional: summary_type="regional" AND review_language="ko"
             existing_summary = (await db.execute(
 
                 select(GameReviewSummary).where(
@@ -473,7 +494,7 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
 
             # 9. 하이브리드 파이프라인 실행
 
-            reduce_language = "ko" if mode == "unified" else language_code
+            reduce_language = "ko"
 
             logger.info("ai pipeline summary generation started: game_id=%s mode=%s job_id=%s", game_id, mode, job.id)
 
@@ -491,15 +512,17 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
 
                 metacritic_ratio=(meta_pos, meta_mix, meta_neg),
 
-                cache=get_redis_cache(),
+                regional=(mode == "regional"),
+
+                cache=RedisCache(get_redis_cache()),
 
                 ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
 
                 local_model_name=os.getenv("LOCAL_MAP_MODEL", "gemma3:4b"),
 
-                reduce_api_key=os.getenv("GEMINI_API_KEY", ""),
+                reduce_api_key=os.getenv("GROQ_API_KEY", ""),
 
-                reduce_model_name="gemini-2.5-flash-lite",
+                reduce_model_name=os.getenv("GROQ_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct"),
 
                 prior_summary_text=prior_summary_text,
 
@@ -539,9 +562,9 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
             # 이유: 운영 비용 추적 & 캐시 효율 모니터링 (기존 컬럼 재활용)
             job.map_output_tokens = sum(getattr(r, "output_tokens", 0) for r in map_results)
 
-            job.reduce_input_tokens = getattr(ai_result, "input_tokens", 0)  # Gemini prompt_token_count
+            job.reduce_input_tokens = getattr(ai_result, "input_tokens", 0)  # Groq prompt_tokens
 
-            job.reduce_output_tokens = getattr(ai_result, "output_tokens", 0)  # Gemini candidates_token_count
+            job.reduce_output_tokens = getattr(ai_result, "output_tokens", 0)  # Groq completion_tokens
 
 
 
@@ -612,20 +635,11 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
 
 
 
-            # Sprint 3: 요약 메타데이터 기록 변경
-            # 이유: unified/regional 구분 명확화 + 향후 조회 용이
-            # 변경:
-            #   - language_code: 기존 유지 (레거시, m005 제거 예정)
-            #   - summary_type: 신규 추가 (unified|regional 모드 명시)
-            #   - review_language: 신규 추가 (unified→NULL, regional→언어코드)
-            # 활용: 향후 조회시 summary_type + review_language로 구분
             new_summary = GameReviewSummary(
 
                 game_id=game_id,
 
-                language_code=cursor_language_code,      # 레거시 필드
-
-                summary_type=mode,                        # Sprint 3 추가
+                summary_type=mode,
 
                 review_language=review_language,
 
@@ -741,14 +755,6 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
 
 
             # 16. 커서 최신화
-            # 수정됨(Sprint 3): 이 블록은 Sprint 3에서 업데이트되어
-            # summary_type 메타필드가 커서/조회 파이프라인에 포함되도록 변경되었습니다.
-            # Sprint 3: 커서 메타데이터 통합 (summary_type 기록)
-            # 이유: 다음 파이프라인 실행 시 unified/regional 구분 명확화
-            # 변경:
-            #   - language_code: 기존 유지 (PK, "unified" 또는 언어코드)
-            #   - summary_type: 신규 기록 ("unified" 또는 "regional")
-            # 활용: Cursor 조회 시 (위 #1 참고) summary_type 필터로 구분
 
             if cursor:
 

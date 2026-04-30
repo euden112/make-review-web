@@ -147,7 +147,6 @@ class ReviewSummaryJob(Base):
     __tablename__ = "review_summary_jobs"
     id = Column(BigInteger, primary_key=True, index=True)
     game_id = Column(BigInteger, ForeignKey("games.id"), nullable=False)
-    language_code = Column(String(10), nullable=False)
     status = Column(String(20), nullable=False)
     from_review_id = Column(BigInteger, ForeignKey("external_reviews.id"))
     to_review_id = Column(BigInteger, ForeignKey("external_reviews.id"))
@@ -186,28 +185,17 @@ class ReviewSummaryChunk(Base):
 # 수정됨(Sprint 3): GameReviewSummary에 summary_type/review_language 및 품질 지표들이 추가되었습니다.
 class GameReviewSummary(Base):
     """게임 리뷰 AI 요약본 저장
-    
-    Sprint 3: 통합/지역별 요약 구분 및 품질 지표 추가
-    
-    스키마 진화 (마이그레이션 단계):
-    - m001: summary_type, review_language 추가 + partial indexes 생성
-    - m002-m003: 신뢰도 지표 컬럼 추가
-    - m004-m005: language_code 제거 (정식 필드로 완전 전환)
-    
-    조회 로직 (스키마별):
-    - Unified 요약 (is_current=TRUE):
-      SELECT * WHERE game_id=X AND summary_type='unified' AND review_language IS NULL
-    - Regional 요약 (is_current=TRUE):
-      SELECT * WHERE game_id=X AND summary_type='regional' AND review_language='ko'
-    
-    Backward Compatibility:
-    - language_code 필드: m005 이후 제거 (현재는 역호환용)
-    - API: _serialize_summary() 함수에서 language_code 자동 생성
+
+    조회 로직:
+    - Unified 요약: summary_type='unified' AND review_language IS NULL AND is_current=TRUE
+    - Regional 요약: summary_type='regional' AND review_language='en' AND is_current=TRUE
+
+    고유성: Partial Index 2개 (uq_game_summary_version_unified / uq_game_summary_version_regional)
+    API 응답: _serialize_summary()에서 language_code 가상 필드 자동 생성 (역호환)
     """
     __tablename__ = "game_review_summaries"
     id = Column(BigInteger, primary_key=True, index=True)
     game_id = Column(BigInteger, ForeignKey("games.id"), nullable=False)
-    language_code = Column(String(10), nullable=False)  # 레거시 필드 (m005 제거 예정)
     # Sprint 3: 요약 모드 구분 필드
     summary_type = Column(String(16), nullable=False, default="unified")  # 'unified' | 'regional'
     review_language = Column(String(10), nullable=True)                    # NULL (unified) | 'en'/'ko'/'zh' (regional)
@@ -238,11 +226,4 @@ class GameReviewSummary(Base):
     staleness_ratio = Column(Numeric(5, 4))            # 0.0~1.0
     semantic_similarity_score = Column(Numeric(5, 4))  # 0.0~1.0
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
-    # Sprint 3: 고유성 보장 전략 (PostgreSQL NULL 제약 우회)
-    # - 기존: UNIQUE(game_id, language_code, summary_version) → NULL 문제
-    # - 변경: Partial Index 2개 사용
-    #   * uq_game_summary_version_unified (m001):
-    #     (game_id, summary_type, summary_version) WHERE review_language IS NULL
-    #   * uq_game_summary_version_regional (m001):
-    #     (game_id, summary_type, review_language, summary_version) WHERE review_language IS NOT NULL
     # 마이그레이션: 04_migration_sprint3_m001.sql 참고

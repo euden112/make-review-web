@@ -11,6 +11,11 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./database/01_schema.sql:/docker-entrypoint-initdb.d/01_schema.sql
+      - ./database/03_migration_sprint2.sql:/docker-entrypoint-initdb.d/03_migration_sprint2.sql
+      - ./database/04_migration_sprint3_m001.sql:/docker-entrypoint-initdb.d/04_migration_sprint3_m001.sql
+      - ./database/05_migration_sprint3_m002.sql:/docker-entrypoint-initdb.d/05_migration_sprint3_m002.sql
+      - ./database/06_migration_sprint3_m003.sql:/docker-entrypoint-initdb.d/06_migration_sprint3_m003.sql
+      - ./database/07_migration_sprint3_m005.sql:/docker-entrypoint-initdb.d/07_migration_sprint3_m005.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s
@@ -66,7 +71,7 @@ services:
       - REDIS_DB=0
       - OLLAMA_BASE_URL=http://ollama:11434
       - LOCAL_MAP_MODEL=gemma3:4b
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GROQ_API_KEY=${GROQ_API_KEY}
       - PYTHONPATH=/workspace/backend:/workspace/ai-pipeline
     command: sh -c "pip install -r requirements.txt && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
     depends_on:

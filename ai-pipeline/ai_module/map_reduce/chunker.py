@@ -12,7 +12,7 @@ class Chunk:
 
 
 def chunk_reviews_by_chars(
-    review_items: Sequence[tuple[int, str]],
+    review_items: Sequence[tuple[int, str] | tuple[int, str, int | None, float | None]],
     max_chars: int = 5500,
     overlap_reviews: int = 2,
 ) -> list[Chunk]:
@@ -22,8 +22,17 @@ def chunk_reviews_by_chars(
     cur_len = 0
     chunk_no = 1
 
-    for review_id, text in review_items:
-        one = f"[review_id={review_id}] {text}\n"
+    for item in review_items:
+        review_id, text = item[0], item[1]
+        helpful = item[2] if len(item) > 2 else None
+        playtime = item[3] if len(item) > 3 else None
+
+        meta = f"review_id={review_id}"
+        if helpful:
+            meta += f" helpful={helpful}"
+        if playtime is not None and playtime >= 1:
+            meta += f" playtime={int(playtime)}h"
+        one = f"[{meta}] {text}\n"
         if cur_len + len(one) > max_chars and buffer_ids:
             chunks.append(
                 Chunk(
