@@ -1,7 +1,15 @@
 import sys
-
 import os
+from pathlib import Path
+# [중요] 외부 폴더인 ai-pipeline을 파이썬 모듈 경로에 가장 먼저 추가합니다!
+if os.path.exists("/workspace/ai-pipeline"):
+    AI_PIPELINE_PATH = "/workspace/ai-pipeline"
+else:
+    PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+    AI_PIPELINE_PATH = os.path.join(PROJECT_ROOT, "ai-pipeline")
 
+if AI_PIPELINE_PATH not in sys.path:
+    sys.path.append(AI_PIPELINE_PATH)
 import asyncio
 
 import logging
