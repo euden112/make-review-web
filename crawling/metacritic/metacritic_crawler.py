@@ -1,12 +1,10 @@
 """
 Metacritic Game Review Crawler
-- 영어(en) 리뷰만 수집
+- 영어(en) 리뷰만 수집 (영어 전용 플랫폼, langdetect 미사용)
 - 3단계 필터링 파이프라인 내장:
   1단계: 규칙 기반 (길이/반복/스팸)
-  2단계: 언어 감지 (영어만 통과)
-  3단계: 카테고리 분류 (게임 관련 리뷰만 통과 + 카테고리 태깅)
-
-  lang(언어), category(카테고리 목록) 필드 추가됨
+  2단계: 언어 코드 하드코딩 ("en" 고정)
+  3단계: 카테고리 분류 (게임 관련 리뷰만 통과 + 카테고리/감성 태깅)
 """
 
 import argparse
@@ -17,11 +15,8 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from langdetect import detect, DetectorFactory
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 from sentence_transformers import SentenceTransformer, util
-
-DetectorFactory.seed = 0
 
 # ============================================================
 # 설정
@@ -53,6 +48,14 @@ MAX_URLS      = 2
 
 # 카테고리 분류 임계값
 CATEGORY_THRESHOLD = 0.30
+
+# 감성 판단 부정 키워드
+NEGATIVE_KEYWORDS = {
+    "not", "bad", "terrible", "awful", "poor", "broken",
+    "hate", "disappointing", "worst", "horrible", "garbage",
+    "useless", "trash", "never", "fail", "failed", "fails",
+    "worse", "boring", "waste", "refund", "unplayable",
+}
 
 # 게임 리뷰 카테고리
 GAME_CATEGORIES = {
@@ -89,20 +92,31 @@ class FilterResult:
     stage: str
     reason: str
     lang: str = ""
-    categories: list[str] = field(default_factory=list)
+    categories: list[dict] = field(default_factory=list)
 
 # ============================================================
-# 임베딩 모델 (싱글톤)
+# 임베딩 모델 (싱글톤) + 키워드 임베딩 사전 계산
 # ============================================================
 
 _embed_model = None
+_keyword_embeddings: dict | None = None
 
 def get_embed_model() -> SentenceTransformer:
     global _embed_model
     if _embed_model is None:
-        print("  [모델 로드] SentenceTransformer (all-MiniLM-L6-v2)...")
-        _embed_model = SentenceTransformer("all-MiniLM-L6-v2")
+        print("  [모델 로드] SentenceTransformer (paraphrase-multilingual-MiniLM-L12-v2)...")
+        _embed_model = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
     return _embed_model
+
+def get_keyword_embeddings() -> dict:
+    global _keyword_embeddings
+    if _keyword_embeddings is None:
+        model = get_embed_model()
+        _keyword_embeddings = {
+            category: model.encode(keywords, convert_to_tensor=True)
+            for category, keywords in GAME_CATEGORIES.items()
+        }
+    return _keyword_embeddings
 
 # ============================================================
 # 1단계: 규칙 기반 필터
@@ -129,59 +143,49 @@ def rule_based_filter(text: str) -> FilterResult:
     return FilterResult(True, "rule", "pass")
 
 # ============================================================
-# 2단계: 언어 감지 (영어만 통과)
+# 3단계: 카테고리 분류 (문장 단위 감성 포함)
 # ============================================================
 
-def language_filter(text: str) -> FilterResult:
-    try:
-        lang = detect(text)
-        if lang == "en":
-            return FilterResult(True, "lang", "pass", lang="en")
-        return FilterResult(False, "lang", f"not_english:{lang}", lang=lang)
-    except Exception:
-        return FilterResult(False, "lang", "detect_failed", lang="unknown")
+def _sentence_sentiment(sentence: str) -> str:
+    words = set(re.findall(r'\w+', sentence.lower()))
+    return "negative" if words & NEGATIVE_KEYWORDS else "positive"
 
-# ============================================================
-# 3단계: 카테고리 분류
-# ============================================================
+def _split_sentences(text: str) -> list[str]:
+    parts = re.split(r'(?<=[.!?])\s+', text)
+    return [s.strip() for s in parts if len(s.strip()) >= 10]
 
 def category_filter(text: str) -> FilterResult:
     model = get_embed_model()
-    review_emb = model.encode(text, convert_to_tensor=True)
+    keyword_embeddings = get_keyword_embeddings()
 
-    matched = []
-    for category, keywords in GAME_CATEGORIES.items():
-        keyword_embs = model.encode(keywords, convert_to_tensor=True)
-        sims = util.cos_sim(review_emb, keyword_embs)[0]
-        max_sim = sims.max().item()
+    sentences = _split_sentences(text) or [text]
 
-        if max_sim >= CATEGORY_THRESHOLD:
-            matched.append(category)
+    matched: dict[str, str] = {}  # category -> sentiment (첫 매칭 우선)
+    for sentence in sentences:
+        sent_emb = model.encode(sentence, convert_to_tensor=True)
+        for category, keyword_embs in keyword_embeddings.items():
+            if category in matched:
+                continue
+            sims = util.cos_sim(sent_emb, keyword_embs)[0]
+            if sims.max().item() >= CATEGORY_THRESHOLD:
+                matched[category] = _sentence_sentiment(sentence)
 
     if not matched:
         return FilterResult(False, "category", "no_category_matched")
 
-    return FilterResult(True, "category", "pass", categories=matched)
+    categories = [{"category": c, "sentiment": s} for c, s in matched.items()]
+    return FilterResult(True, "category", "pass", lang="en", categories=categories)
 
 # ============================================================
-# 전체 필터 파이프라인
+# 전체 필터 파이프라인 (Metacritic: 영어 전용, 언어 감지 단계 없음)
 # ============================================================
 
 def run_filter_pipeline(text: str) -> FilterResult:
-    """
-    3단계 필터를 순서대로 실행
-    Returns: 최종 FilterResult (passed=True면 통과)
-    """
     result = rule_based_filter(text)
     if not result.passed:
         return result
 
-    result = language_filter(text)
-    if not result.passed:
-        return result
-
-    result = category_filter(text)
-    return result
+    return category_filter(text)
 
 # ============================================================
 # 전처리 함수
@@ -258,23 +262,21 @@ async def parse_card(page, card) -> dict | None:
             body_el = await card.query_selector(".review-card__quote")
             body = (await body_el.inner_text()).strip() if body_el else ""
 
-        # 전처리
         body = preprocess_body(body)
         if body is None:
             return None
 
-        # 3단계 필터 파이프라인
         result = run_filter_pipeline(body)
         if not result.passed:
             return None
 
         return {
-            "author":     author,
-            "score":      score,
-            "body":       body,
-            "date":       date,
-            "language":   "en",
-            "review_categories": result.categories,
+            "author"           : author,
+            "score"            : score,
+            "body"             : body,
+            "date"             : date,
+            "language"         : "en",
+            "review_categories": result.categories,  # [{"category": "그래픽", "sentiment": "positive"}, ...]
         }
 
     except Exception:
@@ -410,17 +412,17 @@ async def main():
     for game, reviews in results:
         all_output[game] = {
             "meta": {
-                "game":         game,
-                "platform":     PLATFORM,
-                    "platform_code": "metacritic",
-                    "schema_version": "1.0",
-                    "collected_at": datetime.utcnow().strftime('%Y%m%dT%H%M%SZ'),
-                    "record_count": len(reviews),
-                "lang_policy":  "en_only",
-                "crawled_at":   datetime.now().isoformat(),
-                "total":        len(reviews),
-                "critic_count": sum(1 for r in reviews if r["type"] == "critic"),
-                "user_count":   sum(1 for r in reviews if r["type"] == "user"),
+                "game"           : game,
+                "platform"       : PLATFORM,
+                "platform_code"  : "metacritic",
+                "schema_version" : "1.0",
+                "collected_at"   : datetime.utcnow().strftime('%Y%m%dT%H%M%SZ'),
+                "record_count"   : len(reviews),
+                "lang_policy"    : "en_only",
+                "crawled_at"     : datetime.now().isoformat(),
+                "total"          : len(reviews),
+                "critic_count"   : sum(1 for r in reviews if r["type"] == "critic"),
+                "user_count"     : sum(1 for r in reviews if r["type"] == "user"),
             },
             "reviews": reviews,
         }

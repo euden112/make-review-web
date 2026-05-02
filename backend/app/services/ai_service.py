@@ -61,7 +61,7 @@ from ai_module.map_reduce.reduce_api import FinalSummary
 
 try:
 
-    from ai_module.evaluation.gemini_reliability import compute_gemini_reliability
+    from ai_module.evaluation.reduce_reliability import compute_reduce_reliability
 
     _HAS_GEMINI_RELIABILITY = True
 
@@ -398,33 +398,40 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
 
 
 
-            # 6. 카테고리 빈도 집계 (항목 06 앵커링 — pipeline 전달은 ai-pipeline 업데이트 후 적용)
+            # 6. 카테고리별 긍/부정 비율 집계 (Section 2 Phase 2)
+            # 신규 포맷: [{"category": "그래픽", "sentiment": "positive"}, ...]
+            # 구버전 포맷: ["그래픽", "조작감"] — 마이그레이션 기간 중 둘 다 지원
 
-            category_freq: Counter = Counter()
+            category_total: Counter = Counter()
+            category_positive: Counter = Counter()
 
             for review in summary_reviews:
 
                 for item in (review.review_categories_json or []):
-                    # Sprint 3: 카테고리 포맷 호환성 처리
-                    # 이유: 기존 리뷰는 문자열 배열 ["그래픽", "조작감"]이지만
-                    #       신규 크롤러는 객체 배열 [{"category": "그래픽", "sentiment": "positive"}, ...] 형식
-                    # 목표: 마이그레이션 기간 중 둘 다 지원
-                    # 크롤러가 신규 포맷(dict)으로 전환되면 isinstance(item, str) 분기 제거 가능
                     if isinstance(item, dict):
                         category = item.get("category")
+                        sentiment = item.get("sentiment")
                     elif isinstance(item, str):
                         category = item
+                        sentiment = None
                     else:
                         category = None
+                        sentiment = None
 
                     if category:
-                        category_freq[str(category)] += 1
+                        category_total[str(category)] += 1
+                        if sentiment == "positive":
+                            category_positive[str(category)] += 1
 
-            top_categories = category_freq.most_common(8)
+            # (category, total_count, positive_ratio) 형태로 상위 8개 추출
+            top_categories = [
+                (cat, total, round(category_positive[cat] / total, 3))
+                for cat, total in category_total.most_common(8)
+            ]
 
             if top_categories:
 
-                logger.info("ai pipeline category anchors: game_id=%s %s", game_id, top_categories)
+                logger.info("ai pipeline category stats: game_id=%s %s", game_id, top_categories)
 
 
 
@@ -695,7 +702,7 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
 
             if _HAS_GEMINI_RELIABILITY:
 
-                # Sprint 3: Gemini 출력 신뢰도 평가 (결정론적, 추가 LLM 호출 없음)
+                # Reduce(Groq) 출력 신뢰도 평가 (결정론적, 추가 LLM 호출 없음)
             # 이유: 파이프라인 실행마다 결과 품질을 정량화 → 운영 모니터링용
             # 지표:
             #   - schema_compliance: 9개 필드 채움 비율 (0.0~1.0)
@@ -703,7 +710,7 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
             #   - sentiment_consistency: 레이블 vs 점수 범위 일치 (0|1)
             #   - anchor_deviation: |sentiment_score - steam_ratio| / 100
             # 활용: 운영 임계값 설정 (schema_compliance < 0.8 → 경고)
-                reliability = compute_gemini_reliability(
+                reliability = compute_reduce_reliability(
                     ai_result=ai_result,
                     input_reviews=new_reviews,
                     steam_recommend_ratio=steam_recommend_ratio,
@@ -716,7 +723,7 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
 
             else:
 
-                logger.debug("ai_module.evaluation.gemini_reliability not available; skipping reliability metrics")
+                logger.debug("ai_module.evaluation.reduce_reliability not available; skipping reliability metrics")
 
 
 

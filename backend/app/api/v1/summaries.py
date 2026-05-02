@@ -7,7 +7,7 @@ from sqlalchemy import and_
 
 from app.core.database import get_db
 from app.core.redis_client import get_summary_cache, set_summary_cache
-from app.models.domain import GameReviewSummary
+from app.models.domain import GameReviewSummary, ReviewSummaryJob
 from app.services.ai_service import run_ai_pipeline_task, get_pipeline_tasks
 
 logger = logging.getLogger(__name__)
@@ -77,7 +77,13 @@ async def get_unified_summary(
     if not summary:
         raise HTTPException(status_code=404, detail="AI 요약본이 없습니다.")
 
-    result = _serialize_summary(summary)
+    job = None
+    if summary.job_id is not None:
+        job = (await db.execute(
+            select(ReviewSummaryJob).where(ReviewSummaryJob.id == summary.job_id)
+        )).scalar_one_or_none()
+
+    result = _serialize_summary(summary, job)
 
     await set_summary_cache(game_id, summary_type, result)
     logger.info("cache_miss game_id=%s summary_type=%s", game_id, summary_type)
@@ -118,20 +124,18 @@ async def get_regional_perspectives(
 
 # 수정됨(Sprint 3): 응답 직렬화에 summary_type/review_language가 포함되며
 # 기존 클라이언트 호환을 위해 language_code를 자동 생성합니다.
-def _serialize_summary(summary: GameReviewSummary) -> dict:
+def _serialize_summary(summary: GameReviewSummary, job: ReviewSummaryJob | None = None) -> dict:
     """GameReviewSummary ORM → API 응답 변환
 
     Sprint 3: 새 필드 포함 + 역호환성 유지
     - 신규 필드: summary_type (unified|regional), review_language (en/ko/zh)
     - 레거시 필드: language_code (자동 생성)
+    - reliability: ReviewSummaryJob의 신뢰도 지표 (job 전달 시 포함)
     """
-    return {
+    result = {
         "game_id": summary.game_id,
-        "summary_type": summary.summary_type,            # Sprint 3 신규
-        "review_language": summary.review_language,      # Sprint 3 신규
-        # Sprint 3: 역호환성 유지 (기존 클라이언트 호환)
-        # - review_language=None → language_code="unified"
-        # - review_language="en" → language_code="en"
+        "summary_type": summary.summary_type,
+        "review_language": summary.review_language,
         "language_code": summary.review_language if summary.review_language is not None else "unified",
         "version": summary.summary_version,
         "summary_text": summary.summary_text,
@@ -143,4 +147,16 @@ def _serialize_summary(summary: GameReviewSummary) -> dict:
         "sentiment_score": float(summary.sentiment_score) if summary.sentiment_score is not None else None,
         "aspect_sentiment": summary.aspect_sentiment_json,
         "updated_at": summary.created_at.isoformat(),
+        "reliability": None,
     }
+    if job is not None:
+        result["reliability"] = {
+            "schema_compliance": float(job.schema_compliance) if job.schema_compliance is not None else None,
+            "hallucination_score": float(job.hallucination_score) if job.hallucination_score is not None else None,
+            "sentiment_consistency": job.sentiment_consistency,
+            "anchor_deviation": float(job.anchor_deviation) if job.anchor_deviation is not None else None,
+            "input_review_count": job.input_review_count,
+            "reduce_input_tokens": job.reduce_input_tokens,
+            "reduce_output_tokens": job.reduce_output_tokens,
+        }
+    return result

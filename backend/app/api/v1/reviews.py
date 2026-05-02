@@ -269,7 +269,7 @@ async def get_general_priority_reviews(
         and_(
             ExternalReview.is_deleted == False,
             ExternalReview.reviewed_at >= time_threshold,
-            ExternalReview.review_categories_json.contains(["General"])
+            ExternalReview.review_categories_json.contains([{"category": "General"}])
         )
     ).order_by(
         desc(ExternalReview.reviewed_at),

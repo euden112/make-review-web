@@ -8,7 +8,6 @@
   python demo.py --skip-crawl       # 크롤링 건너뜀 (DB에 데이터가 이미 있는 경우)
   python demo.py --skip-metacritic  # Metacritic 크롤링 건너뜀
   python demo.py --skip-docker      # Docker 기동 건너뜀 (이미 실행 중인 경우)
-  python demo.py --lang en          # 영어 요약
   python demo.py --game elden-ring  # 특정 게임만 요약 (여러 번 사용 가능)
 """
 
@@ -44,6 +43,18 @@ GAME_DISPLAY_NAMES = {
     "playerunknowns-battlegrounds":"PUBG",
     "clair-obscur-expedition-33":  "Clair Obscur: Expedition 33",
     "crimson-desert":              "Crimson Desert",
+}
+
+LANG_DISPLAY = {
+    "en": "영어권",
+    "ko": "한국어권",
+    "zh": "중국어권",
+}
+
+SENTIMENT_COLOR = {
+    "positive": G,
+    "mixed":    Y,
+    "negative": R,
 }
 
 
@@ -205,7 +216,7 @@ def show_review_counts(label: str = "현재 DB 리뷰 현황"):
 # ─── 크롤링 ──────────────────────────────────────────────────────────────────
 def install_crawl_deps():
     info("크롤링 패키지 확인 중...")
-    pkgs = ["requests", "httpx", "langdetect", "sentence-transformers", "playwright"]
+    pkgs = ["requests", "httpx", "sentence-transformers", "playwright"]
     r = subprocess.run(
         [sys.executable, "-m", "pip", "install", "--quiet", *pkgs],
         capture_output=True, text=True,
@@ -217,7 +228,7 @@ def install_crawl_deps():
 
 
 def run_steam_crawler(games: list[str]):
-    print(f"\n   {B}[ Steam 크롤링 시작 ]{RESET}")
+    print(f"\n   {B}[ Steam 크롤링 시작 — 한/영/중 독립 파이프라인 ]{RESET}")
     print(f"   {D}{_divider('·', 56)}{RESET}")
     r = subprocess.run(
         [sys.executable, "steam/steam_crawler.py", "--games", *games],
@@ -300,10 +311,7 @@ def poll_summary(game_id: int, timeout: int = 600) -> dict | None:
     dots = 0
     while time.time() < deadline:
         try:
-            r = httpx.get(
-                f"{BACKEND_URL}/api/v1/games/{game_id}/summary",
-                timeout=10,
-            )
+            r = httpx.get(f"{BACKEND_URL}/api/v1/games/{game_id}/summary", timeout=10)
             if r.status_code == 200:
                 print()
                 return r.json()
@@ -320,20 +328,42 @@ def poll_summary(game_id: int, timeout: int = 600) -> dict | None:
     return None
 
 
+def fetch_perspectives(game_id: int) -> list[dict]:
+    try:
+        r = httpx.get(f"{BACKEND_URL}/api/v1/games/{game_id}/perspectives", timeout=10)
+        if r.status_code == 200:
+            return r.json()
+    except Exception:
+        pass
+    return []
+
+
 # ─── 결과 출력 ────────────────────────────────────────────────────────────────
 def _aspect_bar(score: float) -> str:
     filled = min(10, max(0, round(score)))
     return f"{G}{'█' * filled}{D}{'░' * (10 - filled)}{RESET}"
 
 
+def _sentiment_badge(overall: str | None, score: float | None) -> str:
+    if not overall:
+        return ""
+    col = SENTIMENT_COLOR.get(overall, D)
+    label = {"positive": "긍정", "mixed": "혼재", "negative": "부정"}.get(overall, overall)
+    score_str = f"  {score:.1f}점" if score is not None else ""
+    return f"{col}{B}{label}{RESET}{D}{score_str}{RESET}"
+
+
 def display_summary(slug: str, data: dict):
     display_name = GAME_DISPLAY_NAMES.get(slug, slug)
-    summary_text: str = data.get("summary_text") or ""
-    aspects: dict = data.get("aspect_sentiment") or {}
-    pros: list = data.get("pros") or []
-    cons: list = data.get("cons") or []
-    keywords: list = data.get("keywords") or []
-    rep_reviews: list = data.get("representative_reviews") or []
+    summary_text: str  = data.get("summary_text") or ""
+    aspects: dict      = data.get("aspect_sentiment") or {}
+    pros: list         = data.get("pros") or []
+    cons: list         = data.get("cons") or []
+    keywords: list     = data.get("keywords") or []
+    rep_reviews: list  = data.get("representative_reviews") or []
+    sentiment_overall  = data.get("sentiment_overall")
+    sentiment_score    = data.get("sentiment_score")
+    reliability: dict | None = data.get("reliability")
 
     width = 64
     print(f"\n{B}{M}{'▓' * width}{RESET}")
@@ -343,7 +373,14 @@ def display_summary(slug: str, data: dict):
     # 한 줄 요약
     lines = summary_text.splitlines()
     one_liner = lines[0].strip("*").strip() if lines else "(요약 없음)"
-    print(f"\n  {B}{C}{one_liner}{RESET}\n")
+    print(f"\n  {B}{C}{one_liner}{RESET}")
+
+    # 감성 종합
+    badge = _sentiment_badge(sentiment_overall, sentiment_score)
+    if badge:
+        print(f"  {badge}\n")
+    else:
+        print()
 
     # 본문
     body = "\n".join(lines[2:]) if len(lines) > 2 else ""
@@ -398,12 +435,79 @@ def display_summary(slug: str, data: dict):
         kw_str = "  ".join(f"{D}#{k}{RESET}" for k in keywords[:8])
         print(f"\n  {kw_str}")
 
+    # 신뢰도 지표
+    if reliability:
+        display_reliability(reliability)
+
     print(f"\n{D}{'─' * width}{RESET}")
 
 
-def display_comparison_header(game_count: int, lang: str):
+def display_reliability(rel: dict):
+    print(f"\n  {B}신뢰도 지표{RESET}  {D}(Reduce 출력 품질){RESET}")
+
+    sc = rel.get("schema_compliance")
+    if sc is not None:
+        bar = f"{G if sc >= 0.8 else Y if sc >= 0.5 else R}{'█' * round(sc * 10)}{D}{'░' * (10 - round(sc * 10))}{RESET}"
+        flag = f"  {Y}⚠ 낮음{RESET}" if sc < 0.8 else ""
+        print(f"  {'스키마 준수율':<14} {bar}  {sc:.0%}{flag}")
+
+    hs = rel.get("hallucination_score")
+    if hs is not None:
+        bar = f"{G if hs >= 0.8 else Y if hs >= 0.5 else R}{'█' * round(hs * 10)}{D}{'░' * (10 - round(hs * 10))}{RESET}"
+        print(f"  {'인용 정확도':<14} {bar}  {hs:.0%}")
+
+    sc2 = rel.get("sentiment_consistency")
+    if sc2 is not None:
+        label = f"{G}일치{RESET}" if sc2 == 1 else f"{R}불일치{RESET}"
+        print(f"  {'감성 일관성':<14} {label}")
+
+    ad = rel.get("anchor_deviation")
+    if ad is not None:
+        flag = f"  {Y}⚠ 편차 큼{RESET}" if ad > 0.2 else ""
+        print(f"  {'앵커 편차':<14} {ad:.3f}{flag}")
+
+    cnt = rel.get("input_review_count")
+    tok_in = rel.get("reduce_input_tokens")
+    tok_out = rel.get("reduce_output_tokens")
+    meta_parts = []
+    if cnt is not None:
+        meta_parts.append(f"입력 리뷰 {cnt}개")
+    if tok_in is not None and tok_out is not None:
+        meta_parts.append(f"Reduce 토큰 {tok_in}↑ {tok_out}↓")
+    if meta_parts:
+        print(f"  {D}{' | '.join(meta_parts)}{RESET}")
+
+
+def display_perspectives(perspectives: list[dict]):
+    if not perspectives:
+        return
+    print(f"\n  {B}언어권별 시각{RESET}")
+    for p in perspectives:
+        lang = p.get("review_language") or p.get("language_code", "")
+        label = LANG_DISPLAY.get(lang, f"{lang}권")
+        text: str = p.get("summary_text") or ""
+        lines = text.splitlines()
+        body = " ".join(l.strip() for l in lines if l.strip())
+        print(f"\n  {B}{C}[ {label} ]{RESET}")
+        if body:
+            words = body.split()
+            line_buf: list[str] = []
+            char_count = 0
+            for w in words:
+                if char_count + len(w) + 1 > 70:
+                    print(f"  {D}{' '.join(line_buf)}{RESET}")
+                    line_buf = [w]
+                    char_count = len(w)
+                else:
+                    line_buf.append(w)
+                    char_count += len(w) + 1
+            if line_buf:
+                print(f"  {D}{' '.join(line_buf)}{RESET}")
+
+
+def display_comparison_header(game_count: int):
     print(f"\n\n{B}{C}{'═' * 64}{RESET}")
-    print(f"{B}{C}  AI 요약 결과 비교  ({game_count}개 게임 / 언어: {lang}){RESET}")
+    print(f"{B}{C}  AI 요약 결과  ({game_count}개 게임 / 출력: 한국어){RESET}")
     print(f"{B}{C}{'═' * 64}{RESET}")
 
 
@@ -417,8 +521,6 @@ def main():
     parser.add_argument("--skip-crawl",      action="store_true", help="크롤링 건너뜀")
     parser.add_argument("--skip-metacritic", action="store_true", help="Metacritic 크롤링 건너뜀")
     parser.add_argument("--skip-docker",     action="store_true", help="Docker 기동 건너뜀")
-    parser.add_argument("--lang", default="en", choices=["ko", "en"], metavar="LANG",
-                        help="요약 언어  ko|en  (기본: en)")
     parser.add_argument("--game", dest="games", action="append", metavar="SLUG",
                         help="요약할 게임 슬러그 (기본: grand-theft-auto-v + elden-ring)")
     parser.add_argument("--timeout", type=int, default=600, metavar="SEC",
@@ -431,7 +533,7 @@ def main():
 
     header("게임 리뷰 AI 요약 데모  |  크롤링 → 적재 → Map-Reduce → 비교")
     print(f"  {B}대상 게임{RESET}  {' / '.join(GAME_DISPLAY_NAMES.get(g, g) for g in target_games)}")
-    print(f"  {B}요약 언어{RESET}  {args.lang}")
+    print(f"  {B}출력 언어{RESET}  한국어 (고정)")
 
     # ── STEP 1: 환경 변수 확인 ────────────────────────────────────────────────
     step(1, "환경 변수 확인")
@@ -439,13 +541,13 @@ def main():
     if not groq_key:
         abort(
             "GROQ_API_KEY 환경변수가 설정되지 않았습니다.\n"
-            "       export GROQ_API_KEY=your_key_here"
+            "       .env 파일에 GROQ_API_KEY=your_key_here 를 추가하세요."
         )
     ok("GROQ_API_KEY 확인")
     model = os.environ.get("LOCAL_MAP_MODEL", "gemma3:4b")
     groq_model = os.environ.get("GROQ_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
     ok(f"LOCAL_MAP_MODEL = {model}  (Map 단계 로컬 추론)")
-    ok(f"Reduce 단계 = Groq API  ({groq_model})")
+    ok(f"Reduce 모델    = Groq API  ({groq_model})")
 
     # ── STEP 2: Docker 서비스 기동 ────────────────────────────────────────────
     step(2, "Docker 서비스 기동")
@@ -459,12 +561,12 @@ def main():
     step(3, "Ollama 로컬 모델 준비")
     pull_ollama_model(model)
 
-    # ── STEP 4: 문제 제시 — 크롤링 전 현황 ────────────────────────────────────
-    step(4, "크롤링 전 DB 현황  (리뷰를 직접 읽기에는 너무 많습니다)")
+    # ── STEP 4: 크롤링 전 현황 ────────────────────────────────────────────────
+    step(4, "크롤링 전 DB 현황")
     show_review_counts("크롤링 전 리뷰 수")
 
     # ── STEP 5: 크롤링 ────────────────────────────────────────────────────────
-    step(5, "리뷰 크롤링")
+    step(5, "리뷰 크롤링  (Steam: 한/영/중  |  Metacritic: 영어)")
     if args.skip_crawl:
         warn("--skip-crawl: 크롤링 건너뜀")
     else:
@@ -500,9 +602,10 @@ def main():
         abort("요약할 게임이 없습니다.")
 
     # ── STEP 8: AI 요약 파이프라인 트리거 ─────────────────────────────────────
-    step(8, f"AI Map-Reduce 요약 파이프라인 시작  (언어: {args.lang})")
-    info(f"Map  단계: {model} (Ollama 로컬 추론) — 청크별 요약")
+    step(8, "AI Map-Reduce 요약 파이프라인 시작")
+    info(f"Map    단계: {model} (Ollama 로컬) — 청크별 요약")
     info(f"Reduce 단계: Groq API ({groq_model}) — 최종 구조화 요약")
+    info("파이프라인: 통합 요약(unified) + 언어권별 시각(regional) 동시 생성")
     print()
     for slug, gid in targets.items():
         name = GAME_DISPLAY_NAMES.get(slug, slug)
@@ -515,21 +618,31 @@ def main():
     print(f"   {D}  docker compose logs -f backend{RESET}\n")
 
     results: dict[str, dict] = {}
+    perspectives: dict[str, list[dict]] = {}
+
     for slug, gid in targets.items():
         name = GAME_DISPLAY_NAMES.get(slug, slug)
-        info(f"대기 중: {name}")
+        info(f"통합 요약 대기 중: {name}")
         data = poll_summary(gid, timeout=args.timeout)
         if data:
             results[slug] = data
-            ok(f"완료: {name}")
+            ok(f"통합 요약 완료: {name}")
+            persp = fetch_perspectives(gid)
+            if persp:
+                perspectives[slug] = persp
+                ok(f"언어권별 시각 {len(persp)}개 수신: {name}")
+            else:
+                info(f"언어권별 시각 아직 없음 (regional 파이프라인 처리 중일 수 있음)")
         else:
             warn(f"타임아웃 ({args.timeout}초 초과): {name}")
 
     # ── 비교 출력 ──────────────────────────────────────────────────────────────
     if results:
-        display_comparison_header(len(results), args.lang)
+        display_comparison_header(len(results))
         for slug, data in results.items():
             display_summary(slug, data)
+            if slug in perspectives:
+                display_perspectives(perspectives[slug])
 
     # ── 완료 배너 ──────────────────────────────────────────────────────────────
     succeeded = len(results)
