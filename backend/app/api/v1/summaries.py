@@ -6,7 +6,7 @@ from sqlalchemy import and_
 
 from app.core.database import get_db
 from app.core.redis_client import get_summary_cache, set_summary_cache
-from app.models.domain import GameReviewSummary
+from app.models.domain import GameReviewSummary, ReviewSummaryJob
 from app.services.ai_service import run_ai_pipeline_task, get_pipeline_tasks
 
 logger = logging.getLogger(__name__)
@@ -104,7 +104,13 @@ async def get_unified_summary(
     if not summary:
         raise HTTPException(status_code=404, detail="AI 요약본이 없습니다.")
 
-    result = _serialize_summary(summary)
+    job = None
+    if summary.job_id is not None:
+        job = (await db.execute(
+            select(ReviewSummaryJob).where(ReviewSummaryJob.id == summary.job_id)
+        )).scalar_one_or_none()
+
+    result = _serialize_summary(summary, job)
 
     await set_summary_cache(game_id, summary_type, result)
     logger.info("cache_miss game_id=%s summary_type=%s", game_id, summary_type)
@@ -134,8 +140,8 @@ async def get_regional_perspectives(
     return [_serialize_summary(s) for s in rows]
 
 
-def _serialize_summary(summary: GameReviewSummary) -> dict:
-    return {
+def _serialize_summary(summary: GameReviewSummary, job: ReviewSummaryJob | None = None) -> dict:
+    result = {
         "game_id": summary.game_id,
         "summary_type": summary.summary_type,
         "review_language": summary.review_language,
@@ -150,4 +156,16 @@ def _serialize_summary(summary: GameReviewSummary) -> dict:
         "sentiment_score": float(summary.sentiment_score) if summary.sentiment_score is not None else None,
         "aspect_sentiment": summary.aspect_sentiment_json,
         "created_at": summary.created_at.isoformat(),
+        "reliability": None,
     }
+    if job is not None:
+        result["reliability"] = {
+            "schema_compliance": float(job.schema_compliance) if job.schema_compliance is not None else None,
+            "hallucination_score": float(job.hallucination_score) if job.hallucination_score is not None else None,
+            "sentiment_consistency": job.sentiment_consistency,
+            "anchor_deviation": float(job.anchor_deviation) if job.anchor_deviation is not None else None,
+            "input_review_count": job.input_review_count,
+            "reduce_input_tokens": job.reduce_input_tokens,
+            "reduce_output_tokens": job.reduce_output_tokens,
+        }
+    return result

@@ -147,7 +147,7 @@ async def run_reduce_stage(
     max_items: int = 24,
     timeout_sec: int = 180,
     score_anchors: dict[str, float | None] | None = None,
-    category_frequency: list[tuple[str, int]] | None = None,
+    category_frequency: list[tuple[str, int, float]] | None = None,
     regional: bool = False,
 ) -> FinalSummary:
     logger.info(
@@ -196,9 +196,25 @@ async def run_reduce_stage(
 
         category_block = ""
         if category_frequency:
-            category_block += "[category_frequency]\n"
-            for category, count in category_frequency:
-                category_block += f"{category}: {count}회\n"
+            category_block += "[category_stats]\n"
+            pros_hints: list[str] = []
+            cons_hints: list[str] = []
+            for entry in category_frequency:
+                cat, count = entry[0], entry[1]
+                pos_ratio: float | None = entry[2] if len(entry) > 2 else None
+                if pos_ratio is not None:
+                    pct = int(pos_ratio * 100)
+                    category_block += f"{cat}: {count}건, {pct}% 긍정\n"
+                    if pos_ratio >= 0.65:
+                        pros_hints.append(cat)
+                    elif pos_ratio < 0.35:
+                        cons_hints.append(cat)
+                else:
+                    category_block += f"{cat}: {count}건\n"
+            if pros_hints:
+                category_block += f"→ pros 후보 (긍정 65%↑): {', '.join(pros_hints)}\n"
+            if cons_hints:
+                category_block += f"→ cons 후보 (긍정 35%↓): {', '.join(cons_hints)}\n"
             category_block += "→ keywords must include top-frequency categories above.\n\n"
 
         user_prompt = (

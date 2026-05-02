@@ -160,7 +160,7 @@ class ReviewSummaryJob(Base):
     reduce_output_tokens = Column(Integer, default=0)  # Sprint 3: Gemini usage_metadata.candidates_token_count
     spam_rule_version = Column(String(64))
     evidence_coverage_ratio = Column(Numeric(5, 2))
-    # Sprint 3: Gemini 신뢰도 지표 (ai_service.py의 compute_gemini_reliability() 참고)
+    # Sprint 3: Reduce(Groq) 신뢰도 지표 (ai_service.py의 compute_reduce_reliability() 참고)
     schema_compliance = Column(Numeric(4, 3))       # 9개 필수 필드 채움 비율
     hallucination_score = Column(Numeric(4, 3))     # 인용 review_id 존재 비율
     sentiment_consistency = Column(Integer)          # label vs score 범위 일치 (0|1)

@@ -80,7 +80,7 @@ async def run_hybrid_summary_pipeline(
     steam_ratio: tuple[int, int],
     metacritic_ratio: tuple[int, int, int],
     score_anchors: dict[str, float | None] | None = None,
-    category_frequency: list[tuple[str, int]] | None = None,
+    category_frequency: list[tuple[str, int, float]] | None = None,
     regional: bool = False,
     cache,
     ollama_base_url: str,
