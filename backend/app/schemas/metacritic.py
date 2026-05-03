@@ -1,5 +1,5 @@
 from pydantic import AliasChoices, BaseModel, Field
-from typing import List, Optional
+from typing import Dict, List, Optional, Union
 
 # 1. 크롤러가 보내는 메타크리틱 리뷰 1개의 구조를 정의합니다.
 class MetacriticReview(BaseModel):
@@ -10,9 +10,9 @@ class MetacriticReview(BaseModel):
     type: str = Field(description="critic 또는 user")
     language: Optional[str] = Field(default="en", validation_alias=AliasChoices("language", "lang"), description="리뷰 작성 언어")
     helpful_count: Optional[int] = Field(default=0, description="도움됨 투표 수")
-    review_categories: Optional[List[str]] = Field(
+    review_categories: Optional[List[Union[str, Dict]]] = Field(
         default_factory=list,
-        description="리뷰 카테고리 JSON 배열. Sprint 3에서는 [{category, sentiment}, ...] 형식",
+        description="리뷰 카테고리 배열. 문자열 배열 ['그래픽'] 또는 객체 배열 [{category, sentiment}] 모두 허용",
     )
 
 # 2. 메타크리틱 통계 정보 구조입니다. (정제 파이프라인에서 걸러진 개수 필드 포함)

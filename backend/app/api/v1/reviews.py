@@ -228,7 +228,6 @@ async def receive_steam_data(payload: Dict[str, SteamPayload], db: AsyncSession 
                 set_=dict(
                     ingestion_run_id=stmt.excluded.ingestion_run_id,
                     review_type_id=stmt.excluded.review_type_id,
-                    score_raw=stmt.excluded.score_raw,
                     author_name=stmt.excluded.author_name,
                     is_recommended=stmt.excluded.is_recommended,
                     playtime_hours=stmt.excluded.playtime_hours,
