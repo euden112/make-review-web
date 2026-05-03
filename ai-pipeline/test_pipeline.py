@@ -10,10 +10,10 @@ ROOT = os.path.dirname(__file__)
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from app.map_reduce.map_local import MapResult
-from app.map_reduce.pipeline import run_hybrid_summary_pipeline
-from app.map_reduce.reduce_api import FinalSummary
-from app.map_reduce.sampler import ReviewRow
+from ai_module.map_reduce.map_local import MapResult
+from ai_module.map_reduce.pipeline import run_hybrid_summary_pipeline
+from ai_module.map_reduce.reduce_api import FinalSummary
+from ai_module.map_reduce.sampler import ReviewRow
 
 
 class InMemoryAsyncCache:

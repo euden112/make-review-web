@@ -141,5 +141,5 @@ def _serialize_summary(summary: GameReviewSummary) -> dict:
         "sentiment_overall": summary.sentiment_overall,
         "sentiment_score": float(summary.sentiment_score) if summary.sentiment_score is not None else None,
         "aspect_sentiment": summary.aspect_sentiment_json,
-        "updated_at": summary.created_at.isoformat(),
+        "created_at": summary.created_at.isoformat(),
     }
