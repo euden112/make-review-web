@@ -31,20 +31,17 @@ GAME_TITLES = {                        # { metacritic slug : steam app_id }
     "elden-ring"                      : "1245620",
     "playerunknowns-battlegrounds"    : "578080",
     "clair-obscur-expedition-33"      : "2679460",
-    "crimson-desert"                  : "1048510",
+    "crimson-desert"                  : "3321460",
 }
 PLATFORM         = "pc"
-LANGUAGE         = "english"           # Steam API 레벨에서 영어만 요청 (langdetect 오분류 우회)
+LANGUAGE         = "english"
 MAX_USER_REVIEWS = 50
 
-# 허용 언어
 ALLOWED_LANGS = ["en"]
 
-# 전처리 설정
 MIN_BODY_LENGTH = 20
 MAX_BODY_LENGTH = 5000
 
-# 필터 설정
 MIN_LENGTH   = 15
 MAX_LENGTH   = 5000
 MIN_WORDS    = 5
@@ -52,10 +49,8 @@ REPEAT_LIMIT = 5
 UNIQUE_RATIO = 0.4
 MAX_URLS     = 2
 
-# 카테고리 분류 임계값
 CATEGORY_THRESHOLD = 0.30
 
-# 게임 리뷰 카테고리
 GAME_CATEGORIES = {
     "그래픽": ["graphics", "visual", "art style", "beautiful", "stunning", "ugly", "resolution", "textures"],
     "조작감": ["controls", "gameplay feel", "responsive", "clunky", "input lag", "movement", "mechanics"],
@@ -84,6 +79,23 @@ class FilterResult:
     reason: str
     lang: str = ""
     categories: list[str] = field(default_factory=list)
+
+# ============================================================
+# 이미지 URL 조회
+# ============================================================
+
+def get_image_urls(app_id: str) -> dict:
+    cover_image = f"https://cdn.cloudflare.steamstatic.com/steam/apps/{app_id}/library_600x900.jpg"
+    hero_url = f"https://cdn.cloudflare.steamstatic.com/steam/apps/{app_id}/library_hero.jpg"
+    fallback_url = f"https://cdn.cloudflare.steamstatic.com/steam/apps/{app_id}/header.jpg"
+
+    try:
+        res = requests.head(hero_url, timeout=5)
+        hero_image = hero_url if res.status_code == 200 else fallback_url
+    except Exception:
+        hero_image = fallback_url
+
+    return {"cover_image": cover_image, "hero_image": hero_image}
 
 # ============================================================
 # 임베딩 모델 (싱글톤)
@@ -123,7 +135,7 @@ def rule_based_filter(text: str) -> FilterResult:
     return FilterResult(True, "rule", "pass")
 
 # ============================================================
-# 2단계: 언어 감지 (한/영/중만 통과)
+# 2단계: 언어 감지
 # ============================================================
 
 def language_filter(text: str) -> FilterResult:
@@ -165,10 +177,6 @@ def category_filter(text: str) -> FilterResult:
 # ============================================================
 
 def run_filter_pipeline(text: str) -> FilterResult:
-    """
-    3단계 필터를 순서대로 실행
-    Returns: 최종 FilterResult (passed=True면 통과)
-    """
     result = rule_based_filter(text)
     if not result.passed:
         return result
@@ -224,7 +232,7 @@ def fetch_raw_reviews(app_id: str, language: str, max_count: int) -> tuple[list[
             "num_per_page"  : min(100, max_count - len(reviews)),
             "cursor"        : cursor,
         }
-        
+
         max_retries = 5
         data = {}
         for attempt in range(max_retries):
@@ -280,12 +288,12 @@ def parse_review(raw: dict) -> dict | None:
     date = datetime.fromtimestamp(ts).strftime("%Y-%m-%d") if ts else ""
 
     return {
-        "author_id"      : author_info.get("steamid", ""),
-        "is_recommended" : raw.get("voted_up", False),
-        "review_text"    : body,
-        "playtime_hours" : round(author_info.get("playtime_forever", 0) / 60, 1),
-        "date_posted"    : date,
-        "language"      : "en",
+        "author_id"        : author_info.get("steamid", ""),
+        "is_recommended"   : raw.get("voted_up", False),
+        "review_text"      : body,
+        "playtime_hours"   : round(author_info.get("playtime_forever", 0) / 60, 1),
+        "date_posted"      : date,
+        "language"         : "en",
         "review_categories": result.categories,
     }
 
@@ -297,6 +305,7 @@ def collect_game(slug: str, app_id: str) -> dict:
     print(f"  [{slug}] 수집 시작 (app_id={app_id})")
 
     raw_list, summary = fetch_raw_reviews(app_id, LANGUAGE, MAX_USER_REVIEWS)
+    images = get_image_urls(app_id)
 
     seen: set[str] = set()
     reviews: list[dict] = []
@@ -335,6 +344,8 @@ def collect_game(slug: str, app_id: str) -> dict:
     return {
         "meta": {
             "game_id"        : app_id,
+            "cover_image"    : images["cover_image"],
+            "hero_image"     : images["hero_image"],
             "platform_code"  : "steam",
             "schema_version" : "1.0",
             "collected_at"   : datetime.utcnow().strftime('%Y%m%dT%H%M%SZ'),

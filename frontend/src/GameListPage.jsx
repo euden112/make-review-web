@@ -2,42 +2,39 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import Navbar from './Navbar'
 
-const MOCK_GAMES = [
-  {
-    id: 1,
-    canonical_title: '엘든 링',
-    cover_image: 'https://cdn.cloudflare.steamstatic.com/steam/apps/1245620/library_600x900.jpg',
-    hero_image: 'https://cdn.cloudflare.steamstatic.com/steam/apps/1245620/library_hero.jpg',
-    description: 'AI 한줄 요약',
-    rating: 5,
-    tags: ['RPG', '오픈월드', '액션'],
-  },
-  ...Array.from({ length: 17 }, (_, i) => ({
-    id: i + 2,
-    canonical_title: `게임 제목 ${i + 2}`,
-    cover_image: null,
-    hero_image: null,
-    description: '게임에 대한 간단한 AI 요약 문구가 들어갈 자리입니다.',
-    rating: (i % 5) + 1,
-    tags: [['RPG', '액션', '전략', '시뮬레이션', '스포츠'][i % 5]],
-  }))
-]
+const API_BASE = 'http://localhost:8000'
 
-const BANNERS = MOCK_GAMES.slice(0, 5)
-const ALL_GENRES = [...new Set(MOCK_GAMES.flatMap(g => g.tags || []))]
+// 임시 별점 및 태그 (API에서 제공하지 않으므로 id 기준으로 매핑)
+const GAME_META = {
+  1: { rating: 4, tags: ['액션', 'RPG'] },
+  2: { rating: 5, tags: ['RPG', '오픈월드', '액션'] },
+  3: { rating: 3, tags: ['슈팅', '배틀로얄'] },
+  4: { rating: 5, tags: ['RPG', '턴제'] },
+  5: { rating: 3, tags: ['액션', 'RPG'] },
+}
 
-function HeroBanner() {
+function HeroBanner({ games }) {
   const [current, setCurrent] = useState(0)
   const navigate = useNavigate()
 
+  const banners = games.slice(0, 5)
+
   useEffect(() => {
+    if (banners.length === 0) return
     const timer = setInterval(() => {
-      setCurrent((prev) => (prev + 1) % BANNERS.length)
+      setCurrent((prev) => (prev + 1) % banners.length)
     }, 4000)
     return () => clearInterval(timer)
-  },)
+  }, [banners.length])
 
-  const banner = BANNERS[current]
+  if (banners.length === 0) return (
+    <section className="relative w-full h-[440px]"
+      style={{ background: 'linear-gradient(135deg, #0d2d63 0%, #1a1a2e 100%)' }}
+    />
+  )
+
+  const banner = banners[current]
+  const meta = GAME_META[banner.id] || { rating: 3, tags: [] }
 
   return (
     <section className="relative w-full h-[440px] overflow-hidden flex flex-col justify-start pt-10"
@@ -65,19 +62,15 @@ function HeroBanner() {
           {banner.canonical_title}
         </h1>
 
-        <p className="mt-4 mb-5 text-base leading-relaxed" style={{ color: '#e6edf8' }}>
-          {banner.description}
-        </p>
-
         <div className="flex items-center gap-2 mt-28 mb-4">
           <span className="text-xl font-extrabold" style={{ color: '#ffb020' }}>
-            {banner.rating ? `${banner.rating}.0` : '-'}
+            {meta.rating}.0
           </span>
           <span className="text-base text-white">/ 5.0</span>
           <div className="flex gap-0.5">
             {[1, 2, 3, 4, 5].map((star) => (
               <span key={star} className="text-xl"
-                style={{ color: banner.rating && star <= banner.rating ? '#ffb020' : 'rgba(255,255,255,0.3)' }}
+                style={{ color: star <= meta.rating ? '#ffb020' : 'rgba(255,255,255,0.3)' }}
               >★</span>
             ))}
           </div>
@@ -93,7 +86,7 @@ function HeroBanner() {
       </div>
 
       <div className="absolute bottom-5 left-1/2 -translate-x-1/2 flex gap-2 z-10">
-        {BANNERS.map((_, i) => (
+        {banners.map((_, i) => (
           <div
             key={i}
             onClick={() => setCurrent(i)}
@@ -109,7 +102,7 @@ function HeroBanner() {
   )
 }
 
-function SearchBar({ searchText, setSearchText, selectedGenre, setSelectedGenre, sortOrder, setSortOrder }) {
+function SearchBar({ searchText, setSearchText, selectedGenre, setSelectedGenre, sortOrder, setSortOrder, allGenres }) {
   const [genreOpen, setGenreOpen] = useState(false)
   const [sortOpen, setSortOpen] = useState(false)
 
@@ -125,9 +118,7 @@ function SearchBar({ searchText, setSearchText, selectedGenre, setSelectedGenre,
 
   return (
     <div className="px-12 py-4 bg-white dark:bg-[#13131f] border-b border-gray-200 dark:border-[#2a2a3e]">
-      {/* 검색 행 */}
       <div className="flex items-center gap-3">
-        {/* 검색 input */}
         <div className="flex-1 flex items-center gap-2 bg-gray-100 dark:bg-[#1e1e2e] border border-gray-200 dark:border-[#2a2a3e] rounded-lg px-4 py-2">
           <span className="text-gray-400 text-sm">🔍</span>
           <input
@@ -142,7 +133,6 @@ function SearchBar({ searchText, setSearchText, selectedGenre, setSelectedGenre,
           )}
         </div>
 
-        {/* 장르 드롭다운 */}
         <div className="relative">
           <button
             onClick={() => { setGenreOpen(p => !p); setSortOpen(false) }}
@@ -162,7 +152,7 @@ function SearchBar({ searchText, setSearchText, selectedGenre, setSelectedGenre,
               >
                 전체
               </button>
-              {ALL_GENRES.map(genre => (
+              {allGenres.map(genre => (
                 <button
                   key={genre}
                   onClick={() => { setSelectedGenre(genre); setGenreOpen(false) }}
@@ -179,7 +169,6 @@ function SearchBar({ searchText, setSearchText, selectedGenre, setSelectedGenre,
           )}
         </div>
 
-        {/* 정렬 드롭다운 */}
         <div className="relative">
           <button
             onClick={() => { setSortOpen(p => !p); setGenreOpen(false) }}
@@ -211,7 +200,6 @@ function SearchBar({ searchText, setSearchText, selectedGenre, setSelectedGenre,
         </div>
       </div>
 
-{/* 활성 필터 태그 행 */}
       <div className="flex items-center gap-2 mt-3 flex-wrap min-h-[28px]">
         {hasFilter && (
           <>
@@ -260,6 +248,7 @@ function StarRating({ rating }) {
 
 function GameCard({ game, onClick }) {
   const [hovered, setHovered] = useState(false)
+  const meta = GAME_META[game.id] || { rating: 3, tags: [] }
 
   return (
     <div
@@ -282,14 +271,14 @@ function GameCard({ game, onClick }) {
               {game.canonical_title}
             </h2>
             <div className="bg-[#f5a623] text-[#eeeeee] text-xs font-bold rounded px-1.5 py-0.5 min-w-[38px] text-center">
-              {game.rating ? `${game.rating}.0` : '-'}
+              {meta.rating}.0
             </div>
           </div>
 
-          <StarRating rating={game.rating} />
+          <StarRating rating={meta.rating} />
 
           <p className="text-xs leading-snug m-0 line-clamp-2 text-gray-500 dark:text-[#cccccc]">
-            {game.description}
+            AI 리뷰 요약 보기
           </p>
         </div>
 
@@ -305,19 +294,36 @@ function GameCard({ game, onClick }) {
 }
 
 function GameListPage({ isDark, toggleDark }) {
-  const [games] = useState(MOCK_GAMES)
+  const [games, setGames] = useState([])
+  const [loading, setLoading] = useState(true)
   const navigate = useNavigate()
 
   const [searchText, setSearchText] = useState('')
   const [selectedGenre, setSelectedGenre] = useState('')
   const [sortOrder, setSortOrder] = useState('none')
 
+  useEffect(() => {
+    fetch(`${API_BASE}/api/v1/games/`)
+      .then(res => res.json())
+      .then(data => {
+        setGames(data)
+        setLoading(false)
+      })
+      .catch(() => setLoading(false))
+  }, [])
+
+  const allGenres = [...new Set(
+    games.flatMap(g => (GAME_META[g.id]?.tags || []))
+  )]
+
   const filteredGames = games
     .filter(g => g.canonical_title.includes(searchText))
-    .filter(g => !selectedGenre || g.tags?.includes(selectedGenre))
+    .filter(g => !selectedGenre || (GAME_META[g.id]?.tags || []).includes(selectedGenre))
     .sort((a, b) => {
-      if (sortOrder === 'high') return b.rating - a.rating
-      if (sortOrder === 'low') return a.rating - b.rating
+      const rA = GAME_META[a.id]?.rating || 3
+      const rB = GAME_META[b.id]?.rating || 3
+      if (sortOrder === 'high') return rB - rA
+      if (sortOrder === 'low') return rA - rB
       return 0
     })
 
@@ -326,11 +332,12 @@ function GameListPage({ isDark, toggleDark }) {
   return (
     <div className="min-h-screen bg-gray-100 dark:bg-[#0f0f1a]">
       <Navbar isDark={isDark} toggleDark={toggleDark} />
-      <HeroBanner />
+      <HeroBanner games={games} />
       <SearchBar
         searchText={searchText} setSearchText={setSearchText}
         selectedGenre={selectedGenre} setSelectedGenre={setSelectedGenre}
         sortOrder={sortOrder} setSortOrder={setSortOrder}
+        allGenres={allGenres}
       />
 
       <div className="px-12 py-10 min-h-screen">
@@ -339,17 +346,21 @@ function GameListPage({ isDark, toggleDark }) {
           <span className="text-base font-normal text-gray-400 ml-3">{filteredGames.length}개</span>
         </h2>
 
-        <div className="grid grid-cols-3 gap-5">
-          {filteredGames.length > 0 ? (
-            filteredGames.map((game) => (
-              <GameCard key={game.id} game={game} onClick={handleCardClick} />
-            ))
-          ) : (
-            <div className="col-span-3 text-center py-20 text-gray-400">
-              검색 결과가 없습니다.
-            </div>
-          )}
-        </div>
+        {loading ? (
+          <div className="text-center py-20 text-gray-400">게임 목록 불러오는 중...</div>
+        ) : (
+          <div className="grid grid-cols-3 gap-5">
+            {filteredGames.length > 0 ? (
+              filteredGames.map((game) => (
+                <GameCard key={game.id} game={game} onClick={handleCardClick} />
+              ))
+            ) : (
+              <div className="col-span-3 text-center py-20 text-gray-400">
+                검색 결과가 없습니다.
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   )

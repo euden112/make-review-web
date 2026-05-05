@@ -4,6 +4,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1 import reviews
 from app.api.v1.summaries import router as summaries_router
+from dotenv import load_dotenv
+load_dotenv()
 
 
 logging.basicConfig(

@@ -21,6 +21,8 @@ class SteamMeta(BaseModel):
     total_positive: int = Field(description="총 긍정 리뷰 수")
     total_negative: int = Field(description="총 부정 리뷰 수")
     crawled_at: str
+    cover_image: Optional[str] = Field(default=None, description="게임 커버 이미지 URL (library_600x900.jpg)")
+    hero_image: Optional[str] = Field(default=None, description="게임 히어로 이미지 URL (library_hero.jpg 또는 header.jpg)")
 
 # 3. 크롤러가 최종적으로 백엔드에 전송할 때 사용하는 전체 데이터 포장지 구조입니다.
 class SteamPayload(BaseModel):
