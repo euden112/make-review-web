@@ -86,8 +86,11 @@ def _select_platform_representative_reviews(
         playtime_hours = float(getattr(review, "playtime_hours", 0) or 0)
         normalized_score = float(getattr(review, "normalized_score_100", 0) or 0)
         if getattr(review, "platform_id", None) == steam_pid:
-            score = (0.5 * (playtime_hours + 1.0) ** 0.5) + (1.2 * (helpful_count + 1.0) ** 0.5)
-            return (score, helpful_count, playtime_hours, -int(getattr(review, "id", 0) or 0))
+            # helpful_count 주 기준, playtime은 보조(최대 200h 상한 적용)
+            # 타이브레이커에서도 uncapped playtime 제거 — helpful_count가 동일하면 id로만 정렬
+            playtime_capped = min(playtime_hours, 200.0)
+            score = (1.5 * (helpful_count + 1.0) ** 0.5) + (0.3 * (playtime_capped + 1.0) ** 0.5)
+            return (score, helpful_count, -int(getattr(review, "id", 0) or 0), 0)
         if getattr(review, "platform_id", None) == meta_pid:
             score = normalized_score + (0.1 * (helpful_count + 1.0) ** 0.5)
             return (score, normalized_score, helpful_count, -int(getattr(review, "id", 0) or 0))

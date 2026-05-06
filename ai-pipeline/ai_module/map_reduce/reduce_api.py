@@ -67,16 +67,16 @@ Required top-level keys:
     pros: [string] at least 3 items,
     cons: [string] at least 2 items,
     keywords: [string] 5–8 items,
-    full_text: 4–6 sentences in Korean covering overall impression, strengths with examples, weaknesses, target audience. Must differ from one_liner.
+    full_text: 4–6 sentences in Korean. Start with a SPECIFIC observation (e.g. a particular strength, complaint, or detail) — NOT a general verdict that restates one_liner. Cover strengths with examples, weaknesses, and target audience.
   }
 - playtime: {
     early: { summary, sentiment_overall, sentiment_score, pros, cons, keywords } | null,
     mid:   { summary, sentiment_overall, sentiment_score, pros, cons, keywords } | null,
     late:  { summary, sentiment_overall, sentiment_score, pros, cons, keywords } | null
   }
-  (Each bucket: 2–3 sentences in Korean. null if input array is empty or has fewer than 3 items.)
+  (Each bucket: 2–3 sentences in Korean. null ONLY if input array is empty.)
 - critic: { summary, sentiment_overall, sentiment_score, pros, cons, keywords } | null
-  (critic: based ONLY on critic reviews; do NOT compare with user opinion; label as "출시 당시 전문가 평가". null if critic input is empty.)
+  (critic: based ONLY on critic reviews; do NOT compare with user opinion; label as "출시 당시 전문가 평가". null ONLY if critic input array is empty.)
 
 Rules:
 - unified is based on the "all" group.
@@ -84,8 +84,9 @@ Rules:
 - critic is independent from user sentiment; never compare or mention divergence.
 - If evidence is missing for an aspect, omit it rather than fabricate.
 - If a segment input array is empty, return null for that segment.
- 
+
 Rules about repetition:
+- full_text MUST NOT begin with the same subject or conclusion as one_liner. Open with a concrete detail.
 - Do NOT repeat the same sentence or phrase verbatim across different sections (unified, playtime buckets, critic).
 - Ensure sentences are unique; when similar points are necessary across sections, paraphrase concisely.
 """.strip()
@@ -293,20 +294,20 @@ async def run_reduce_stage(
         "critic": 600,
     }
 
-    # 중복 제거: 동일한 문장이 여러 그룹에 중복 포함되는 것을 방지
+    # 중복 제거: 각 그룹 내에서만 중복 제거 (그룹 간 공유 금지)
+    # 같은 청크 텍스트가 all/early/mid/late에 모두 포함되는 구조이므로
+    # global_seen을 공유하면 버킷 그룹이 전부 비워짐
     deduped: dict[str, list[str]] = {}
-    global_seen: set[str] = set()
     for key in ("all", "early", "mid", "late", "critic"):
         items = grouped_summaries.get(key, []) or []
+        seen: set[str] = set()
         deduped_items: list[str] = []
         for item in items:
             norm = " ".join(str(item).split()).strip().lower()
-            if not norm:
-                continue
-            if norm in global_seen:
+            if not norm or norm in seen:
                 continue
             deduped_items.append(item)
-            global_seen.add(norm)
+            seen.add(norm)
         deduped[key] = deduped_items
 
     logger.info(

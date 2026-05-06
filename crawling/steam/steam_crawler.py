@@ -320,6 +320,7 @@ def parse_review(raw: dict) -> dict | None:
         "is_recommended"   : raw.get("voted_up", False),
         "review_text"      : body,
         "playtime_hours"   : round(author_info.get("playtime_at_review", 0) / 60, 1),
+        "helpful_count"    : int(raw.get("votes_up", 0) or 0),
         "date_posted"      : date,
         "language"         : result.lang,
         "review_categories": result.categories,
