@@ -1,10 +1,15 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from math import floor
-from typing import Sequence
+from typing import Any, Sequence
 
 from ai_module.map_reduce.rules import is_spam_review
+
+MIN_REVIEWS_PER_BUCKET = 30
+MIN_CRITIC_REVIEWS     = 10
+STEAM_PLATFORM_CODE    = "steam"
+METACRITIC_PLATFORM_CODE = "metacritic"
 
 
 @dataclass(slots=True)
@@ -18,6 +23,24 @@ class ReviewRow:
     helpful_count: int
     playtime_hours: float | None
     review_categories: list[dict[str, Any]] | None = None
+    # Sprint 4: 태깅 필드 (sampler에서 부착)
+    playtime_bucket: str = "unknown"   # early / mid / late / unknown
+    reviewer_type: str = "user"        # user / critic
+
+
+@dataclass
+class PlaytimeBuckets:
+    early_max: float
+    mid_max: float
+
+    def tag(self, playtime_hours: float | None) -> str:
+        if playtime_hours is None:
+            return "unknown"
+        if playtime_hours <= self.early_max:
+            return "early"
+        if playtime_hours <= self.mid_max:
+            return "mid"
+        return "late"
 
 
 def _normalize_review_categories(value: Any) -> list[dict[str, Any]] | None:
@@ -42,6 +65,97 @@ def _normalize_review_categories(value: Any) -> list[dict[str, Any]] | None:
                 normalized.append({"category": category, "sentiment": None})
 
     return normalized
+
+
+def compute_playtime_buckets(rows: Sequence[ReviewRow]) -> PlaytimeBuckets | None:
+    """게임별 리뷰어 플레이타임 분포의 p33/p66 퍼센타일로 버킷 경계를 계산."""
+    steam_playtimes = [
+        row.playtime_hours
+        for row in rows
+        if row.platform_code == STEAM_PLATFORM_CODE
+        and row.playtime_hours is not None
+        and row.playtime_hours > 0
+    ]
+
+    if len(steam_playtimes) < MIN_REVIEWS_PER_BUCKET:
+        return None
+
+    sorted_times = sorted(steam_playtimes)
+    n = len(sorted_times)
+
+    def pct(p: float) -> float:
+        idx = (p / 100) * (n - 1)
+        lo, hi = int(idx), min(int(idx) + 1, n - 1)
+        return sorted_times[lo] + (sorted_times[hi] - sorted_times[lo]) * (idx - lo)
+
+    return PlaytimeBuckets(early_max=round(pct(33), 1), mid_max=round(pct(66), 1))
+
+
+def tag_reviews(rows: Sequence[ReviewRow], buckets: PlaytimeBuckets | None) -> list[ReviewRow]:
+    """각 리뷰에 playtime_bucket 및 reviewer_type 태그를 부착한다."""
+    result = []
+    for row in rows:
+        # reviewer_type: Metacritic 플랫폼 = critic, 나머지 = user
+        reviewer_type = "critic" if row.platform_code == METACRITIC_PLATFORM_CODE else "user"
+
+        if row.platform_code == STEAM_PLATFORM_CODE and buckets is not None:
+            playtime_bucket = buckets.tag(row.playtime_hours)
+        else:
+            playtime_bucket = "unknown"
+
+        result.append(
+            ReviewRow(
+                id=row.id,
+                platform_code=row.platform_code,
+                language_code=row.language_code,
+                review_text_clean=row.review_text_clean,
+                is_recommended=row.is_recommended,
+                normalized_score_100=row.normalized_score_100,
+                helpful_count=row.helpful_count,
+                playtime_hours=row.playtime_hours,
+                review_categories=row.review_categories,
+                playtime_bucket=playtime_bucket,
+                reviewer_type=reviewer_type,
+            )
+        )
+    return result
+
+
+def group_map_outputs(
+    map_results: list[Any],
+    tagged_rows: Sequence[ReviewRow],
+) -> dict[str, list[str]]:
+    """Map 출력물을 playtime_bucket / reviewer_type 기준으로 그룹핑.
+
+    map_results의 순서는 tagged_rows의 순서와 대응하지 않으므로
+    review_id 기준으로 매핑한다.
+    단, map 단계 출력은 chunk 단위이므로 chunk 전체를 all 에 포함시키고
+    개별 버킷은 review_id set 기반으로 필터링한다.
+    """
+    id_to_bucket = {row.id: row.playtime_bucket for row in tagged_rows}
+    id_to_type   = {row.id: row.reviewer_type   for row in tagged_rows}
+
+    groups: dict[str, list[str]] = {
+        "all": [], "early": [], "mid": [], "late": [], "critic": []
+    }
+
+    for result in map_results:
+        summary_text = result.summary
+        review_ids: list[int] = getattr(result, "review_ids", [])
+
+        groups["all"].append(summary_text)
+
+        buckets_in_chunk = {id_to_bucket.get(rid, "unknown") for rid in review_ids}
+        types_in_chunk   = {id_to_type.get(rid, "user")      for rid in review_ids}
+
+        for bucket in ("early", "mid", "late"):
+            if bucket in buckets_in_chunk:
+                groups[bucket].append(summary_text)
+
+        if "critic" in types_in_chunk:
+            groups["critic"].append(summary_text)
+
+    return groups
 
 
 def allocate(total: int, ratios: dict[str, float]) -> dict[str, int]:
@@ -69,8 +183,8 @@ def stratified_select_reviews(
 ) -> list[ReviewRow]:
     filtered_rows = [row for row in rows if not is_spam_review(row.review_text_clean)]
 
-    steam_rows = [row for row in filtered_rows if row.platform_code == "steam"]
-    metacritic_rows = [row for row in filtered_rows if row.platform_code == "metacritic"]
+    steam_rows = [row for row in filtered_rows if row.platform_code == STEAM_PLATFORM_CODE]
+    metacritic_rows = [row for row in filtered_rows if row.platform_code == METACRITIC_PLATFORM_CODE]
 
     total_valid_rows = len(filtered_rows)
     if total_valid_rows > 0:

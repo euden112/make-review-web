@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
@@ -22,6 +22,7 @@ class MapResult:
     cached: bool
     input_tokens: int = 0
     output_tokens: int = 0
+    review_ids: list[int] = field(default_factory=list)
 
 
 def make_chunk_cache_key(
@@ -127,7 +128,7 @@ async def run_map_stage(
             )
             cached_summary = await cache.get(key)
             if cached_summary:
-                return MapResult(chunk_no=chunk.chunk_no, summary=cached_summary, cached=True)
+                return MapResult(chunk_no=chunk.chunk_no, summary=cached_summary, cached=True, review_ids=chunk.review_ids)
 
             prompt = (
                 "Summarize the following game review chunk in <= 6 sentences. "
@@ -157,6 +158,7 @@ async def run_map_stage(
                 cached=False,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
+                review_ids=chunk.review_ids,
             )
 
         results = await asyncio.gather(*(worker(chunk) for chunk in chunks))

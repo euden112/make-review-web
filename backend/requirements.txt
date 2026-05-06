@@ -8,3 +8,4 @@ redis
 httpx
 tenacity
 groq
+python-dotenv

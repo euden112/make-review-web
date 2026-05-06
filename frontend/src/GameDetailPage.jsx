@@ -20,13 +20,94 @@ const CATEGORY_LABELS = {
   price_value: '가성비',
 }
 
+const SENTIMENT_CONFIG = {
+  positive: { label: '긍정적', cls: 'bg-green-50 text-green-600 dark:bg-green-900/20 dark:text-green-400' },
+  negative: { label: '부정적', cls: 'bg-red-50 text-red-600 dark:bg-red-900/20 dark:text-red-400' },
+  mixed:    { label: '중립',   cls: 'bg-gray-50 text-gray-600 dark:bg-gray-700 dark:text-gray-300' },
+}
+
+function SentimentBadge({ value }) {
+  const cfg = SENTIMENT_CONFIG[value] || SENTIMENT_CONFIG.mixed
+  return (
+    <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${cfg.cls}`}>
+      {cfg.label}
+    </span>
+  )
+}
+
+function PlaytimeBucketCard({ bucket, data }) {
+  const sentimentColor =
+    data?.sentiment_overall === 'positive' ? '#22c55e' :
+    data?.sentiment_overall === 'negative' ? '#ef4444' : '#f5a623'
+
+  return (
+    <div className="flex-1 bg-gray-50 dark:bg-[#2a2a3e] rounded-xl p-5 border border-gray-200 dark:border-[#3a3a5e] flex flex-col gap-3">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+          {data?.label || bucket}
+        </span>
+        {data?.data_available && <SentimentBadge value={data.sentiment_overall} />}
+      </div>
+
+      {!data?.data_available ? (
+        <p className="text-xs text-gray-400 dark:text-gray-500">
+          리뷰 수 부족 ({data?.review_count ?? 0}건)
+        </p>
+      ) : (
+        <>
+          {data.sentiment_score !== null && (
+            <div className="flex items-center gap-2">
+              <div className="flex-1 h-1.5 rounded-full bg-gray-200 dark:bg-[#1e1e2e] overflow-hidden">
+                <div
+                  className="h-full rounded-full transition-all"
+                  style={{ width: `${data.sentiment_score}%`, background: sentimentColor }}
+                />
+              </div>
+              <span className="text-xs font-bold" style={{ color: sentimentColor }}>
+                {data.sentiment_score.toFixed(0)}%
+              </span>
+            </div>
+          )}
+          {data.summary && (
+            <p className="text-xs leading-relaxed text-gray-600 dark:text-[#aaaaaa]">
+              {data.summary}
+            </p>
+          )}
+          {data.pros?.length > 0 && (
+            <ul className="flex flex-col gap-1">
+              {data.pros.map((p, i) => (
+                <li key={i} className="text-xs text-gray-600 dark:text-[#aaaaaa] flex gap-1">
+                  <span className="text-green-500 shrink-0">+</span> {p}
+                </li>
+              ))}
+            </ul>
+          )}
+          {data.cons?.length > 0 && (
+            <ul className="flex flex-col gap-1">
+              {data.cons.map((c, i) => (
+                <li key={i} className="text-xs text-gray-600 dark:text-[#aaaaaa] flex gap-1">
+                  <span className="text-red-400 shrink-0">−</span> {c}
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="text-xs text-gray-400 dark:text-gray-500 text-right">
+            리뷰 {data.review_count}건 기준
+          </p>
+        </>
+      )}
+    </div>
+  )
+}
+
 function GameDetailPage({ isDark, toggleDark }) {
   const { id } = useParams()
   const navigate = useNavigate()
 
   const [game, setGame] = useState(null)
   const [summary, setSummary] = useState(null)
-  const [perspectives, setPerspectives] = useState([])
+  const [playtimeAnalysis, setPlaytimeAnalysis] = useState(null)
+  const [criticSummary, setCriticSummary] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
@@ -42,7 +123,6 @@ function GameDetailPage({ isDark, toggleDark }) {
       setError(null)
 
       try {
-        // 게임 목록에서 해당 게임 정보 가져오기
         const gamesRes = await fetch(`${API_BASE}/api/v1/games/`)
         if (gamesRes.ok) {
           const gamesData = await gamesRes.json()
@@ -50,20 +130,21 @@ function GameDetailPage({ isDark, toggleDark }) {
           setGame(found || null)
         }
 
-        // AI 요약 조회
         const summaryRes = await fetch(`${API_BASE}/api/v1/games/${id}/summary`)
         if (summaryRes.ok) {
-          const summaryData = await summaryRes.json()
-          setSummary(summaryData)
+          setSummary(await summaryRes.json())
         } else if (summaryRes.status === 404) {
           setError('아직 AI 요약본이 없습니다.')
         }
 
-        // 언어권별 요약 조회
-        const perspRes = await fetch(`${API_BASE}/api/v1/games/${id}/perspectives`)
-        if (perspRes.ok) {
-          const perspData = await perspRes.json()
-          setPerspectives(perspData)
+        const playtimeRes = await fetch(`${API_BASE}/api/v1/games/${id}/playtime-analysis`)
+        if (playtimeRes.ok) {
+          setPlaytimeAnalysis(await playtimeRes.json())
+        }
+
+        const criticRes = await fetch(`${API_BASE}/api/v1/games/${id}/critic-summary`)
+        if (criticRes.ok) {
+          setCriticSummary(await criticRes.json())
         }
       } catch (e) {
         setError('서버에 연결할 수 없습니다.')
@@ -207,15 +288,7 @@ function GameDetailPage({ isDark, toggleDark }) {
               <div className="bg-white dark:bg-[#1e1e2e] rounded-xl p-7 border border-gray-200 dark:border-[#2a2a3e] shadow-sm">
                 <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0] mb-3">감성 분석</h2>
                 <div className="flex items-center gap-4">
-                  <span className={`text-sm font-bold px-3 py-1 rounded-full ${
-                    summary.sentiment_overall === 'positive'
-                      ? 'bg-green-50 text-green-600 dark:bg-green-900/20 dark:text-green-400'
-                      : summary.sentiment_overall === 'negative'
-                      ? 'bg-red-50 text-red-600 dark:bg-red-900/20 dark:text-red-400'
-                      : 'bg-gray-50 text-gray-600 dark:bg-gray-700 dark:text-gray-300'
-                  }`}>
-                    {summary.sentiment_overall === 'positive' ? '긍정적' : summary.sentiment_overall === 'negative' ? '부정적' : '중립'}
-                  </span>
+                  <SentimentBadge value={summary.sentiment_overall} />
                   {summary.sentiment_score !== null && (
                     <span className="text-sm text-gray-500 dark:text-gray-400">
                       점수: {(summary.sentiment_score).toFixed(0)}%
@@ -246,22 +319,107 @@ function GameDetailPage({ isDark, toggleDark }) {
                 </div>
               </div>
             )}
+          </>
+        )}
 
-            {/* 언어권별 시각 */}
-            {perspectives.length > 0 && (
-              <div className="bg-white dark:bg-[#1e1e2e] rounded-xl p-7 border border-gray-200 dark:border-[#2a2a3e] shadow-sm">
-                <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0] mb-4">언어권별 시각</h2>
-                <div className="flex flex-col gap-4">
-                  {perspectives.map((p, i) => (
-                    <div key={i} className="border-l-2 border-blue-400 pl-4">
-                      <span className="text-xs font-bold text-blue-500 uppercase">{p.review_language || p.language_code}</span>
-                      <p className="text-sm text-gray-700 dark:text-[#cccccc] mt-1">{p.summary_text?.replace(/\*\*/g, '')}</p>
-                    </div>
-                  ))}
-                </div>
+        {/* ── Sprint 4: 플레이타임별 여론 ── */}
+        {!loading && (
+          <div className="bg-white dark:bg-[#1e1e2e] rounded-xl p-7 border border-gray-200 dark:border-[#2a2a3e] shadow-sm">
+            <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0] mb-1">
+              플레이타임별 여론
+            </h2>
+            <p className="text-xs text-gray-400 dark:text-gray-500 mb-4">
+              초반 구간 기준: {playtimeAnalysis?.bucket_thresholds?.early_max != null
+                ? `~${playtimeAnalysis.bucket_thresholds.early_max}시간`
+                : '데이터 없음'}
+            </p>
+
+            {!playtimeAnalysis ? (
+              <p className="text-sm text-gray-400 dark:text-gray-500">플레이타임 분석 데이터가 없습니다.</p>
+            ) : (
+              <div className="flex gap-4">
+                {['early', 'mid', 'late'].map(bucket => (
+                  <PlaytimeBucketCard
+                    key={bucket}
+                    bucket={bucket}
+                    data={playtimeAnalysis.buckets?.[bucket]}
+                  />
+                ))}
               </div>
             )}
-          </>
+          </div>
+        )}
+
+        {/* ── Sprint 4: 비평가 반응 ── */}
+        {!loading && (
+          <div className="bg-white dark:bg-[#1e1e2e] rounded-xl p-7 border border-gray-200 dark:border-[#2a2a3e] shadow-sm">
+            <div className="flex items-center justify-between mb-1">
+              <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0]">비평가 반응</h2>
+              {criticSummary && (
+                <span className="text-xs text-gray-400 dark:text-gray-500">
+                  출시 당시 전문가 {criticSummary.review_count}명 기준
+                </span>
+              )}
+            </div>
+
+            {!criticSummary ? (
+              <p className="text-sm text-gray-400 dark:text-gray-500">비평가 리뷰 데이터가 없습니다.</p>
+            ) : (
+              <div className="flex flex-col gap-4 mt-3">
+                <div className="flex items-center gap-3">
+                  <SentimentBadge value={criticSummary.sentiment_overall} />
+                  {criticSummary.sentiment_score !== null && (
+                    <span className="text-sm text-gray-500 dark:text-gray-400">
+                      점수: {criticSummary.sentiment_score.toFixed(0)}%
+                    </span>
+                  )}
+                </div>
+
+                {criticSummary.summary && (
+                  <p className="text-sm leading-relaxed text-gray-700 dark:text-[#cccccc]">
+                    {criticSummary.summary}
+                  </p>
+                )}
+
+                <div className="grid grid-cols-2 gap-4">
+                  {criticSummary.pros?.length > 0 && (
+                    <div>
+                      <p className="text-xs font-bold text-green-600 dark:text-green-400 mb-1">장점</p>
+                      <ul className="flex flex-col gap-1">
+                        {criticSummary.pros.map((p, i) => (
+                          <li key={i} className="text-xs text-gray-600 dark:text-[#aaaaaa] flex gap-1">
+                            <span className="text-green-500 shrink-0">•</span> {p}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {criticSummary.cons?.length > 0 && (
+                    <div>
+                      <p className="text-xs font-bold text-red-500 dark:text-red-400 mb-1">단점</p>
+                      <ul className="flex flex-col gap-1">
+                        {criticSummary.cons.map((c, i) => (
+                          <li key={i} className="text-xs text-gray-600 dark:text-[#aaaaaa] flex gap-1">
+                            <span className="text-red-400 shrink-0">•</span> {c}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+
+                {criticSummary.keywords?.length > 0 && (
+                  <div className="flex flex-wrap gap-2">
+                    {criticSummary.keywords.map((kw, i) => (
+                      <span key={i} className="text-xs px-2 py-0.5 rounded-full bg-purple-50 dark:bg-purple-900/20 text-purple-600 dark:text-purple-300 border border-purple-200 dark:border-purple-700">
+                        {kw}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         )}
       </div>
     </div>

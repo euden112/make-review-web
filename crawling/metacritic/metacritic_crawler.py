@@ -29,7 +29,7 @@ GAME_TITLES = [
     "crimson-desert",
 ]
 PLATFORM             = "pc"
-MAX_CRITIC_REVIEWS   = 50
+MAX_CRITIC_REVIEWS   = 100
 MAX_USER_REVIEWS     = 50
 HEADLESS             = True
 MAX_CONCURRENT_GAMES = 2

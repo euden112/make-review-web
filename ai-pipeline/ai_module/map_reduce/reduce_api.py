@@ -15,7 +15,18 @@ logger.setLevel(logging.INFO)
 
 
 @dataclass(slots=True)
+class BucketSummary:
+    summary: str
+    sentiment_overall: str | None
+    sentiment_score: float | None
+    pros: list[str]
+    cons: list[str]
+    keywords: list[str]
+
+
+@dataclass(slots=True)
 class FinalSummary:
+    # unified 요약
     one_liner: str
     aspect_scores: dict[str, Any]
     representative_reviews: list[dict[str, Any]]
@@ -25,6 +36,13 @@ class FinalSummary:
     pros: list[str] = field(default_factory=list)
     cons: list[str] = field(default_factory=list)
     keywords: list[str] = field(default_factory=list)
+    # Sprint 4: 플레이타임 버킷별 요약
+    playtime_early: BucketSummary | None = None
+    playtime_mid: BucketSummary | None = None
+    playtime_late: BucketSummary | None = None
+    # Sprint 4: 비평가 요약
+    critic: BucketSummary | None = None
+    # 메타
     input_tokens: int = 0
     output_tokens: int = 0
     error_code: str | None = None
@@ -33,39 +51,42 @@ class FinalSummary:
 
 REDUCE_SYSTEM_PROMPT = """
 You are a game review synthesis engine.
-Return JSON only.
-Required keys:
-- one_liner: one sentence overall verdict (Korean)
-- aspect_scores: {
-    graphics: {label, score},
-    controls: {label, score},
-    optimization: {label, score},
-    content: {label, score},
-    price_value: {label, score}
+Return JSON only. No markdown, no code fences.
+
+Required top-level keys:
+- unified: {
+    one_liner: one sentence overall verdict (Korean),
+    aspect_scores: {
+      graphics: {label, score},
+      controls: {label, score},
+      optimization: {label, score},
+      content: {label, score},
+      price_value: {label, score}
+    }  (scores 0.0–10.0; label is a short Korean adjective),
+    representative_reviews: [{source, review_id, quote, reason}],
+    sentiment_overall: one of [positive, mixed, negative],
+    sentiment_score: number in range 0..100,
+    pros: [string] at least 3 items,
+    cons: [string] at least 2 items,
+    keywords: [string] 5–8 items,
+    full_text: 4–6 sentences in Korean covering overall impression, strengths with examples, weaknesses, target audience. Must differ from one_liner.
   }
-  scores are 0.0–10.0; label is a short Korean adjective (e.g. "우수함", "보통")
-- representative_reviews: [{source, review_id, quote, reason}]
-- sentiment_overall: one of [positive, mixed, negative]
-- sentiment_score: number in range 0..100
-- pros: [string] at least 3 items
-- cons: [string] at least 2 items
-- keywords: [string] 5–8 items
-- full_text: 4–6 sentences in Korean covering (1) overall impression, (2) standout strengths with specific examples, (3) notable weaknesses or caveats, (4) who this game is for. Do NOT repeat the one_liner verbatim.
-If there is no evidence for a specific aspect in the input, do not fabricate it; omit that aspect or rate it as neutral.
-No markdown, no code fences.
-""".strip()
+- playtime: {
+    early: { summary, sentiment_overall, sentiment_score, pros, cons, keywords } | null,
+    mid:   { summary, sentiment_overall, sentiment_score, pros, cons, keywords } | null,
+    late:  { summary, sentiment_overall, sentiment_score, pros, cons, keywords } | null
+  }
+  (Each bucket: 2–3 sentences in Korean. null if input array is empty or has fewer than 3 items.)
+- critic: { summary, sentiment_overall, sentiment_score, pros, cons, keywords } | null
+  (critic: based ONLY on critic reviews; do NOT compare with user opinion; label as "출시 당시 전문가 평가". null if critic input is empty.)
 
-REGIONAL_REDUCE_SYSTEM_PROMPT = """
-You are a game review synthesis engine.
-Return JSON only with keys: one_liner, full_text.
-No markdown, no code fences.
+Rules:
+- unified is based on the "all" group.
+- playtime buckets are independent; mention sentiment trend across buckets naturally in each summary.
+- critic is independent from user sentiment; never compare or mention divergence.
+- If evidence is missing for an aspect, omit it rather than fabricate.
+- If a segment input array is empty, return null for that segment.
 """.strip()
-
-_REGION_NAMES: dict[str, str] = {
-    "en": "English-speaking",
-    "ko": "Korean-speaking",
-    "zh": "Chinese-speaking",
-}
 
 
 def _safe_parse_json(text: str) -> dict[str, Any]:
@@ -95,11 +116,20 @@ def _normalize_sentiment_score(value: Any) -> float | None:
         score = float(value)
     except (TypeError, ValueError):
         return None
-    if score < 0:
-        return 0.0
-    if score > 100:
-        return 100.0
-    return round(score, 2)
+    return round(max(0.0, min(100.0, score)), 2)
+
+
+def _parse_bucket(data: Any) -> BucketSummary | None:
+    if not isinstance(data, dict):
+        return None
+    return BucketSummary(
+        summary=str(data.get("summary", "")).strip(),
+        sentiment_overall=_normalize_sentiment_overall(data.get("sentiment_overall")),
+        sentiment_score=_normalize_sentiment_score(data.get("sentiment_score")),
+        pros=_to_string_list(data.get("pros", [])),
+        cons=_to_string_list(data.get("cons", [])),
+        keywords=_to_string_list(data.get("keywords", [])),
+    )
 
 
 class ReduceParseError(ValueError):
@@ -138,27 +168,88 @@ async def _generate_reduce_response(
     )
 
 
+def _build_user_prompt(
+    language_code: str,
+    grouped_summaries: dict[str, list[str]],
+    score_anchors: dict[str, float | None] | None,
+    category_frequency: list[tuple[str, int, float]] | None,
+    prior_summary_text: str | None,
+    max_items: int,
+) -> str:
+    sections: list[str] = [f"language={language_code}"]
+
+    if score_anchors:
+        block = "[score_anchors]\n"
+        if score_anchors.get("steam_recommend_ratio") is not None:
+            block += f"steam_recommend_ratio: {score_anchors['steam_recommend_ratio']:.2f}%\n"
+        if score_anchors.get("metacritic_critic_avg") is not None:
+            block += f"metacritic_critic_avg: {score_anchors['metacritic_critic_avg']:.2f}\n"
+        if score_anchors.get("metacritic_user_avg") is not None:
+            block += f"metacritic_user_avg: {score_anchors['metacritic_user_avg']:.2f}\n"
+        block += "→ unified.sentiment_score must be calibrated to these numbers."
+        sections.append(block)
+
+    if category_frequency:
+        block = "[category_stats]\n"
+        pros_hints, cons_hints = [], []
+        for cat, count, pos_ratio in category_frequency:
+            pct = int(pos_ratio * 100)
+            block += f"{cat}: {count}건, {pct}% 긍정\n"
+            if pos_ratio >= 0.65:
+                pros_hints.append(cat)
+            elif pos_ratio < 0.35:
+                cons_hints.append(cat)
+        if pros_hints:
+            block += f"→ pros 후보: {', '.join(pros_hints)}\n"
+        if cons_hints:
+            block += f"→ cons 후보: {', '.join(cons_hints)}\n"
+        block += "→ keywords must include top-frequency categories."
+        sections.append(block)
+
+    if prior_summary_text:
+        sections.append(f"[previous_summary]\n{prior_summary_text[:1200]}")
+
+    # 그룹별 map 요약 추가
+    for group_key in ("all", "early", "mid", "late", "critic"):
+        items = grouped_summaries.get(group_key, [])
+        picked = [item[:900] for item in items[:max_items]]
+        header = f"[group:{group_key}] ({len(picked)} chunks)"
+        body = "\n\n".join(f"[map_{i+1}] {s}" for i, s in enumerate(picked)) if picked else "(empty)"
+        sections.append(f"{header}\n{body}")
+
+    return "\n\n".join(sections)
+
+
 async def run_reduce_stage(
     *,
     api_key: str,
     model_name: str,
     language_code: str,
-    map_summaries: list[str],
+    grouped_summaries: dict[str, list[str]],
     max_items: int = 24,
     timeout_sec: int = 180,
     score_anchors: dict[str, float | None] | None = None,
     category_frequency: list[tuple[str, int, float]] | None = None,
-    regional: bool = False,
+    prior_summary_text: str | None = None,
+    # 하위 호환: map_summaries 단독 전달 시 all 그룹으로 처리
+    map_summaries: list[str] | None = None,
 ) -> FinalSummary:
+    # 하위 호환: map_summaries만 전달된 경우
+    if map_summaries is not None and not grouped_summaries:
+        grouped_summaries = {"all": map_summaries}
+
+    all_summaries = grouped_summaries.get("all", [])
     logger.info(
-        "reduce stage started: language=%s summaries=%d max_items=%d timeout_sec=%d",
+        "reduce stage started: language=%s all=%d early=%d mid=%d late=%d critic=%d",
         language_code,
-        len(map_summaries),
-        max_items,
-        timeout_sec,
+        len(all_summaries),
+        len(grouped_summaries.get("early", [])),
+        len(grouped_summaries.get("mid", [])),
+        len(grouped_summaries.get("late", [])),
+        len(grouped_summaries.get("critic", [])),
     )
 
-    if not map_summaries:
+    if not all_summaries:
         logger.warning("reduce stage skipped: no map summaries provided")
         return FinalSummary(
             one_liner="요약 생성 중 오류가 발생했습니다.",
@@ -170,71 +261,18 @@ async def run_reduce_stage(
         )
 
     client = AsyncGroq(api_key=api_key)
-    system_prompt = REGIONAL_REDUCE_SYSTEM_PROMPT if regional else REDUCE_SYSTEM_PROMPT
-    picked = [item[:900] for item in map_summaries[:max_items]]
-
-    if regional:
-        region = _REGION_NAMES.get(language_code, f"{language_code}-speaking")
-        user_prompt = (
-            "language=ko\n"
-            f"Briefly summarize how {region} players perceive this game in 2-3 sentences.\n"
-            "Focus on what makes their perspective distinctive compared to the general consensus.\n"
-            "Output in Korean.\n\n"
-            + "\n\n".join([f"[map_{idx+1}] {item}" for idx, item in enumerate(picked)])
-        )
-    else:
-        anchor_block = ""
-        if score_anchors:
-            anchor_block += "[score_anchors]\n"
-            if score_anchors.get("steam_recommend_ratio") is not None:
-                anchor_block += f"steam_recommend_ratio: {score_anchors['steam_recommend_ratio']:.2f}%\n"
-            if score_anchors.get("metacritic_critic_avg") is not None:
-                anchor_block += f"metacritic_critic_avg: {score_anchors['metacritic_critic_avg']:.2f}\n"
-            if score_anchors.get("metacritic_user_avg") is not None:
-                anchor_block += f"metacritic_user_avg: {score_anchors['metacritic_user_avg']:.2f}\n"
-            anchor_block += "→ sentiment_score must be calibrated to these numbers.\n\n"
-
-        category_block = ""
-        if category_frequency:
-            category_block += "[category_stats]\n"
-            pros_hints: list[str] = []
-            cons_hints: list[str] = []
-            for entry in category_frequency:
-                cat, count = entry[0], entry[1]
-                pos_ratio: float | None = entry[2] if len(entry) > 2 else None
-                if pos_ratio is not None:
-                    pct = int(pos_ratio * 100)
-                    category_block += f"{cat}: {count}건, {pct}% 긍정\n"
-                    if pos_ratio >= 0.65:
-                        pros_hints.append(cat)
-                    elif pos_ratio < 0.35:
-                        cons_hints.append(cat)
-                else:
-                    category_block += f"{cat}: {count}건\n"
-            if pros_hints:
-                category_block += f"→ pros 후보 (긍정 65%↑): {', '.join(pros_hints)}\n"
-            if cons_hints:
-                category_block += f"→ cons 후보 (긍정 35%↓): {', '.join(cons_hints)}\n"
-            category_block += "→ keywords must include top-frequency categories above.\n\n"
-
-        user_prompt = (
-            f"language={language_code}\n"
-            f"{anchor_block}"
-            f"{category_block}"
-            "representative_reviews 선택 기준:\n"
-            "1. helpful_count 높은 리뷰 우선\n"
-            "2. playtime_hours 10시간 이상 리뷰 우선\n"
-            "3. 긍정/부정 균형 (각 1~2개)\n"
-            "4. 직접 인용 가능한 길이 (50-200자)\n\n"
-            "Integrate map summaries into a final sentiment-aware game review summary.\n"
-            "full_text: write 4–6 sentences in Korean. Cover overall impression, specific strengths with examples, weaknesses, and target audience. Must differ from one_liner.\n"
-            "Ensure aspect_scores and representative_reviews are grounded in evidence.\n\n"
-            + "\n\n".join([f"[map_{idx+1}] {item}" for idx, item in enumerate(picked)])
-        )
+    user_prompt = _build_user_prompt(
+        language_code=language_code,
+        grouped_summaries=grouped_summaries,
+        score_anchors=score_anchors,
+        category_frequency=category_frequency,
+        prior_summary_text=prior_summary_text,
+        max_items=max_items,
+    )
 
     try:
         response = await asyncio.wait_for(
-            _generate_reduce_response(client, model_name, system_prompt, user_prompt),
+            _generate_reduce_response(client, model_name, REDUCE_SYSTEM_PROMPT, user_prompt),
             timeout=timeout_sec,
         )
 
@@ -245,47 +283,44 @@ async def run_reduce_stage(
         except Exception as exc:
             raise ReduceParseError(str(exc)) from exc
 
-        logger.info("reduce stage completed successfully")
-        token_in = int(response.usage.prompt_tokens or 0)
+        token_in  = int(response.usage.prompt_tokens or 0)
         token_out = int(response.usage.completion_tokens or 0)
 
-        if regional:
-            return FinalSummary(
-                one_liner=parsed["one_liner"],
-                aspect_scores={},
-                representative_reviews=[],
-                full_text=parsed["full_text"],
-                input_tokens=token_in,
-                output_tokens=token_out,
-            )
+        unified = parsed.get("unified", {})
+        playtime = parsed.get("playtime", {}) or {}
+        critic_data = parsed.get("critic")
+
+        logger.info("reduce stage completed successfully")
+
         return FinalSummary(
-            one_liner=parsed["one_liner"],
-            aspect_scores=parsed["aspect_scores"],
-            representative_reviews=parsed["representative_reviews"],
-            full_text=parsed["full_text"],
-            sentiment_overall=_normalize_sentiment_overall(parsed.get("sentiment_overall")),
-            sentiment_score=_normalize_sentiment_score(parsed.get("sentiment_score")),
-            pros=_to_string_list(parsed.get("pros", [])),
-            cons=_to_string_list(parsed.get("cons", [])),
-            keywords=_to_string_list(parsed.get("keywords", [])),
+            one_liner=str(unified.get("one_liner", "")),
+            aspect_scores=unified.get("aspect_scores", {}),
+            representative_reviews=unified.get("representative_reviews", []),
+            full_text=str(unified.get("full_text", "")),
+            sentiment_overall=_normalize_sentiment_overall(unified.get("sentiment_overall")),
+            sentiment_score=_normalize_sentiment_score(unified.get("sentiment_score")),
+            pros=_to_string_list(unified.get("pros", [])),
+            cons=_to_string_list(unified.get("cons", [])),
+            keywords=_to_string_list(unified.get("keywords", [])),
+            playtime_early=_parse_bucket(playtime.get("early")),
+            playtime_mid=_parse_bucket(playtime.get("mid")),
+            playtime_late=_parse_bucket(playtime.get("late")),
+            critic=_parse_bucket(critic_data),
             input_tokens=token_in,
             output_tokens=token_out,
         )
+
     except Exception as e:
         error_code, is_retryable = classify_reduce_error(e)
         logger.warning(
             "reduce stage failed: code=%s retryable=%s error=%s",
-            error_code,
-            is_retryable,
-            e,
+            error_code, is_retryable, e,
         )
         return FinalSummary(
             one_liner="요약 생성 중 오류가 발생했습니다.",
             aspect_scores={},
             representative_reviews=[],
-            full_text=(
-                f"ErrorCode={error_code}; retryable={str(is_retryable).lower()}; detail={str(e)}"
-            ),
+            full_text=f"ErrorCode={error_code}; retryable={str(is_retryable).lower()}; detail={str(e)}",
             error_code=error_code,
             is_retryable=is_retryable,
         )

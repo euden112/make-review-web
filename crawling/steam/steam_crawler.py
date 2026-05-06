@@ -1,7 +1,9 @@
 """
 Steam Game Review Crawler
 - Steam Store Review API 사용 (공식 공개 엔드포인트, API Key 불필요)
-- 한국어(ko) / 영어(en) / 중국어(zh) 독립 파이프라인
+- language=all 단일 호출 (언어 균등 샘플링 불필요)
+- 초기 수집: Pool 1(헬프풀 긍정) + Pool 2(헬프풀 부정) + Pool 3(최신 전체)
+- 증분 수집: Pool 3(최신 전체)만 실행
 - 3단계 필터링 파이프라인 내장:
     1단계: 규칙 기반 (길이/반복/스팸)
     2단계: 언어 코드 (API 파라미터 신뢰, langdetect 미사용)
@@ -31,9 +33,7 @@ GAME_TITLES = {                        # { metacritic slug : steam app_id }
     "crimson-desert"                  : "3321460",
 }
 PLATFORM         = "pc"
-LANGUAGES        = ["english", "korean", "schinese"]
-LANG_CODE_MAP    = {"english": "en", "korean": "ko", "schinese": "zh"}
-MAX_USER_REVIEWS = 1000  # 언어당 상한 (helpful + recent 각 절반씩)
+MAX_USER_REVIEWS = 1000  # 전체 수집 상한 (3-pool 합산)
 
 MIN_BODY_LENGTH = 20
 MAX_BODY_LENGTH = 5000
@@ -151,11 +151,12 @@ def rule_based_filter(text: str) -> FilterResult:
     return FilterResult(True, "rule", "pass")
 
 # ============================================================
-# 2단계: 언어 코드 (API 파라미터 신뢰)
+# 2단계: 언어 코드 (API 응답 language 필드 신뢰)
 # ============================================================
 
 def language_filter(api_language: str) -> FilterResult:
-    lang = LANG_CODE_MAP.get(api_language, "en")
+    # Steam API는 language=all 호출 시 각 리뷰의 'language' 필드를 반환
+    lang = api_language if api_language else "en"
     return FilterResult(True, "lang", "pass", lang=lang)
 
 # ============================================================
@@ -238,7 +239,7 @@ def preprocess_body(text: str) -> str | None:
 # ============================================================
 
 def fetch_raw_reviews(
-    app_id: str, language: str, max_count: int, filter_type: str = "recent"
+    app_id: str, max_count: int, filter_type: str = "recent", review_type: str = "all"
 ) -> tuple[list[dict], dict]:
     url = f"{BASE_URL}/{app_id}"
     reviews: list[dict] = []
@@ -247,13 +248,14 @@ def fetch_raw_reviews(
 
     while len(reviews) < max_count:
         params = {
-            "json"          : 1,
-            "language"      : language,
-            "filter"        : filter_type,
-            "review_type"   : "all",
-            "purchase_type" : "all",
-            "num_per_page"  : min(100, max_count - len(reviews)),
-            "cursor"        : cursor,
+            "json"                  : 1,
+            "language"              : "all",
+            "filter"                : filter_type,
+            "review_type"           : review_type,
+            "purchase_type"         : "all",
+            "num_per_page"          : min(100, max_count - len(reviews)),
+            "cursor"                : cursor,
+            "filter_offtopic_activity": 1,
         }
 
         max_retries = 5
@@ -296,13 +298,15 @@ def fetch_raw_reviews(
 # 개별 리뷰 파싱 + 필터링
 # ============================================================
 
-def parse_review(raw: dict, api_language: str) -> dict | None:
+def parse_review(raw: dict) -> dict | None:
     author_info = raw.get("author", {})
 
     body = preprocess_body(raw.get("review", ""))
     if body is None:
         return None
 
+    # Steam API language=all 호출 시 각 리뷰에 'language' 필드 포함
+    api_language = raw.get("language", "english")
     result = run_filter_pipeline(body, api_language)
     if not result.passed:
         return None
@@ -310,84 +314,113 @@ def parse_review(raw: dict, api_language: str) -> dict | None:
     ts   = raw.get("timestamp_created", 0)
     date = datetime.fromtimestamp(ts).strftime("%Y-%m-%d") if ts else ""
 
+    # playtime_at_review: 리뷰 작성 시점의 플레이타임 (playtime_forever 아님)
     return {
         "author_id"        : author_info.get("steamid", ""),
         "is_recommended"   : raw.get("voted_up", False),
         "review_text"      : body,
-        "playtime_hours"   : round(author_info.get("playtime_forever", 0) / 60, 1),
+        "playtime_hours"   : round(author_info.get("playtime_at_review", 0) / 60, 1),
         "date_posted"      : date,
         "language"         : result.lang,
         "review_categories": result.categories,
     }
 
 # ============================================================
-# 게임 단위 수집 (언어별 순차 호출)
+# 파싱 공통 헬퍼
 # ============================================================
 
-def collect_game(slug: str, app_id: str) -> dict:
-    print(f"  [{slug}] 수집 시작 (app_id={app_id})")
+def _parse_and_dedup(
+    raw_list: list[dict],
+    seen: set[str],
+    pool_label: str,
+    slug: str,
+) -> list[dict]:
+    collected = []
+    filtered_count = 0
+    for raw in raw_list:
+        rid = str(raw.get("recommendationid", ""))
+        if rid and rid in seen:
+            filtered_count += 1
+            continue
+
+        parsed = parse_review(raw)
+        if parsed is None:
+            filtered_count += 1
+            if rid:
+                seen.add(rid)
+            continue
+
+        dedup_key = rid or parsed["review_text"][:50]
+        if dedup_key in seen:
+            filtered_count += 1
+            continue
+
+        seen.add(dedup_key)
+        collected.append(parsed)
+
+    print(
+        f"    [{slug}] {pool_label}: 수집 {len(raw_list)}개 "
+        f"| 필터링 {filtered_count}개 | 저장 {len(collected)}개"
+    )
+    return collected
+
+
+# ============================================================
+# 게임 단위 수집 — 초기 수집 (3-pool 전략)
+# ============================================================
+
+def collect_game(slug: str, app_id: str, incremental: bool = False) -> dict:
+    print(f"  [{slug}] {'증분' if incremental else '초기'} 수집 시작 (app_id={app_id})")
 
     images = get_image_urls(app_id)
     all_reviews: list[dict] = []
-    lang_stats: dict[str, int] = {}
     seen: set[str] = set()
-    summary: dict = {}
 
-    half = MAX_USER_REVIEWS // 2
+    # 첫 호출로 query_summary 수신 (긍/부정 비율 확보)
+    first_page, summary = fetch_raw_reviews(app_id, max_count=1, filter_type="all", review_type="all")
 
-    for language in LANGUAGES:
-        lang_code = LANG_CODE_MAP[language]
-        print(f"    [{slug}] {language} 수집 중 (helpful={half} + recent={half})...")
+    total_positive = summary.get("total_positive", 0)
+    total_negative = summary.get("total_negative", 0)
+    total_reviews  = total_positive + total_negative
 
-        helpful_list, lang_summary = fetch_raw_reviews(app_id, language, half, filter_type="all")
-        if not summary:
-            summary = lang_summary
-
-        recent_list, _ = fetch_raw_reviews(app_id, language, half, filter_type="recent")
+    if incremental:
+        # 증분: Pool 3만 실행 (최신 전체)
+        recent_count = MAX_USER_REVIEWS // 3
+        pool3_raw, _ = fetch_raw_reviews(app_id, max_count=recent_count, filter_type="recent", review_type="all")
         time.sleep(1.0)
+        all_reviews.extend(_parse_and_dedup(pool3_raw, seen, "Pool3(최신)", slug))
+    else:
+        # 초기: Pool 1(헬프풀 긍정) + Pool 2(헬프풀 부정) + Pool 3(최신 전체)
+        helpful_budget = MAX_USER_REVIEWS * 2 // 3
+        recent_budget  = MAX_USER_REVIEWS - helpful_budget
 
-        raw_list = helpful_list + recent_list
+        pos_ratio = total_positive / total_reviews if total_reviews > 0 else 0.5
+        neg_ratio = 1.0 - pos_ratio
 
-        filtered_count = 0
-        lang_saved = 0
-        for raw in raw_list:
-            rid = str(raw.get("recommendationid", ""))
-            if rid and rid in seen:
-                filtered_count += 1
-                continue
+        pool1_count = int(helpful_budget * pos_ratio)
+        pool2_count = int(helpful_budget * neg_ratio)
 
-            parsed = parse_review(raw, language)
-            if parsed is None:
-                filtered_count += 1
-                if rid:
-                    seen.add(rid)
-                continue
-
-            dedup_key = rid or parsed["review_text"][:50]
-            if dedup_key in seen:
-                filtered_count += 1
-                continue
-
-            seen.add(dedup_key)
-            all_reviews.append(parsed)
-            lang_saved += 1
-
-        lang_stats[lang_code] = lang_saved
         print(
-            f"    [{slug}] {language}: 수집 {len(raw_list)}개 "
-            f"| 필터링 {filtered_count}개 | 저장 {lang_saved}개"
+            f"    [{slug}] 긍정 비율={pos_ratio:.0%} "
+            f"| Pool1(헬프풀 긍정)={pool1_count} Pool2(헬프풀 부정)={pool2_count} Pool3(최신)={recent_budget}"
         )
 
+        pool1_raw, _ = fetch_raw_reviews(app_id, max_count=pool1_count, filter_type="all", review_type="positive")
         time.sleep(1.0)
+        all_reviews.extend(_parse_and_dedup(pool1_raw, seen, "Pool1(헬프풀 긍정)", slug))
 
-    total_positive    = summary.get("total_positive", 0)
-    total_negative    = summary.get("total_negative", 0)
+        pool2_raw, _ = fetch_raw_reviews(app_id, max_count=pool2_count, filter_type="all", review_type="negative")
+        time.sleep(1.0)
+        all_reviews.extend(_parse_and_dedup(pool2_raw, seen, "Pool2(헬프풀 부정)", slug))
+
+        pool3_raw, _ = fetch_raw_reviews(app_id, max_count=recent_budget, filter_type="recent", review_type="all")
+        time.sleep(1.0)
+        all_reviews.extend(_parse_and_dedup(pool3_raw, seen, "Pool3(최신)", slug))
+
     review_score_desc = summary.get("review_score_desc", "")
-
     print(
         f"  [{slug}] 완료 → 총 저장 {len(all_reviews)}개 "
-        f"| 언어별: {lang_stats} "
-        f"| {review_score_desc}"
+        f"| {total_positive}긍정 / {total_negative}부정 | {review_score_desc}"
     )
 
     return {
@@ -396,14 +429,14 @@ def collect_game(slug: str, app_id: str) -> dict:
             "cover_image"    : images["cover_image"],
             "hero_image"     : images["hero_image"],
             "platform_code"  : "steam",
-            "schema_version" : "1.0",
+            "schema_version" : "2.0",
             "collected_at"   : datetime.utcnow().strftime('%Y%m%dT%H%M%SZ'),
             "record_count"   : len(all_reviews),
             "total_positive" : total_positive,
             "total_negative" : total_negative,
             "crawled_at"     : datetime.now().isoformat(),
-            "lang_policy"    : "ko_en_zh",
-            "lang_breakdown" : lang_stats,
+            "lang_policy"    : "all",
+            "incremental"    : incremental,
         },
         "reviews": all_reviews,
     }
@@ -415,6 +448,7 @@ def collect_game(slug: str, app_id: str) -> dict:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--games", nargs="+", metavar="SLUG", help="크롤링할 게임 슬러그 (기본: 전체)")
+    parser.add_argument("--incremental", action="store_true", help="증분 수집 모드 (Pool 3만 실행)")
     args = parser.parse_args()
 
     game_titles = {k: v for k, v in GAME_TITLES.items() if not args.games or k in args.games}
@@ -422,10 +456,12 @@ def main():
     timestamp = datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')
     base_dir = Path(__file__).resolve().parent
     output_file = base_dir / f"steam_reviews_raw_{timestamp}.json"
+    mode_label = "증분(Pool3 only)" if args.incremental else "초기(Pool1+2+3)"
     print("=" * 55)
     print(f"  게임 수      : {len(game_titles)}")
-    print(f"  언어 정책    : 한국어 / 영어 / 중국어 독립 파이프라인")
-    print(f"  유저 리뷰    : 언어당 최대 {MAX_USER_REVIEWS}개 (helpful {MAX_USER_REVIEWS//2} + recent {MAX_USER_REVIEWS//2})")
+    print(f"  수집 모드    : {mode_label}")
+    print(f"  최대 리뷰    : {MAX_USER_REVIEWS}개 (전체 합산)")
+    print(f"  언어 정책    : language=all (전체 언어)")
     print(f"  본문 최소    : {MIN_BODY_LENGTH}자")
     print(f"  본문 최대    : {MAX_BODY_LENGTH}자")
     print(f"  저장파일     : {output_file}")
@@ -434,7 +470,7 @@ def main():
     all_output: dict = {}
 
     for slug, app_id in game_titles.items():
-        all_output[slug] = collect_game(slug, app_id)
+        all_output[slug] = collect_game(slug, app_id, incremental=args.incremental)
         time.sleep(2.0)
 
     with open(output_file, "w", encoding="utf-8") as f:
@@ -449,8 +485,7 @@ def main():
         print(
             f"  {slug}\n"
             f"    긍정 {m['total_positive']}개 / 부정 {m['total_negative']}개 "
-            f"({rate}%) | 저장 {len(data['reviews'])}개 "
-            f"| 언어별: {m['lang_breakdown']}\n"
+            f"({rate}%) | 저장 {len(data['reviews'])}개\n"
         )
     print(f"  {output_file} 저장 완료")
     print("=" * 55)

@@ -227,3 +227,74 @@ class GameReviewSummary(Base):
     semantic_similarity_score = Column(Numeric(5, 4))  # 0.0~1.0
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     # 마이그레이션: 04_migration_sprint3_m001.sql 참고
+
+
+# ==============================================================================
+# [Sprint 4] 플레이타임별 여론 분석 및 비평가 반응 테이블
+# ==============================================================================
+
+class PlaytimeAnalysis(Base):
+    """플레이타임 버킷별(early/mid/late) AI 요약 저장
+
+    버킷 경계는 게임별 리뷰어 플레이타임 분포의 퍼센타일(p33, p66) 기반.
+    각 버킷에 리뷰가 30건 미만이면 해당 필드는 NULL.
+    마이그레이션: 08_migration_sprint4.sql
+    """
+    __tablename__ = "playtime_analyses"
+    id                  = Column(Integer, primary_key=True, index=True)
+    game_id             = Column(Integer, ForeignKey("games.id"), nullable=False)
+    bucket_thresholds   = Column(JSONB, nullable=False)
+
+    early_summary       = Column(Text)
+    early_sentiment     = Column(String(16))
+    early_score         = Column(Numeric(5, 2))
+    early_pros          = Column(JSONB)
+    early_cons          = Column(JSONB)
+    early_keywords      = Column(JSONB)
+    early_review_count  = Column(Integer)
+
+    mid_summary         = Column(Text)
+    mid_sentiment       = Column(String(16))
+    mid_score           = Column(Numeric(5, 2))
+    mid_pros            = Column(JSONB)
+    mid_cons            = Column(JSONB)
+    mid_keywords        = Column(JSONB)
+    mid_review_count    = Column(Integer)
+
+    late_summary        = Column(Text)
+    late_sentiment      = Column(String(16))
+    late_score          = Column(Numeric(5, 2))
+    late_pros           = Column(JSONB)
+    late_cons           = Column(JSONB)
+    late_keywords       = Column(JSONB)
+    late_review_count   = Column(Integer)
+
+    created_at          = Column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at          = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+    __table_args__ = (
+        UniqueConstraint('game_id', name='uq_playtime_analysis_game'),
+    )
+
+
+class CriticSummary(Base):
+    """비평가(Metacritic critic) 리뷰 AI 요약 저장
+
+    유저 여론과 독립된 섹션으로, 출시 당시 전문가 평가를 나타냄.
+    critic 리뷰가 10건 미만이면 생성하지 않음(NULL).
+    마이그레이션: 08_migration_sprint4.sql
+    """
+    __tablename__ = "critic_summaries"
+    id              = Column(Integer, primary_key=True, index=True)
+    game_id         = Column(Integer, ForeignKey("games.id"), nullable=False)
+    summary         = Column(Text)
+    sentiment       = Column(String(16))
+    score           = Column(Numeric(5, 2))
+    pros            = Column(JSONB)
+    cons            = Column(JSONB)
+    keywords        = Column(JSONB)
+    review_count    = Column(Integer)
+    created_at      = Column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at      = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+    __table_args__ = (
+        UniqueConstraint('game_id', name='uq_critic_summary_game'),
+    )
