@@ -51,7 +51,7 @@ function PlaytimeBucketCard({ bucket, data }) {
 
       {!data?.data_available ? (
         <p className="text-xs text-gray-400 dark:text-gray-500">
-          리뷰 수 부족 ({data?.review_count ?? 0}건)
+          데이터 부족
         </p>
       ) : (
         <>
@@ -91,13 +91,74 @@ function PlaytimeBucketCard({ bucket, data }) {
               ))}
             </ul>
           )}
-          <p className="text-xs text-gray-400 dark:text-gray-500 text-right">
-            리뷰 {data.review_count}건 기준
-          </p>
         </>
       )}
     </div>
   )
+}
+
+function RepresentativeReviewSection({ title, reviews, emptyMessage }) {
+  return (
+    <div className="bg-white dark:bg-[#1e1e2e] rounded-xl p-7 border border-gray-200 dark:border-[#2a2a3e] shadow-sm">
+      <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0] mb-3">{title}</h2>
+      {reviews && reviews.length > 0 ? (
+        <div className="grid gap-3">
+          {reviews.map((review, idx) => {
+            const quote = typeof review === 'string' ? review : review?.quote || review?.summary || ''
+            const reason = typeof review === 'string' ? '' : review?.reason || ''
+            const source = typeof review === 'string' ? '' : review?.source || ''
+            const reviewId = typeof review === 'string' ? '' : review?.review_id
+
+            return (
+              <div key={idx} className="rounded-lg border border-gray-200 dark:border-[#3a3a5e] bg-gray-50 dark:bg-[#2a2a3e] p-4">
+                <div className="flex flex-wrap items-center gap-2 mb-2">
+                  {source && (
+                    <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-300 border border-blue-200 dark:border-blue-700">
+                      {source}
+                    </span>
+                  )}
+                  {reviewId !== undefined && reviewId !== null && (
+                    <span className="text-[11px] text-gray-400 dark:text-gray-500">
+                      review_id: {reviewId}
+                    </span>
+                  )}
+                </div>
+                {quote && (
+                  <p className="text-sm leading-relaxed text-gray-700 dark:text-[#cccccc]">
+                    {quote}
+                  </p>
+                )}
+                {reason && (
+                  <p className="text-xs text-gray-400 dark:text-gray-500 mt-2">
+                    {reason}
+                  </p>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      ) : (
+        <p className="text-sm text-gray-400 dark:text-gray-500">{emptyMessage}</p>
+      )}
+    </div>
+  )
+}
+
+function groupRepresentativeReviews(reviews) {
+  const grouped = { steam: [], metacritic: [], other: [] }
+
+  ;(reviews || []).forEach((review) => {
+    const source = typeof review === 'string' ? '' : String(review?.source || '').toLowerCase()
+    if (source.includes('steam')) {
+      grouped.steam.push(review)
+    } else if (source.includes('metacritic') || source.includes('critic')) {
+      grouped.metacritic.push(review)
+    } else {
+      grouped.other.push(review)
+    }
+  })
+
+  return grouped
 }
 
 function GameDetailPage({ isDark, toggleDark }) {
@@ -146,7 +207,7 @@ function GameDetailPage({ isDark, toggleDark }) {
         if (criticRes.ok) {
           setCriticSummary(await criticRes.json())
         }
-      } catch (e) {
+      } catch {
         setError('서버에 연결할 수 없습니다.')
       } finally {
         setLoading(false)
@@ -249,6 +310,30 @@ function GameDetailPage({ isDark, toggleDark }) {
                   ))}
                 </div>
               )}
+            </div>
+
+            {/* 플랫폼별 대표 리뷰 */}
+            <div className="bg-white dark:bg-[#1e1e2e] rounded-xl p-7 border border-gray-200 dark:border-[#2a2a3e] shadow-sm">
+              <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0] mb-3">플랫폼별 대표 리뷰</h2>
+              <div className="grid grid-cols-2 gap-6">
+                {(() => {
+                  const groupedReviews = groupRepresentativeReviews(summary.representative_reviews || [])
+                  return (
+                    <>
+                      <RepresentativeReviewSection
+                        title="Steam 대표 리뷰"
+                        reviews={groupedReviews.steam.slice(0, 3)}
+                        emptyMessage="Steam 대표 리뷰가 없습니다."
+                      />
+                      <RepresentativeReviewSection
+                        title="Metacritic 대표 리뷰"
+                        reviews={groupedReviews.metacritic.slice(0, 3)}
+                        emptyMessage="Metacritic 대표 리뷰가 없습니다."
+                      />
+                    </>
+                  )
+                })()}
+              </div>
             </div>
 
             {/* 장점 / 단점 */}
@@ -356,9 +441,7 @@ function GameDetailPage({ isDark, toggleDark }) {
             <div className="flex items-center justify-between mb-1">
               <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0]">비평가 반응</h2>
               {criticSummary && (
-                <span className="text-xs text-gray-400 dark:text-gray-500">
-                  출시 당시 전문가 {criticSummary.review_count}명 기준
-                </span>
+                <span className="text-xs text-gray-400 dark:text-gray-500">출시 당시 전문가 반응</span>
               )}
             </div>
 

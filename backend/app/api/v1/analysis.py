@@ -11,8 +11,6 @@ from app.models.domain import PlaytimeAnalysis, CriticSummary
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-MIN_CRITIC_REVIEWS = 10
-
 
 def _format_label(early_max: float | None, mid_max: float | None, bucket: str) -> str:
     if early_max is None:
@@ -48,13 +46,11 @@ async def get_playtime_analysis(
         pros     = getattr(row, f"{prefix}_pros")
         cons     = getattr(row, f"{prefix}_cons")
         keywords = getattr(row, f"{prefix}_keywords")
-        count    = getattr(row, f"{prefix}_review_count")
 
         if summary is None:
             return {
                 "label": _format_label(early_max, mid_max, prefix),
                 "data_available": False,
-                "review_count": count or 0,
             }
 
         return {
@@ -66,7 +62,6 @@ async def get_playtime_analysis(
             "cons":             cons or [],
             "keywords":         keywords or [],
             "summary":          summary,
-            "review_count":     count or 0,
         }
 
     return {
@@ -94,16 +89,8 @@ async def get_critic_summary(
     if not row:
         raise HTTPException(status_code=404, detail="비평가 반응 데이터가 없습니다.")
 
-    review_count = row.review_count or 0
-    if review_count < MIN_CRITIC_REVIEWS:
-        raise HTTPException(
-            status_code=404,
-            detail=f"비평가 리뷰 수 부족 ({review_count}건, 최소 {MIN_CRITIC_REVIEWS}건 필요)",
-        )
-
     return {
         "game_id":          game_id,
-        "review_count":     review_count,
         "sentiment_overall": row.sentiment,
         "sentiment_score":  float(row.score) if row.score is not None else None,
         "pros":             row.pros or [],

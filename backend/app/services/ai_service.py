@@ -48,6 +48,91 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 
+def _strip_redundant_leading_sentence(one_liner: str | None, full_text: str | None) -> str:
+    base = " ".join((one_liner or "").split()).strip()
+    text = (full_text or "").strip()
+    if not base or not text:
+        return text
+
+    if text.startswith(base):
+        return text[len(base):].lstrip(" 。.\n\r\t:-—") or text
+
+    first_sentence_end = next((idx for idx, ch in enumerate(text) if ch in ".!?。！？"), None)
+    if first_sentence_end is None:
+        return text
+
+    first_sentence = " ".join(text[:first_sentence_end + 1].split()).strip()
+    if first_sentence == base:
+        return text[first_sentence_end + 1:].lstrip(" 。.\n\r\t:-—") or text
+
+    return text
+
+
+def _truncate_review_quote(text: str | None, max_length: int = 180) -> str:
+    cleaned = " ".join((text or "").split()).strip()
+    if len(cleaned) <= max_length:
+        return cleaned
+    return cleaned[: max_length - 1].rstrip() + "…"
+
+
+def _select_platform_representative_reviews(
+    reviews,
+    steam_pid,
+    meta_pid,
+    limit_per_platform: int = 3,
+) -> list[dict[str, object]]:
+    def _platform_score(review) -> tuple[float, float, float, int]:
+        helpful_count = float(getattr(review, "helpful_count", 0) or 0)
+        playtime_hours = float(getattr(review, "playtime_hours", 0) or 0)
+        normalized_score = float(getattr(review, "normalized_score_100", 0) or 0)
+        if getattr(review, "platform_id", None) == steam_pid:
+            score = (0.5 * (playtime_hours + 1.0) ** 0.5) + (1.2 * (helpful_count + 1.0) ** 0.5)
+            return (score, helpful_count, playtime_hours, -int(getattr(review, "id", 0) or 0))
+        if getattr(review, "platform_id", None) == meta_pid:
+            score = normalized_score + (0.1 * (helpful_count + 1.0) ** 0.5)
+            return (score, normalized_score, helpful_count, -int(getattr(review, "id", 0) or 0))
+        return (0.0, helpful_count, playtime_hours, -int(getattr(review, "id", 0) or 0))
+
+    steam_candidates = sorted(
+        [review for review in reviews if getattr(review, "platform_id", None) == steam_pid],
+        key=_platform_score,
+        reverse=True,
+    )[:limit_per_platform]
+    meta_candidates = sorted(
+        [review for review in reviews if getattr(review, "platform_id", None) == meta_pid],
+        key=_platform_score,
+        reverse=True,
+    )[:limit_per_platform]
+
+    selected: list[dict[str, object]] = []
+
+    for review in steam_candidates:
+        selected.append({
+            "source": "steam",
+            "review_id": getattr(review, "id", None),
+            "quote": _truncate_review_quote(getattr(review, "review_text_clean", None)),
+            "reason": (
+                f"Steam 플랫폼에서 helpful_count {int(getattr(review, 'helpful_count', 0) or 0)}"
+                f" / playtime {float(getattr(review, 'playtime_hours', 0) or 0):.0f}h 기준 대표 리뷰"
+            ),
+        })
+
+    for review in meta_candidates:
+        normalized_score = getattr(review, "normalized_score_100", None)
+        normalized_score_text = f"{float(normalized_score):.0f}" if normalized_score is not None else "0"
+        selected.append({
+            "source": "metacritic",
+            "review_id": getattr(review, "id", None),
+            "quote": _truncate_review_quote(getattr(review, "review_text_clean", None)),
+            "reason": (
+                f"Metacritic 플랫폼에서 score {normalized_score_text}"
+                f" / helpful_count {int(getattr(review, 'helpful_count', 0) or 0)} 기준 대표 리뷰"
+            ),
+        })
+
+    return selected
+
+
 async def get_pipeline_tasks(game_id: int, db) -> list[tuple[str, str | None]]:
     """Sprint 4: unified 1회만 실행. regional 파이프라인 제거."""
     return [("unified", None)]
@@ -70,7 +155,6 @@ async def _upsert_playtime_analysis(db, game_id: int, ai_result: FinalSummary, b
                 f"{prefix}_summary": None, f"{prefix}_sentiment": None,
                 f"{prefix}_score": None, f"{prefix}_pros": None,
                 f"{prefix}_cons": None, f"{prefix}_keywords": None,
-                f"{prefix}_review_count": None,
             }
         return {
             f"{prefix}_summary": b.summary,
@@ -79,7 +163,6 @@ async def _upsert_playtime_analysis(db, game_id: int, ai_result: FinalSummary, b
             f"{prefix}_pros": b.pros,
             f"{prefix}_cons": b.cons,
             f"{prefix}_keywords": b.keywords,
-            f"{prefix}_review_count": None,
         }
 
     fields = {
@@ -369,17 +452,25 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
                 else None
             )
 
+            clean_full_text = _strip_redundant_leading_sentence(ai_result.one_liner, ai_result.full_text)
+            representative_reviews = _select_platform_representative_reviews(
+                new_reviews,
+                steam_pid,
+                meta_pid,
+                limit_per_platform=3,
+            )
+
             new_summary = GameReviewSummary(
                 game_id=game_id,
                 summary_type=mode,
                 review_language=review_language,
                 job_id=job.id,
                 summary_version=new_version,
-                summary_text=f"**{ai_result.one_liner}**\n\n{ai_result.full_text}",
+                summary_text=f"**{ai_result.one_liner}**\n\n{clean_full_text}",
                 sentiment_overall=ai_result.sentiment_overall,
                 sentiment_score=ai_result.sentiment_score,
                 aspect_sentiment_json=ai_result.aspect_scores,
-                representative_reviews_json=ai_result.representative_reviews,
+                representative_reviews_json=representative_reviews,
                 pros_json=ai_result.pros,
                 cons_json=ai_result.cons,
                 keywords_json=ai_result.keywords,

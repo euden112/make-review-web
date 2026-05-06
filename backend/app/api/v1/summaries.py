@@ -81,6 +81,7 @@ async def trigger_summarization(
 async def get_unified_summary(
     game_id: int,
     db: AsyncSession = Depends(get_db),
+    compact: bool = Query(True, description="응답에서 None/빈값 제거 (compact)")
 ):
     """통합 요약 반환 (Redis 캐싱 적용)"""
     summary_type = "unified"
@@ -110,7 +111,7 @@ async def get_unified_summary(
             select(ReviewSummaryJob).where(ReviewSummaryJob.id == summary.job_id)
         )).scalar_one_or_none()
 
-    result = _serialize_summary(summary, job)
+    result = _serialize_summary(summary, job, compact=compact)
 
     await set_summary_cache(game_id, summary_type, result)
     logger.info("cache_miss game_id=%s summary_type=%s", game_id, summary_type)
@@ -122,6 +123,7 @@ async def get_unified_summary(
 async def get_regional_perspectives(
     game_id: int,
     db: AsyncSession = Depends(get_db),
+    compact: bool = Query(True, description="응답에서 None/빈값 제거 (compact)")
 ):
     """언어권별 시각 목록 반환"""
     rows = (await db.execute(
@@ -137,10 +139,10 @@ async def get_regional_perspectives(
     if not rows:
         raise HTTPException(status_code=404, detail="언어권별 요약본이 없습니다.")
 
-    return [_serialize_summary(s) for s in rows]
+    return [_serialize_summary(s, compact=compact) for s in rows]
 
 
-def _serialize_summary(summary: GameReviewSummary, job: ReviewSummaryJob | None = None) -> dict:
+def _serialize_summary(summary: GameReviewSummary, job: ReviewSummaryJob | None = None, compact: bool = True) -> dict:
     result = {
         "game_id": summary.game_id,
         "summary_type": summary.summary_type,
@@ -168,4 +170,27 @@ def _serialize_summary(summary: GameReviewSummary, job: ReviewSummaryJob | None 
             "reduce_input_tokens": job.reduce_input_tokens,
             "reduce_output_tokens": job.reduce_output_tokens,
         }
+    if compact:
+        def _clean(obj):
+            if not isinstance(obj, dict):
+                return obj
+            out = {}
+            for k, v in obj.items():
+                # keep zero and False; remove None, empty string, empty list/dict
+                if v is None:
+                    continue
+                if isinstance(v, str) and v.strip() == "":
+                    continue
+                if isinstance(v, (list, dict)) and not v:
+                    continue
+                out[k] = v
+            return out
+
+        result = _clean(result)
+        # nested clean for reliability and aspect_sentiment
+        if "reliability" in result and isinstance(result["reliability"], dict):
+            result["reliability"] = _clean(result["reliability"]) or None
+        if "aspect_sentiment" in result and isinstance(result["aspect_sentiment"], dict):
+            result["aspect_sentiment"] = _clean(result["aspect_sentiment"]) or None
+
     return result

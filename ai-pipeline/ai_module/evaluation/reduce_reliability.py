@@ -39,28 +39,11 @@ def compute_reduce_reliability(
         _is_non_empty(ai_result.pros),
         _is_non_empty(ai_result.cons),
         _is_non_empty(ai_result.keywords),
-        _is_non_empty(ai_result.representative_reviews),
         _is_non_empty(ai_result.full_text),
     ]
     schema_compliance = sum(1 for check in checks if check) / len(checks)
 
-    input_ids = {getattr(review, "id", None) for review in input_reviews}
-    cited_ids_raw = [
-        item.get("review_id")
-        for item in ai_result.representative_reviews
-        if isinstance(item, dict) and item.get("review_id") is not None
-    ]
-    cited_ids = []
-    for rid in cited_ids_raw:
-        try:
-            cited_ids.append(int(rid))
-        except (TypeError, ValueError):
-            pass
-    hallucination_score = (
-        sum(1 for review_id in cited_ids if review_id in input_ids) / len(cited_ids)
-        if cited_ids
-        else None
-    )
+    hallucination_score = None
 
     sentiment_consistency: int | None
     if ai_result.sentiment_score is not None and ai_result.sentiment_overall is not None:

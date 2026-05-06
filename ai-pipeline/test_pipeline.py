@@ -57,20 +57,6 @@ async def mock_reduce_runner(**kwargs):
             "content": {"label": "high", "score": 0.79},
             "price_value": {"label": "mid", "score": 0.57},
         },
-        representative_reviews=[
-            {
-                "source": "steam",
-                "review_id": 1,
-                "quote": "Great visuals and lots of content.",
-                "reason": "graphics and content evidence",
-            },
-            {
-                "source": "metacritic",
-                "review_id": 101,
-                "quote": "Performance drops in crowded areas.",
-                "reason": "optimization evidence",
-            },
-        ],
         full_text=full_text,
     )
 

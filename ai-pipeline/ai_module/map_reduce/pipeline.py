@@ -122,12 +122,24 @@ def _ensure_bucket_coverage(
     tagged: list[ReviewRow],
     all_steam: list[ReviewRow],
     buckets: PlaytimeBuckets,
-    min_per_bucket: int = 20,
+    min_per_bucket: int = 10,  # 20 → 10 (playtime 데이터 부족 대응)
 ) -> list[ReviewRow]:
     """quality_score 편향으로 인해 early/mid 버킷이 부족할 경우 전체 풀에서 보완 선택."""
+    import logging
+    logger = logging.getLogger(__name__)
+    
     existing_ids = {r.id for r in tagged}
     all_steam_tagged = tag_reviews(all_steam, buckets)
     result = list(tagged)
+    
+    # 디버깅: 버킷별 분포 로깅
+    bucket_counts = {}
+    for bucket_name in ("early", "mid", "late"):
+        bucket_counts[bucket_name] = len([r for r in tagged if r.playtime_bucket == bucket_name])
+    logger.info("bucket coverage before: early=%d mid=%d late=%d", 
+                bucket_counts.get("early", 0), 
+                bucket_counts.get("mid", 0), 
+                bucket_counts.get("late", 0))
 
     for bucket_name in ("early", "mid", "late"):
         in_bucket = [r for r in tagged if r.playtime_bucket == bucket_name]
@@ -142,6 +154,8 @@ def _ensure_bucket_coverage(
         to_add = candidates[:needed]
         result.extend(to_add)
         existing_ids.update(r.id for r in to_add)
+        logger.info("bucket coverage added: bucket=%s added=%d total=%d", 
+                    bucket_name, len(to_add), len(in_bucket) + len(to_add))
 
     return result
 

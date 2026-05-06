@@ -88,14 +88,6 @@ async def test_hybrid_summary_pipeline_with_mocked_io() -> None:
                 "graphics": {"label": "high", "score": 0.84},
                 "optimization": {"label": "low", "score": 0.41},
             },
-            representative_reviews=[
-                {
-                    "source": "steam",
-                    "review_id": 7,
-                    "quote": "Great combat feel.",
-                    "reason": "controls and gameplay evidence",
-                }
-            ],
             full_text="synthetic summary body",
         )
 
@@ -120,7 +112,6 @@ async def test_hybrid_summary_pipeline_with_mocked_io() -> None:
     assert observed_calls["reduce_summary_count"] == observed_calls["map_chunk_count"]
 
     payload = asdict(final)
-    assert isinstance(payload["representative_reviews"], list)
     assert payload["full_text"] == "synthetic summary body"
 
 
@@ -166,7 +157,6 @@ async def test_hybrid_summary_pipeline_accepts_backend_rows_and_none_cache() -> 
         return FinalSummary(
             one_liner="?ë°?ěźëĄ??Ľë¨?ě´ ęłľěĄ´?Šë??",
             aspect_scores={},
-            representative_reviews=[],
             full_text="mocked",
         )
 

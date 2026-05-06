@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from math import floor
 from typing import Any, Sequence
 
 from ai_module.map_reduce.rules import is_spam_review
+
+logger = logging.getLogger(__name__)
 
 MIN_REVIEWS_PER_BUCKET = 30
 MIN_CRITIC_REVIEWS     = 10
@@ -69,15 +72,27 @@ def _normalize_review_categories(value: Any) -> list[dict[str, Any]] | None:
 
 def compute_playtime_buckets(rows: Sequence[ReviewRow]) -> PlaytimeBuckets | None:
     """게임별 리뷰어 플레이타임 분포의 p33/p66 퍼센타일로 버킷 경계를 계산."""
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    steam_rows = [row for row in rows if row.platform_code == STEAM_PLATFORM_CODE]
     steam_playtimes = [
         row.playtime_hours
-        for row in rows
-        if row.platform_code == STEAM_PLATFORM_CODE
-        and row.playtime_hours is not None
+        for row in steam_rows
+        if row.playtime_hours is not None
         and row.playtime_hours > 0
     ]
+    
+    # 디버깅: playtime 데이터 가용성 로깅
+    playtime_available = len(steam_playtimes)
+    playtime_missing = len(steam_rows) - playtime_available
+    logger.info("playtime_data: total_steam=%d available=%d missing=%d ratio=%.1f%%",
+                len(steam_rows), playtime_available, playtime_missing,
+                (playtime_available / len(steam_rows) * 100) if steam_rows else 0)
 
     if len(steam_playtimes) < MIN_REVIEWS_PER_BUCKET:
+        logger.warning("insufficient playtime data: %d < %d, buckets=None", 
+                      len(steam_playtimes), MIN_REVIEWS_PER_BUCKET)
         return None
 
     sorted_times = sorted(steam_playtimes)
@@ -88,7 +103,10 @@ def compute_playtime_buckets(rows: Sequence[ReviewRow]) -> PlaytimeBuckets | Non
         lo, hi = int(idx), min(int(idx) + 1, n - 1)
         return sorted_times[lo] + (sorted_times[hi] - sorted_times[lo]) * (idx - lo)
 
-    return PlaytimeBuckets(early_max=round(pct(33), 1), mid_max=round(pct(66), 1))
+    early_max = round(pct(33), 1)
+    mid_max = round(pct(66), 1)
+    logger.info("bucket_thresholds: early_max=%.1f mid_max=%.1f", early_max, mid_max)
+    return PlaytimeBuckets(early_max=early_max, mid_max=mid_max)
 
 
 def tag_reviews(rows: Sequence[ReviewRow], buckets: PlaytimeBuckets | None) -> list[ReviewRow]:
@@ -171,7 +189,7 @@ def allocate(total: int, ratios: dict[str, float]) -> dict[str, int]:
 def quality_score(row: ReviewRow) -> float:
     playtime = float(row.playtime_hours or 0.0)
     helpful = float(row.helpful_count or 0)
-    return (1.8 * (playtime + 1.0) ** 0.5) + (1.2 * (helpful + 1.0) ** 0.5)
+    return (0.5 * (playtime + 1.0) ** 0.5) + (1.2 * (helpful + 1.0) ** 0.5)
 
 
 def stratified_select_reviews(
@@ -185,6 +203,17 @@ def stratified_select_reviews(
 
     steam_rows = [row for row in filtered_rows if row.platform_code == STEAM_PLATFORM_CODE]
     metacritic_rows = [row for row in filtered_rows if row.platform_code == METACRITIC_PLATFORM_CODE]
+
+    # 진단 로깅: playtime 데이터 가용성
+    steam_with_playtime = [r for r in steam_rows if r.playtime_hours is not None and r.playtime_hours > 0]
+    steam_without_playtime = len(steam_rows) - len(steam_with_playtime)
+    logger.info(
+        "steam_analysis: total=%d with_playtime=%d without_playtime=%d ratio=%.1f%%",
+        len(steam_rows),
+        len(steam_with_playtime),
+        steam_without_playtime,
+        (len(steam_with_playtime) / len(steam_rows) * 100) if steam_rows else 0,
+    )
 
     total_valid_rows = len(filtered_rows)
     if total_valid_rows > 0:
@@ -216,17 +245,49 @@ def stratified_select_reviews(
         },
     )
 
-    steam_pos = sorted(
-        [row for row in steam_rows if row.is_recommended is True],
-        key=quality_score,
-        reverse=True,
-    )[: steam_alloc["pos"]]
+    # 플레이타임 버킷을 계산해 버킷별로 균형 있게 선택
+    buckets = compute_playtime_buckets(filtered_rows)
+    if buckets is None:
+        # 플레이타임 정보 부족 시 기존 방식 유지
+        steam_pos = sorted(
+            [row for row in steam_rows if row.is_recommended is True],
+            key=quality_score,
+            reverse=True,
+        )[: steam_alloc["pos"]]
 
-    steam_neg = sorted(
-        [row for row in steam_rows if row.is_recommended is False],
-        key=quality_score,
-        reverse=True,
-    )[: steam_alloc["neg"]]
+        steam_neg = sorted(
+            [row for row in steam_rows if row.is_recommended is False],
+            key=quality_score,
+            reverse=True,
+        )[: steam_alloc["neg"]]
+    else:
+        # 버킷별로 나누기
+        parts = ["early", "mid", "late"]
+        steam_buckets_map = {p: [] for p in parts}
+        for row in steam_rows:
+            tag = buckets.tag(row.playtime_hours)
+            if tag in steam_buckets_map:
+                steam_buckets_map[tag].append(row)
+            else:
+                steam_buckets_map["late"].append(row)
+
+        def _split_alloc(total: int, k: int) -> list[int]:
+            base = total // k
+            rem = total - base * k
+            return [base + (1 if i < rem else 0) for i in range(k)]
+
+        pos_targets = _split_alloc(steam_alloc["pos"], len(parts))
+        neg_targets = _split_alloc(steam_alloc["neg"], len(parts))
+
+        steam_pos = []
+        for i, p in enumerate(parts):
+            rows_in = [r for r in steam_buckets_map[p] if r.is_recommended is True]
+            steam_pos.extend(sorted(rows_in, key=quality_score, reverse=True)[: pos_targets[i]])
+
+        steam_neg = []
+        for i, p in enumerate(parts):
+            rows_in = [r for r in steam_buckets_map[p] if r.is_recommended is False]
+            steam_neg.extend(sorted(rows_in, key=quality_score, reverse=True)[: neg_targets[i]])
 
     meta_low = sorted(
         [row for row in metacritic_rows if (row.normalized_score_100 or 0) < 50],
@@ -247,6 +308,16 @@ def stratified_select_reviews(
     )[: meta_alloc["high"]]
 
     selected = steam_pos + steam_neg + meta_low + meta_mid + meta_high
+
+    # 진단 로깅: 선택 후 playtime 분포
+    selected_with_playtime = [r for r in selected if r.playtime_hours is not None and r.playtime_hours > 0]
+    logger.info(
+        "stratified_selected: total=%d with_playtime=%d without_playtime=%d ratio=%.1f%%",
+        len(selected),
+        len(selected_with_playtime),
+        len(selected) - len(selected_with_playtime),
+        (len(selected_with_playtime) / len(selected) * 100) if selected else 0,
+    )
 
     if len(selected) < total_target:
         used_ids = {row.id for row in selected}

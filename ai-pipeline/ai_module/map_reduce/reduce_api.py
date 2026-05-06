@@ -29,7 +29,6 @@ class FinalSummary:
     # unified 요약
     one_liner: str
     aspect_scores: dict[str, Any]
-    representative_reviews: list[dict[str, Any]]
     full_text: str
     sentiment_overall: str | None = None
     sentiment_score: float | None = None
@@ -63,7 +62,6 @@ Required top-level keys:
       content: {label, score},
       price_value: {label, score}
     }  (scores 0.0–10.0; label is a short Korean adjective),
-    representative_reviews: [{source, review_id, quote, reason}],
     sentiment_overall: one of [positive, mixed, negative],
     sentiment_score: number in range 0..100,
     pros: [string] at least 3 items,
@@ -86,6 +84,10 @@ Rules:
 - critic is independent from user sentiment; never compare or mention divergence.
 - If evidence is missing for an aspect, omit it rather than fabricate.
 - If a segment input array is empty, return null for that segment.
+ 
+Rules about repetition:
+- Do NOT repeat the same sentence or phrase verbatim across different sections (unified, playtime buckets, critic).
+- Ensure sentences are unique; when similar points are necessary across sections, paraphrase concisely.
 """.strip()
 
 
@@ -174,7 +176,8 @@ def _build_user_prompt(
     score_anchors: dict[str, float | None] | None,
     category_frequency: list[tuple[str, int, float]] | None,
     prior_summary_text: str | None,
-    max_items: int,
+    max_items_map: dict[str, int] | None = None,
+    chunk_length_map: dict[str, int] | None = None,
 ) -> str:
     sections: list[str] = [f"language={language_code}"]
 
@@ -210,9 +213,22 @@ def _build_user_prompt(
         sections.append(f"[previous_summary]\n{prior_summary_text[:1200]}")
 
     # 그룹별 map 요약 추가
+    # 그룹별로 최대 아이템 수와 청크 길이를 조정하여 토큰 사용을 최적화
+    default_chunk_len = 900
+    chunk_len_map = chunk_length_map or {
+        "all": 700,
+        "early": 500,
+        "mid": 500,
+        "late": 500,
+        "critic": 600,
+    }
+    max_map = max_items_map or {}
+
     for group_key in ("all", "early", "mid", "late", "critic"):
         items = grouped_summaries.get(group_key, [])
-        picked = [item[:900] for item in items[:max_items]]
+        max_for_group = int(max_map.get(group_key, max(1, min(len(items), 24))))
+        pick_len = chunk_len_map.get(group_key, default_chunk_len)
+        picked = [item[:pick_len] for item in items[:max_for_group]]
         header = f"[group:{group_key}] ({len(picked)} chunks)"
         body = "\n\n".join(f"[map_{i+1}] {s}" for i, s in enumerate(picked)) if picked else "(empty)"
         sections.append(f"{header}\n{body}")
@@ -254,21 +270,69 @@ async def run_reduce_stage(
         return FinalSummary(
             one_liner="요약 생성 중 오류가 발생했습니다.",
             aspect_scores={},
-            representative_reviews=[],
             full_text="ErrorCode=parse_error; retryable=false; detail=no map summaries provided",
             error_code="parse_error",
             is_retryable=False,
         )
 
     client = AsyncGroq(api_key=api_key)
+
+    # 그룹별 max_items 및 청크 길이 맵을 계산하여 토큰 사용을 최적화
+    max_items_map = {
+        "all": min(20, len(all_summaries)),
+        "early": min(8, len(grouped_summaries.get("early", []))),
+        "mid": min(8, len(grouped_summaries.get("mid", []))),
+        "late": min(6, len(grouped_summaries.get("late", []))),
+        "critic": min(6, len(grouped_summaries.get("critic", []))),
+    }
+    chunk_length_map = {
+        "all": 700,
+        "early": 500,
+        "mid": 500,
+        "late": 500,
+        "critic": 600,
+    }
+
+    # 중복 제거: 동일한 문장이 여러 그룹에 중복 포함되는 것을 방지
+    deduped: dict[str, list[str]] = {}
+    global_seen: set[str] = set()
+    for key in ("all", "early", "mid", "late", "critic"):
+        items = grouped_summaries.get(key, []) or []
+        deduped_items: list[str] = []
+        for item in items:
+            norm = " ".join(str(item).split()).strip().lower()
+            if not norm:
+                continue
+            if norm in global_seen:
+                continue
+            deduped_items.append(item)
+            global_seen.add(norm)
+        deduped[key] = deduped_items
+
+    logger.info(
+        "reduce input dedup: all=%d early=%d mid=%d late=%d critic=%d -> deduped: all=%d early=%d mid=%d late=%d critic=%d",
+        len(grouped_summaries.get("all", [])),
+        len(grouped_summaries.get("early", [])),
+        len(grouped_summaries.get("mid", [])),
+        len(grouped_summaries.get("late", [])),
+        len(grouped_summaries.get("critic", [])),
+        len(deduped.get("all", [])),
+        len(deduped.get("early", [])),
+        len(deduped.get("mid", [])),
+        len(deduped.get("late", [])),
+        len(deduped.get("critic", [])),
+    )
+
     user_prompt = _build_user_prompt(
         language_code=language_code,
-        grouped_summaries=grouped_summaries,
+        grouped_summaries=deduped,
         score_anchors=score_anchors,
         category_frequency=category_frequency,
         prior_summary_text=prior_summary_text,
-        max_items=max_items,
+        max_items_map=max_items_map,
+        chunk_length_map=chunk_length_map,
     )
+
 
     try:
         response = await asyncio.wait_for(
@@ -295,7 +359,6 @@ async def run_reduce_stage(
         return FinalSummary(
             one_liner=str(unified.get("one_liner", "")),
             aspect_scores=unified.get("aspect_scores", {}),
-            representative_reviews=unified.get("representative_reviews", []),
             full_text=str(unified.get("full_text", "")),
             sentiment_overall=_normalize_sentiment_overall(unified.get("sentiment_overall")),
             sentiment_score=_normalize_sentiment_score(unified.get("sentiment_score")),
@@ -319,7 +382,6 @@ async def run_reduce_stage(
         return FinalSummary(
             one_liner="요약 생성 중 오류가 발생했습니다.",
             aspect_scores={},
-            representative_reviews=[],
             full_text=f"ErrorCode={error_code}; retryable={str(is_retryable).lower()}; detail={str(e)}",
             error_code=error_code,
             is_retryable=is_retryable,
