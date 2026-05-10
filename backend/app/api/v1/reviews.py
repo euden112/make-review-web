@@ -106,7 +106,7 @@ async def receive_metacritic_data(payload: Dict[str, MetacriticPayload], db: Asy
                 "helpful_count": getattr(rev, 'helpful_count', 0),
                 "source_meta_json": getattr(rev, 'source_meta_json', {}),
                 "review_categories_json": getattr(rev, 'review_categories', []),
-                "language_code": getattr(rev, 'language', 'ko') or 'ko',
+                "language_code": getattr(rev, 'language', None) or 'en',
                 "reviewed_at": parsed_date,
                 "is_deleted": False,
                 "updated_at": datetime.utcnow()
@@ -214,7 +214,7 @@ async def receive_steam_data(payload: Dict[str, SteamPayload], db: AsyncSession 
                 "helpful_count": getattr(rev, 'helpful_count', 0),
                 "source_meta_json": getattr(rev, 'source_meta_json', {}),
                 "review_categories_json": getattr(rev, 'review_categories', []),
-                "language_code": getattr(rev, 'language', 'ko') or 'ko',
+                "language_code": getattr(rev, 'language', None) or 'en',
                 "reviewed_at": parsed_date,
                 "is_deleted": False,
                 "updated_at": datetime.utcnow()

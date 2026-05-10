@@ -20,18 +20,24 @@ async def get_games(db: AsyncSession = Depends(get_db)):
 
     games = (await db.execute(select(Game))).scalars().all()
 
-    # Steam 플랫폼 ID 조회
     steam_platform = (await db.execute(
         select(Platform).where(Platform.code == "steam")
+    )).scalar_one_or_none()
+
+    metacritic_platform = (await db.execute(
+        select(Platform).where(Platform.code == "metacritic")
     )).scalar_one_or_none()
 
     result = []
     for g in games:
         cover_image = None
         hero_image = None
+        tags: list[str] = []
+        # Metacritic 100점 → 5점 환산 (소수점 1자리)
+        rating: float | None = None
 
         if steam_platform:
-            platform_map = (await db.execute(
+            steam_map = (await db.execute(
                 select(GamePlatformMap).where(
                     and_(
                         GamePlatformMap.game_id == g.id,
@@ -40,15 +46,33 @@ async def get_games(db: AsyncSession = Depends(get_db)):
                 )
             )).scalar_one_or_none()
 
-            if platform_map and platform_map.platform_meta_json:
-                cover_image = platform_map.platform_meta_json.get("cover_image")
-                hero_image = platform_map.platform_meta_json.get("hero_image")
+            if steam_map and steam_map.platform_meta_json:
+                cover_image = steam_map.platform_meta_json.get("cover_image")
+                hero_image = steam_map.platform_meta_json.get("hero_image")
+                tags = steam_map.platform_meta_json.get("tags") or []
+
+        if metacritic_platform:
+            meta_map = (await db.execute(
+                select(GamePlatformMap).where(
+                    and_(
+                        GamePlatformMap.game_id == g.id,
+                        GamePlatformMap.platform_id == metacritic_platform.id,
+                    )
+                )
+            )).scalar_one_or_none()
+
+            if meta_map and meta_map.platform_meta_json:
+                score = meta_map.platform_meta_json.get("score")
+                if score is not None:
+                    rating = round(float(score) / 20, 1)
 
         result.append({
             "id": g.id,
             "canonical_title": g.canonical_title,
             "cover_image": cover_image,
             "hero_image": hero_image,
+            "tags": tags,
+            "rating": rating,
         })
 
     return result

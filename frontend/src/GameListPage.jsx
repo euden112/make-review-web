@@ -4,15 +4,6 @@ import Navbar from './Navbar'
 
 const API_BASE = 'http://localhost:8000'
 
-// 임시 별점 및 태그 (API에서 제공하지 않으므로 id 기준으로 매핑)
-const GAME_META = {
-  1: { rating: 4, tags: ['액션', 'RPG'] },
-  2: { rating: 5, tags: ['RPG', '오픈월드', '액션'] },
-  3: { rating: 3, tags: ['슈팅', '배틀로얄'] },
-  4: { rating: 5, tags: ['RPG', '턴제'] },
-  5: { rating: 3, tags: ['액션', 'RPG'] },
-}
-
 function HeroBanner({ games }) {
   const [current, setCurrent] = useState(0)
   const navigate = useNavigate()
@@ -34,7 +25,6 @@ function HeroBanner({ games }) {
   )
 
   const banner = banners[current]
-  const meta = GAME_META[banner.id] || { rating: 3, tags: [] }
 
   return (
     <section className="relative w-full h-[440px] overflow-hidden flex flex-col justify-start pt-10"
@@ -62,19 +52,21 @@ function HeroBanner({ games }) {
           {banner.canonical_title}
         </h1>
 
-        <div className="flex items-center gap-2 mt-28 mb-4">
-          <span className="text-xl font-extrabold" style={{ color: '#ffb020' }}>
-            {meta.rating}.0
-          </span>
-          <span className="text-base text-white">/ 5.0</span>
-          <div className="flex gap-0.5">
-            {[1, 2, 3, 4, 5].map((star) => (
-              <span key={star} className="text-xl"
-                style={{ color: star <= meta.rating ? '#ffb020' : 'rgba(255,255,255,0.3)' }}
-              >★</span>
-            ))}
+        {banner.rating != null && (
+          <div className="flex items-center gap-2 mt-28 mb-4">
+            <span className="text-xl font-extrabold" style={{ color: '#ffb020' }}>
+              {banner.rating.toFixed(1)}
+            </span>
+            <span className="text-base text-white">/ 5.0</span>
+            <div className="flex gap-0.5">
+              {[1, 2, 3, 4, 5].map((star) => (
+                <span key={star} className="text-xl"
+                  style={{ color: star <= Math.round(banner.rating) ? '#ffb020' : 'rgba(255,255,255,0.3)' }}
+                >★</span>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
 
         <button
           onClick={() => navigate(`/games/${banner.id}`)}
@@ -248,7 +240,6 @@ function StarRating({ rating }) {
 
 function GameCard({ game, onClick }) {
   const [hovered, setHovered] = useState(false)
-  const meta = GAME_META[game.id] || { rating: 3, tags: [] }
 
   return (
     <div
@@ -270,12 +261,14 @@ function GameCard({ game, onClick }) {
             <h2 className="text-gray-900 dark:text-[#e0e0e0] text-sm font-bold m-0 truncate flex-1">
               {game.canonical_title}
             </h2>
-            <div className="bg-[#f5a623] text-[#eeeeee] text-xs font-bold rounded px-1.5 py-0.5 min-w-[38px] text-center">
-              {meta.rating}.0
-            </div>
+            {game.rating != null && (
+              <div className="bg-[#f5a623] text-[#eeeeee] text-xs font-bold rounded px-1.5 py-0.5 min-w-[38px] text-center">
+                {game.rating.toFixed(1)}
+              </div>
+            )}
           </div>
 
-          <StarRating rating={meta.rating} />
+          <StarRating rating={game.rating != null ? Math.round(game.rating) : null} />
 
           <p className="text-xs leading-snug m-0 line-clamp-2 text-gray-500 dark:text-[#cccccc]">
             AI 리뷰 요약 보기
@@ -313,15 +306,15 @@ function GameListPage({ isDark, toggleDark }) {
   }, [])
 
   const allGenres = [...new Set(
-    games.flatMap(g => (GAME_META[g.id]?.tags || []))
+    games.flatMap(g => g.tags || [])
   )]
 
   const filteredGames = games
     .filter(g => g.canonical_title.includes(searchText))
-    .filter(g => !selectedGenre || (GAME_META[g.id]?.tags || []).includes(selectedGenre))
+    .filter(g => !selectedGenre || (g.tags || []).includes(selectedGenre))
     .sort((a, b) => {
-      const rA = GAME_META[a.id]?.rating || 3
-      const rB = GAME_META[b.id]?.rating || 3
+      const rA = a.rating ?? 0
+      const rB = b.rating ?? 0
       if (sortOrder === 'high') return rB - rA
       if (sortOrder === 'low') return rA - rB
       return 0

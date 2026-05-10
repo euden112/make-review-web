@@ -4,14 +4,6 @@ import Navbar from './Navbar'
 
 const API_BASE = 'http://localhost:8000'
 
-const GAME_META = {
-  1: { rating: 4 },
-  2: { rating: 5 },
-  3: { rating: 3 },
-  4: { rating: 5 },
-  5: { rating: 3 },
-}
-
 const CATEGORY_LABELS = {
   graphics: '그래픽',
   controls: '조작감',
@@ -217,8 +209,6 @@ function GameDetailPage({ isDark, toggleDark }) {
     fetchData()
   }, [id])
 
-  const meta = GAME_META[parseInt(id)] || { rating: 3 }
-
   if (!game && !loading) return <div className="p-10">게임을 찾을 수 없습니다.</div>
 
   return (
@@ -258,19 +248,21 @@ function GameDetailPage({ isDark, toggleDark }) {
             {game?.canonical_title || ''}
           </h1>
 
-          <div className="flex items-center gap-2 mb-4">
-            <span className="text-xl font-extrabold" style={{ color: '#ffb020' }}>
-              {meta.rating}.0
-            </span>
-            <span className="text-white text-base">/ 5.0</span>
-            <div className="flex gap-0.5">
-              {[1, 2, 3, 4, 5].map((star) => (
-                <span key={star} className="text-xl"
-                  style={{ color: star <= meta.rating ? '#ffb020' : 'rgba(255,255,255,0.3)' }}
-                >★</span>
-              ))}
+          {game?.rating != null && (
+            <div className="flex items-center gap-2 mb-4">
+              <span className="text-xl font-extrabold" style={{ color: '#ffb020' }}>
+                {game.rating.toFixed(1)}
+              </span>
+              <span className="text-white text-base">/ 5.0</span>
+              <div className="flex gap-0.5">
+                {[1, 2, 3, 4, 5].map((star) => (
+                  <span key={star} className="text-xl"
+                    style={{ color: star <= Math.round(game.rating) ? '#ffb020' : 'rgba(255,255,255,0.3)' }}
+                  >★</span>
+                ))}
+              </div>
             </div>
-          </div>
+          )}
 
           {summary && (
             <p className="text-sm leading-relaxed max-w-xl" style={{ color: '#e6edf8' }}>

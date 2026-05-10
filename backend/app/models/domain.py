@@ -241,8 +241,8 @@ class PlaytimeAnalysis(Base):
     마이그레이션: 08_migration_sprint4.sql
     """
     __tablename__ = "playtime_analyses"
-    id                  = Column(Integer, primary_key=True, index=True)
-    game_id             = Column(Integer, ForeignKey("games.id"), nullable=False)
+    id                  = Column(BigInteger, primary_key=True, index=True)
+    game_id             = Column(BigInteger, ForeignKey("games.id"), nullable=False)
     bucket_thresholds   = Column(JSONB, nullable=False)
 
     early_summary       = Column(Text)
@@ -284,8 +284,8 @@ class CriticSummary(Base):
     마이그레이션: 08_migration_sprint4.sql
     """
     __tablename__ = "critic_summaries"
-    id              = Column(Integer, primary_key=True, index=True)
-    game_id         = Column(Integer, ForeignKey("games.id"), nullable=False)
+    id              = Column(BigInteger, primary_key=True, index=True)
+    game_id         = Column(BigInteger, ForeignKey("games.id"), nullable=False)
     summary         = Column(Text)
     sentiment       = Column(String(16))
     score           = Column(Numeric(5, 2))
