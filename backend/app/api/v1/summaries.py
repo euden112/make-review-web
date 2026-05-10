@@ -3,10 +3,11 @@ from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import and_
+from sqlalchemy.orm import joinedload
 
 from app.core.database import get_db
 from app.core.redis_client import get_summary_cache, set_summary_cache
-from app.models.domain import GameReviewSummary, ReviewSummaryJob
+from app.models.domain import Game, GamePlatformMap, Platform, GameReviewSummary, ReviewSummaryJob, ExternalReview
 from app.services.ai_service import run_ai_pipeline_task, get_pipeline_tasks
 
 logger = logging.getLogger(__name__)
@@ -16,17 +17,40 @@ router = APIRouter()
 
 @router.get("/")
 async def get_games(db: AsyncSession = Depends(get_db)):
-    from app.models.domain import Game, GamePlatformMap, Platform
-
-    games = (await db.execute(select(Game))).scalars().all()
-
     steam_platform = (await db.execute(
         select(Platform).where(Platform.code == "steam")
     )).scalar_one_or_none()
-
     metacritic_platform = (await db.execute(
         select(Platform).where(Platform.code == "metacritic")
     )).scalar_one_or_none()
+
+    games = (await db.execute(select(Game))).scalars().all()
+
+    # 플랫폼 맵을 플랫폼별 단일 쿼리로 일괄 로드 (N+1 제거)
+    steam_maps: dict[int, GamePlatformMap] = {}
+    meta_maps: dict[int, GamePlatformMap] = {}
+    if games:
+        game_ids = [g.id for g in games]
+        if steam_platform:
+            rows = (await db.execute(
+                select(GamePlatformMap).where(
+                    and_(
+                        GamePlatformMap.platform_id == steam_platform.id,
+                        GamePlatformMap.game_id.in_(game_ids),
+                    )
+                )
+            )).scalars().all()
+            steam_maps = {m.game_id: m for m in rows}
+        if metacritic_platform:
+            rows = (await db.execute(
+                select(GamePlatformMap).where(
+                    and_(
+                        GamePlatformMap.platform_id == metacritic_platform.id,
+                        GamePlatformMap.game_id.in_(game_ids),
+                    )
+                )
+            )).scalars().all()
+            meta_maps = {m.game_id: m for m in rows}
 
     result = []
     for g in games:
@@ -36,35 +60,17 @@ async def get_games(db: AsyncSession = Depends(get_db)):
         # Metacritic 100점 → 5점 환산 (소수점 1자리)
         rating: float | None = None
 
-        if steam_platform:
-            steam_map = (await db.execute(
-                select(GamePlatformMap).where(
-                    and_(
-                        GamePlatformMap.game_id == g.id,
-                        GamePlatformMap.platform_id == steam_platform.id,
-                    )
-                )
-            )).scalar_one_or_none()
+        steam_map = steam_maps.get(g.id)
+        if steam_map and steam_map.platform_meta_json:
+            cover_image = steam_map.platform_meta_json.get("cover_image")
+            hero_image = steam_map.platform_meta_json.get("hero_image")
+            tags = steam_map.platform_meta_json.get("tags") or []
 
-            if steam_map and steam_map.platform_meta_json:
-                cover_image = steam_map.platform_meta_json.get("cover_image")
-                hero_image = steam_map.platform_meta_json.get("hero_image")
-                tags = steam_map.platform_meta_json.get("tags") or []
-
-        if metacritic_platform:
-            meta_map = (await db.execute(
-                select(GamePlatformMap).where(
-                    and_(
-                        GamePlatformMap.game_id == g.id,
-                        GamePlatformMap.platform_id == metacritic_platform.id,
-                    )
-                )
-            )).scalar_one_or_none()
-
-            if meta_map and meta_map.platform_meta_json:
-                score = meta_map.platform_meta_json.get("score")
-                if score is not None:
-                    rating = round(float(score) / 20, 1)
+        meta_map = meta_maps.get(g.id)
+        if meta_map and meta_map.platform_meta_json:
+            score = meta_map.platform_meta_json.get("score")
+            if score is not None:
+                rating = round(float(score) / 20, 1)
 
         result.append({
             "id": g.id,
@@ -116,7 +122,9 @@ async def get_unified_summary(
         return cached
 
     summary = (await db.execute(
-        select(GameReviewSummary).where(
+        select(GameReviewSummary)
+        .options(joinedload(GameReviewSummary.job))
+        .where(
             and_(
                 GameReviewSummary.game_id == game_id,
                 GameReviewSummary.summary_type == summary_type,
@@ -129,13 +137,8 @@ async def get_unified_summary(
     if not summary:
         raise HTTPException(status_code=404, detail="AI 요약본이 없습니다.")
 
-    job = None
-    if summary.job_id is not None:
-        job = (await db.execute(
-            select(ReviewSummaryJob).where(ReviewSummaryJob.id == summary.job_id)
-        )).scalar_one_or_none()
-
-    result = _serialize_summary(summary, job, compact=compact)
+    review_text_map = await _fetch_representative_review_texts(db, summary.representative_reviews_json)
+    result = _serialize_summary(summary, summary.job, compact=compact, review_text_map=review_text_map)
 
     await set_summary_cache(game_id, summary_type, result)
     logger.info("cache_miss game_id=%s summary_type=%s", game_id, summary_type)
@@ -144,7 +147,31 @@ async def get_unified_summary(
 
 
 
-def _serialize_summary(summary: GameReviewSummary, job: ReviewSummaryJob | None = None, compact: bool = True) -> dict:
+async def _fetch_representative_review_texts(db: AsyncSession, rep_reviews: list | None) -> dict[int, str]:
+    if not rep_reviews:
+        return {}
+    review_ids = [r["review_id"] for r in rep_reviews if r.get("review_id") is not None]
+    if not review_ids:
+        return {}
+    rows = (await db.execute(
+        select(ExternalReview.id, ExternalReview.review_text_clean).where(ExternalReview.id.in_(review_ids))
+    )).all()
+    return {row.id: row.review_text_clean for row in rows if row.review_text_clean}
+
+
+def _serialize_summary(
+    summary: GameReviewSummary,
+    job: ReviewSummaryJob | None = None,
+    compact: bool = True,
+    review_text_map: dict[int, str] | None = None,
+) -> dict:
+    rep_reviews = summary.representative_reviews_json
+    if rep_reviews and review_text_map:
+        rep_reviews = [
+            {**r, "quote": review_text_map.get(r.get("review_id"), r.get("quote"))}
+            for r in rep_reviews
+        ]
+
     result = {
         "game_id": summary.game_id,
         "summary_type": summary.summary_type,
@@ -155,7 +182,7 @@ def _serialize_summary(summary: GameReviewSummary, job: ReviewSummaryJob | None 
         "pros": summary.pros_json,
         "cons": summary.cons_json,
         "keywords": summary.keywords_json,
-        "representative_reviews": summary.representative_reviews_json,
+        "representative_reviews": rep_reviews,
         "sentiment_overall": summary.sentiment_overall,
         "sentiment_score": float(summary.sentiment_score) if summary.sentiment_score is not None else None,
         "aspect_sentiment": summary.aspect_sentiment_json,

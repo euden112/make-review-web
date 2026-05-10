@@ -24,7 +24,9 @@ from app.models.domain import (
     GameReviewSummary, Platform, ReviewType,
     PlaytimeAnalysis, CriticSummary,
 )
-from app.core.redis_client import invalidate_summary_cache, get_redis_cache
+from app.core.redis_client import (
+    invalidate_summary_cache, invalidate_playtime_cache, invalidate_critic_cache, get_redis_cache,
+)
 from ai_module.cache.redis_cache import RedisCache
 from app.core.database import AsyncSessionLocal
 
@@ -68,13 +70,6 @@ def _strip_redundant_leading_sentence(one_liner: str | None, full_text: str | No
     return text
 
 
-def _truncate_review_quote(text: str | None, max_length: int = 180) -> str:
-    cleaned = " ".join((text or "").split()).strip()
-    if len(cleaned) <= max_length:
-        return cleaned
-    return cleaned[: max_length - 1].rstrip() + "…"
-
-
 def _select_platform_representative_reviews(
     reviews,
     steam_pid,
@@ -113,24 +108,12 @@ def _select_platform_representative_reviews(
         selected.append({
             "source": "steam",
             "review_id": getattr(review, "id", None),
-            "quote": _truncate_review_quote(getattr(review, "review_text_clean", None)),
-            "reason": (
-                f"Steam 플랫폼에서 helpful_count {int(getattr(review, 'helpful_count', 0) or 0)}"
-                f" / playtime {float(getattr(review, 'playtime_hours', 0) or 0):.0f}h 기준 대표 리뷰"
-            ),
         })
 
     for review in meta_candidates:
-        normalized_score = getattr(review, "normalized_score_100", None)
-        normalized_score_text = f"{float(normalized_score):.0f}" if normalized_score is not None else "0"
         selected.append({
             "source": "metacritic",
             "review_id": getattr(review, "id", None),
-            "quote": _truncate_review_quote(getattr(review, "review_text_clean", None)),
-            "reason": (
-                f"Metacritic 플랫폼에서 score {normalized_score_text}"
-                f" / helpful_count {int(getattr(review, 'helpful_count', 0) or 0)} 기준 대표 리뷰"
-            ),
         })
 
     return selected
@@ -296,20 +279,9 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
             if not summary_reviews:
                 return
 
-            # 4. 신뢰도 지표용
-            total_reviews_in_db = await db.scalar(
-                select(func.count(ExternalReview.id)).where(
-                    ExternalReview.game_id == game_id,
-                    ExternalReview.is_deleted == False,
-                )
-            )
-            new_count_since_last = await db.scalar(
-                select(func.count(ExternalReview.id)).where(
-                    ExternalReview.game_id == game_id,
-                    ExternalReview.id > last_review_id,
-                    ExternalReview.is_deleted == False,
-                )
-            )
+            # 4. 신뢰도 지표용 — 이미 로드된 리스트에서 계산 (별도 COUNT 쿼리 불필요)
+            total_reviews_in_db = len(summary_reviews)
+            new_count_since_last = len(new_reviews)
 
             batch_from_review_id   = min(r.id for r in new_reviews)
             new_max_review_id      = max(r.id for r in new_reviews)
@@ -536,6 +508,8 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
             logger.info("ai pipeline finished: game_id=%s job_id=%s", game_id, job.id)
 
             await invalidate_summary_cache(game_id, cursor_language_code)
+            await invalidate_playtime_cache(game_id)
+            await invalidate_critic_cache(game_id)
 
         except Exception as e:
             await db.rollback()

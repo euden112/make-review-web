@@ -1,7 +1,8 @@
 import hashlib
+import re
 from datetime import datetime, timedelta
 from typing import Dict
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.dialects.postgresql import insert
@@ -14,6 +15,15 @@ from app.models.domain import Platform, ReviewType, Game, GamePlatformMap, Inges
 
 router = APIRouter()
 
+_BB_TAG = re.compile(r'\[/?[a-zA-Z0-9*=_\- ]+\]')
+
+def _clean_review_text(text: str | None) -> str | None:
+    if not text:
+        return text
+    text = _BB_TAG.sub(' ', text)
+    text = ' '.join(text.split())
+    return text or None
+
 def generate_review_key(*args):
     raw = "|".join(str(a) for a in args if a is not None)
     return hashlib.sha256(raw.encode('utf-8')).hexdigest()
@@ -21,7 +31,7 @@ def generate_review_key(*args):
 def parse_date(date_str: str, format_str: str):
     try:
         return datetime.strptime(date_str, format_str)
-    except:
+    except (ValueError, TypeError):
         return None
 
 async def get_reference_data(db: AsyncSession):
@@ -33,6 +43,8 @@ async def get_reference_data(db: AsyncSession):
 async def receive_metacritic_data(payload: Dict[str, MetacriticPayload], db: AsyncSession = Depends(get_db)):
     platforms, review_types = await get_reference_data(db)
     platform_id = platforms.get("metacritic")
+    if not platform_id:
+        raise HTTPException(status_code=500, detail="metacritic platform not configured in DB")
 
     for slug, game_data in payload.items():
         # 1. Game Upsert
@@ -102,7 +114,7 @@ async def receive_metacritic_data(payload: Dict[str, MetacriticPayload], db: Asy
                 "author_name": rev.author,
                 "score_raw": rev.score,
                 "normalized_score_100": normalized,
-                "review_text_clean": rev.body,
+                "review_text_clean": _clean_review_text(rev.body),
                 "helpful_count": getattr(rev, 'helpful_count', 0),
                 "source_meta_json": getattr(rev, 'source_meta_json', {}),
                 "review_categories_json": getattr(rev, 'review_categories', []),
@@ -150,6 +162,10 @@ async def receive_steam_data(payload: Dict[str, SteamPayload], db: AsyncSession 
     platforms, review_types = await get_reference_data(db)
     platform_id = platforms.get("steam")
     user_type_id = review_types.get("user")
+    if not platform_id:
+        raise HTTPException(status_code=500, detail="steam platform not configured in DB")
+    if not user_type_id:
+        raise HTTPException(status_code=500, detail="user review_type not configured in DB")
 
     for slug, game_data in payload.items():
         # 1. Game Upsert
