@@ -18,12 +18,158 @@ const SENTIMENT_CONFIG = {
   mixed:    { label: '중립',   cls: 'bg-gray-50 text-gray-600 dark:bg-gray-700 dark:text-gray-300' },
 }
 
+const EVENT_TYPE_CONFIG = {
+  patch:       { label: '패치',   color: '#3b82f6', bg: 'bg-blue-50 dark:bg-blue-900/20',     text: 'text-blue-600 dark:text-blue-300',   border: 'border-blue-200 dark:border-blue-700' },
+  dlc:         { label: 'DLC',    color: '#8b5cf6', bg: 'bg-purple-50 dark:bg-purple-900/20', text: 'text-purple-600 dark:text-purple-300', border: 'border-purple-200 dark:border-purple-700' },
+  controversy: { label: '논란',   color: '#ef4444', bg: 'bg-red-50 dark:bg-red-900/20',       text: 'text-red-600 dark:text-red-300',     border: 'border-red-200 dark:border-red-700' },
+  sale:        { label: '할인',   color: '#10b981', bg: 'bg-green-50 dark:bg-green-900/20',   text: 'text-green-600 dark:text-green-300', border: 'border-green-200 dark:border-green-700' },
+  unknown:     { label: '기타',   color: '#6b7280', bg: 'bg-gray-50 dark:bg-gray-700',        text: 'text-gray-600 dark:text-gray-300',   border: 'border-gray-200 dark:border-gray-600' },
+}
+
+function EventTypeTag({ type }) {
+  const cfg = EVENT_TYPE_CONFIG[type] || EVENT_TYPE_CONFIG.unknown
+  return (
+    <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full border ${cfg.bg} ${cfg.text} ${cfg.border}`}>
+      {cfg.label}
+    </span>
+  )
+}
+
+function DirectionBadge({ direction, delta }) {
+  const isSpike = direction === 'negative_spike'
+  const pct = delta !== null ? Math.abs(delta * 100).toFixed(0) : null
+  return (
+    <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${
+      isSpike
+        ? 'bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-300'
+        : 'bg-green-50 dark:bg-green-900/20 text-green-600 dark:text-green-300'
+    }`}>
+      {isSpike ? `↑ 부정 +${pct}%p` : `↓ 긍정 회복 ${pct}%p`}
+    </span>
+  )
+}
+
+function EventCard({ event }) {
+  return (
+    <div className="border border-gray-200 dark:border-[#3a3a5e] rounded-xl overflow-hidden">
+      <div className="px-5 py-4 flex items-start gap-3">
+        <div className="flex flex-col items-center gap-1 min-w-[56px]">
+          <span className="text-[11px] text-gray-400 dark:text-gray-500 font-mono">
+            {event.event_date}
+          </span>
+          <div
+            className="w-2.5 h-2.5 rounded-full border-2"
+            style={{
+              borderColor: EVENT_TYPE_CONFIG[event.event_type]?.color || '#6b7280',
+              background: EVENT_TYPE_CONFIG[event.event_type]?.color || '#6b7280',
+            }}
+          />
+        </div>
+
+        <div className="flex-1 min-w-0">
+          <div className="flex flex-wrap items-center gap-2 mb-1">
+            <EventTypeTag type={event.event_type} />
+            <DirectionBadge direction={event.direction} delta={event.sentiment_delta} />
+          </div>
+          <p className="text-sm font-semibold text-gray-800 dark:text-[#e0e0e0] truncate">
+            {event.title || '제목 없음'}
+          </p>
+          {event.news_url && (
+            <a
+              href={event.news_url}
+              target="_blank"
+              rel="noreferrer"
+              className="text-[11px] text-blue-500 hover:underline mt-0.5 inline-block"
+            >
+              원문 →
+            </a>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function SentimentBadge({ value }) {
   const cfg = SENTIMENT_CONFIG[value] || SENTIMENT_CONFIG.mixed
   return (
     <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${cfg.cls}`}>
       {cfg.label}
     </span>
+  )
+}
+
+const BUCKET_COLORS = {
+  early: { bar: '#6366f1', light: 'rgba(99,102,241,0.15)' },
+  mid:   { bar: '#f59e0b', light: 'rgba(245,158,11,0.15)' },
+  late:  { bar: '#10b981', light: 'rgba(16,185,129,0.15)' },
+}
+
+function PlaytimeBarChart({ buckets, isDark }) {
+  const keys = ['early', 'mid', 'late']
+  const available = keys.filter(k => buckets?.[k]?.data_available)
+  if (available.length === 0) return null
+
+  const W = 420, H = 160, PAD = { top: 12, right: 16, bottom: 40, left: 44 }
+  const inner = { w: W - PAD.left - PAD.right, h: H - PAD.top - PAD.bottom }
+  const barW = Math.floor(inner.w / keys.length * 0.45)
+  const gap = inner.w / keys.length
+  const stroke = isDark ? '#3a3a5e' : '#e5e7eb'
+  const axisColor = isDark ? '#6b7280' : '#9ca3af'
+
+  const gridLines = [0, 25, 50, 75, 100]
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full max-w-md" style={{ maxHeight: 160 }}>
+      <rect x={0} y={0} width={W} height={H} fill="transparent" />
+      {gridLines.map(v => {
+        const y = PAD.top + inner.h - (v / 100) * inner.h
+        return (
+          <g key={v}>
+            <line x1={PAD.left} y1={y} x2={PAD.left + inner.w} y2={y} stroke={stroke} strokeWidth={1} strokeDasharray={v === 0 ? '0' : '3,3'} />
+            <text x={PAD.left - 6} y={y + 4} textAnchor="end" fontSize={9} fill={axisColor}>{v}%</text>
+          </g>
+        )
+      })}
+
+      {keys.map((k, i) => {
+        const d = buckets?.[k]
+        const score = d?.data_available ? (d.sentiment_score ?? 0) : 0
+        const cx = PAD.left + gap * i + gap / 2
+        const barH = (score / 100) * inner.h
+        const barY = PAD.top + inner.h - barH
+        const col = BUCKET_COLORS[k]
+        const sentiment = d?.sentiment_overall
+        const barColor = sentiment === 'positive' ? '#22c55e' : sentiment === 'negative' ? '#ef4444' : col.bar
+
+        return (
+          <g key={k}>
+            <rect
+              x={cx - barW / 2} y={PAD.top + inner.h}
+              width={barW} height={0}
+              fill={col.light} rx={3}
+            />
+            {d?.data_available && (
+              <>
+                <rect x={cx - barW / 2} y={barY} width={barW} height={barH} fill={barColor} rx={3} opacity={0.85} />
+                <text x={cx} y={barY - 4} textAnchor="middle" fontSize={10} fontWeight="bold" fill={barColor}>
+                  {score.toFixed(0)}%
+                </text>
+              </>
+            )}
+            {!d?.data_available && (
+              <text x={cx} y={PAD.top + inner.h / 2} textAnchor="middle" fontSize={9} fill={axisColor}>데이터 없음</text>
+            )}
+            <text x={cx} y={PAD.top + inner.h + 14} textAnchor="middle" fontSize={9} fill={axisColor}>
+              {d?.label?.split(' ')[0] || k}
+            </text>
+            <text x={cx} y={PAD.top + inner.h + 26} textAnchor="middle" fontSize={8} fill={axisColor}>
+              {d?.label?.replace(/^[^\s]+\s/, '') || ''}
+            </text>
+          </g>
+        )
+      })}
+    </svg>
   )
 }
 
@@ -89,45 +235,78 @@ function PlaytimeBucketCard({ bucket, data }) {
   )
 }
 
-function RepresentativeReviewSection({ title, reviews, emptyMessage }) {
+function ReviewCard({ review, translation, translating }) {
+  const [showOriginal, setShowOriginal] = useState(false)
+
+  const quote = typeof review === 'string' ? review : review?.quote || review?.summary || ''
+  const reason = typeof review === 'string' ? '' : review?.reason || ''
+  const source = typeof review === 'string' ? '' : review?.source || ''
+  const reviewId = typeof review === 'string' ? '' : review?.review_id
+
+  const displayText = showOriginal ? quote : (translation || quote)
+  const hasTranslation = !!translation && translation !== quote
+
+  return (
+    <div className="rounded-lg border border-gray-200 dark:border-[#3a3a5e] bg-gray-50 dark:bg-[#2a2a3e] p-4">
+      <div className="flex flex-wrap items-center gap-2 mb-2">
+        {source && (
+          <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-300 border border-blue-200 dark:border-blue-700">
+            {source}
+          </span>
+        )}
+        {reviewId !== undefined && reviewId !== null && (
+          <span className="text-[11px] text-gray-400 dark:text-gray-500">
+            #{reviewId}
+          </span>
+        )}
+        <div className="ml-auto">
+          {translating && !translation && (
+            <span className="text-[11px] text-gray-400 dark:text-gray-500 animate-pulse">번역 중...</span>
+          )}
+          {hasTranslation && (
+            <button
+              onClick={() => setShowOriginal(p => !p)}
+              className="text-[11px] text-blue-500 dark:text-blue-400 hover:underline bg-transparent border-none cursor-pointer"
+            >
+              {showOriginal ? '번역 보기' : '원문 보기'}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {quote && (
+        <p className="text-sm leading-relaxed text-gray-700 dark:text-[#cccccc]">
+          {displayText}
+        </p>
+      )}
+
+      {!showOriginal && translation && translation !== quote && (
+        <p className="text-[11px] text-gray-400 dark:text-gray-500 mt-1">AI 번역</p>
+      )}
+
+      {reason && (
+        <p className="text-xs text-gray-400 dark:text-gray-500 mt-2">
+          {reason}
+        </p>
+      )}
+    </div>
+  )
+}
+
+function RepresentativeReviewSection({ title, reviews, translations, translating, emptyMessage }) {
   return (
     <div className="bg-white dark:bg-[#1e1e2e] rounded-xl p-7 border border-gray-200 dark:border-[#2a2a3e] shadow-sm">
       <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0] mb-3">{title}</h2>
       {reviews && reviews.length > 0 ? (
         <div className="grid gap-3">
-          {reviews.map((review, idx) => {
-            const quote = typeof review === 'string' ? review : review?.quote || review?.summary || ''
-            const reason = typeof review === 'string' ? '' : review?.reason || ''
-            const source = typeof review === 'string' ? '' : review?.source || ''
-            const reviewId = typeof review === 'string' ? '' : review?.review_id
-
-            return (
-              <div key={idx} className="rounded-lg border border-gray-200 dark:border-[#3a3a5e] bg-gray-50 dark:bg-[#2a2a3e] p-4">
-                <div className="flex flex-wrap items-center gap-2 mb-2">
-                  {source && (
-                    <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-300 border border-blue-200 dark:border-blue-700">
-                      {source}
-                    </span>
-                  )}
-                  {reviewId !== undefined && reviewId !== null && (
-                    <span className="text-[11px] text-gray-400 dark:text-gray-500">
-                      review_id: {reviewId}
-                    </span>
-                  )}
-                </div>
-                {quote && (
-                  <p className="text-sm leading-relaxed text-gray-700 dark:text-[#cccccc]">
-                    {quote}
-                  </p>
-                )}
-                {reason && (
-                  <p className="text-xs text-gray-400 dark:text-gray-500 mt-2">
-                    {reason}
-                  </p>
-                )}
-              </div>
-            )
-          })}
+          {reviews.map((review, idx) => (
+            <ReviewCard
+              key={idx}
+              review={review}
+              translation={translations?.[idx]}
+              translating={translating}
+            />
+          ))}
         </div>
       ) : (
         <p className="text-sm text-gray-400 dark:text-gray-500">{emptyMessage}</p>
@@ -153,6 +332,163 @@ function groupRepresentativeReviews(reviews) {
   return grouped
 }
 
+function SentimentTrendChart({ data, isDark }) {
+  const [tooltip, setTooltip] = useState(null)
+  if (!data?.monthly?.length) return null
+
+  const W = 800, H = 200, PAD = { top: 16, right: 20, bottom: 36, left: 48 }
+  const inner = { w: W - PAD.left - PAD.right, h: H - PAD.top - PAD.bottom }
+
+  const monthly = data.monthly
+  const inflectionMap = {}
+  ;(data.inflections || []).forEach(inf => { inflectionMap[inf.date] = inf })
+
+  const ratios = monthly.map(m => m.neg_ratio)
+  const minR = Math.min(...ratios)
+  const maxR = Math.max(...ratios)
+  const span = maxR - minR || 0.01
+
+  const xStep = inner.w / Math.max(monthly.length - 1, 1)
+  const toX = i => PAD.left + i * xStep
+  const toY = r => PAD.top + inner.h - ((r - minR) / span) * inner.h
+
+  const points = monthly.map((m, i) => `${toX(i).toFixed(1)},${toY(m.neg_ratio).toFixed(1)}`).join(' ')
+  const fillPoints = [
+    `${toX(0).toFixed(1)},${(PAD.top + inner.h).toFixed(1)}`,
+    ...monthly.map((m, i) => `${toX(i).toFixed(1)},${toY(m.neg_ratio).toFixed(1)}`),
+    `${toX(monthly.length - 1).toFixed(1)},${(PAD.top + inner.h).toFixed(1)}`,
+  ].join(' ')
+
+  const tickIndices = monthly.length <= 12
+    ? monthly.map((_, i) => i)
+    : monthly.reduce((acc, _, i) => {
+        if (i === 0 || i === monthly.length - 1 || i % Math.ceil(monthly.length / 10) === 0) acc.push(i)
+        return acc
+      }, [])
+
+  const gridLines = 4
+  const stroke = isDark ? '#3a3a5e' : '#e5e7eb'
+  const axisColor = isDark ? '#6b7280' : '#9ca3af'
+  const lineColor = '#6366f1'
+  const fillColor = isDark ? 'rgba(99,102,241,0.12)' : 'rgba(99,102,241,0.08)'
+
+  return (
+    <div className="relative w-full overflow-x-auto">
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        className="w-full"
+        style={{ minWidth: 480 }}
+        onMouseLeave={() => setTooltip(null)}
+      >
+        {/* grid */}
+        {Array.from({ length: gridLines + 1 }, (_, gi) => {
+          const y = PAD.top + (inner.h / gridLines) * gi
+          const val = maxR - (span / gridLines) * gi
+          return (
+            <g key={gi}>
+              <line x1={PAD.left} y1={y} x2={PAD.left + inner.w} y2={y} stroke={stroke} strokeWidth={1} />
+              <text x={PAD.left - 6} y={y + 4} textAnchor="end" fontSize={10} fill={axisColor}>
+                {(val * 100).toFixed(0)}%
+              </text>
+            </g>
+          )
+        })}
+
+        {/* fill */}
+        <polygon points={fillPoints} fill={fillColor} />
+
+        {/* line */}
+        <polyline points={points} fill="none" stroke={lineColor} strokeWidth={2} strokeLinejoin="round" />
+
+        {/* x-axis ticks */}
+        {tickIndices.map(i => (
+          <text key={i} x={toX(i)} y={PAD.top + inner.h + 16} textAnchor="middle" fontSize={9} fill={axisColor}>
+            {monthly[i].date.slice(0, 7)}
+          </text>
+        ))}
+
+        {/* inflection markers */}
+        {monthly.map((m, i) => {
+          const inf = inflectionMap[m.date]
+          if (!inf) return null
+          const cx = toX(i), cy = toY(m.neg_ratio)
+          const isSpike = inf.direction === 'negative_spike'
+          return (
+            <g key={i}>
+              <circle
+                cx={cx} cy={cy} r={6}
+                fill={isSpike ? '#ef4444' : '#22c55e'}
+                stroke={isDark ? '#1e1e2e' : '#fff'}
+                strokeWidth={2}
+                style={{ cursor: 'pointer' }}
+                onMouseEnter={() => setTooltip({ x: cx, y: cy, inf, m })}
+              />
+            </g>
+          )
+        })}
+
+        {/* hover dots */}
+        {monthly.map((m, i) => {
+          const inf = inflectionMap[m.date]
+          if (inf) return null
+          return (
+            <circle
+              key={i}
+              cx={toX(i)} cy={toY(m.neg_ratio)} r={3}
+              fill="transparent"
+              style={{ cursor: 'crosshair' }}
+              onMouseEnter={() => setTooltip({ x: toX(i), y: toY(m.neg_ratio), m })}
+            />
+          )
+        })}
+
+        {/* tooltip */}
+        {tooltip && (() => {
+          const { x, y, inf, m } = tooltip
+          const tw = 160, th = inf ? 72 : 44
+          const tx = Math.min(x + 10, W - tw - 4)
+          const ty = Math.max(y - th - 10, PAD.top)
+          const bg = isDark ? '#1e1e2e' : '#fff'
+          const border = isDark ? '#3a3a5e' : '#e5e7eb'
+          const fg = isDark ? '#e0e0e0' : '#111827'
+          const sub = isDark ? '#9ca3af' : '#6b7280'
+          return (
+            <g>
+              <rect x={tx} y={ty} width={tw} height={th} rx={6} fill={bg} stroke={border} strokeWidth={1} />
+              <text x={tx + 8} y={ty + 16} fontSize={10} fontWeight="bold" fill={fg}>{m.date.slice(0, 7)}</text>
+              <text x={tx + 8} y={ty + 30} fontSize={10} fill={sub}>
+                부정비율 {(m.neg_ratio * 100).toFixed(1)}%  총 {m.total.toLocaleString()}건
+              </text>
+              {inf && (
+                <>
+                  <text x={tx + 8} y={ty + 46} fontSize={10} fill={inf.direction === 'negative_spike' ? '#ef4444' : '#22c55e'}>
+                    {inf.direction === 'negative_spike' ? '↑ 부정 급증' : '↓ 긍정 회복'} {(Math.abs(inf.delta) * 100).toFixed(0)}%p
+                  </text>
+                  {inf.patch_title && (
+                    <text x={tx + 8} y={ty + 60} fontSize={9} fill={sub}>
+                      {inf.patch_title.slice(0, 22)}{inf.patch_title.length > 22 ? '…' : ''}
+                    </text>
+                  )}
+                </>
+              )}
+            </g>
+          )
+        })()}
+      </svg>
+
+      {/* legend */}
+      <div className="flex gap-4 mt-2 text-xs text-gray-500 dark:text-gray-400">
+        <span className="flex items-center gap-1">
+          <span className="inline-block w-3 h-3 rounded-full bg-red-500" /> 부정 급증
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="inline-block w-3 h-3 rounded-full bg-green-500" /> 긍정 회복
+        </span>
+      </div>
+    </div>
+  )
+}
+
 function GameDetailPage({ isDark, toggleDark }) {
   const { id } = useParams()
   const navigate = useNavigate()
@@ -161,6 +497,10 @@ function GameDetailPage({ isDark, toggleDark }) {
   const [summary, setSummary] = useState(null)
   const [playtimeAnalysis, setPlaytimeAnalysis] = useState(null)
   const [criticSummary, setCriticSummary] = useState(null)
+  const [events, setEvents] = useState(null)
+  const [eventsLoading, setEventsLoading] = useState(true)
+  const [sentimentTrend, setSentimentTrend] = useState(null)
+  const [reviewTranslations, setReviewTranslations] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
@@ -176,38 +516,78 @@ function GameDetailPage({ isDark, toggleDark }) {
       setError(null)
 
       try {
-        const gamesRes = await fetch(`${API_BASE}/api/v1/games/`)
+        const [gamesRes, summaryRes, playtimeRes, criticRes, eventsRes, trendRes] = await Promise.all([
+          fetch(`${API_BASE}/api/v1/games/`),
+          fetch(`${API_BASE}/api/v1/games/${id}/summary`),
+          fetch(`${API_BASE}/api/v1/games/${id}/playtime-analysis`),
+          fetch(`${API_BASE}/api/v1/games/${id}/critic-summary`),
+          fetch(`${API_BASE}/api/v1/games/${id}/events`).catch(() => null),
+          fetch(`${API_BASE}/api/v1/games/${id}/sentiment-trend`).catch(() => null),
+        ])
+
         if (gamesRes.ok) {
           const gamesData = await gamesRes.json()
           const found = gamesData.find(g => g.id === parseInt(id))
           setGame(found || null)
         }
 
-        const summaryRes = await fetch(`${API_BASE}/api/v1/games/${id}/summary`)
         if (summaryRes.ok) {
           setSummary(await summaryRes.json())
         } else if (summaryRes.status === 404) {
           setError('아직 AI 요약본이 없습니다.')
         }
 
-        const playtimeRes = await fetch(`${API_BASE}/api/v1/games/${id}/playtime-analysis`)
         if (playtimeRes.ok) {
           setPlaytimeAnalysis(await playtimeRes.json())
         }
 
-        const criticRes = await fetch(`${API_BASE}/api/v1/games/${id}/critic-summary`)
         if (criticRes.ok) {
           setCriticSummary(await criticRes.json())
+        }
+
+        if (eventsRes?.ok) {
+          setEvents(await eventsRes.json())
+        }
+
+        if (trendRes?.ok) {
+          setSentimentTrend(await trendRes.json())
         }
       } catch {
         setError('서버에 연결할 수 없습니다.')
       } finally {
         setLoading(false)
+        setEventsLoading(false)
       }
     }
 
     fetchData()
   }, [id])
+
+  useEffect(() => {
+    if (!summary?.representative_reviews?.length) return
+
+    const grouped = groupRepresentativeReviews(summary.representative_reviews)
+    const steamQuotes = grouped.steam.slice(0, 3).map(r => (typeof r === 'string' ? r : r?.quote || r?.summary || ''))
+    const criticQuotes = grouped.metacritic.slice(0, 3).map(r => (typeof r === 'string' ? r : r?.quote || r?.summary || ''))
+    const allQuotes = [...steamQuotes, ...criticQuotes].filter(Boolean)
+
+    if (!allQuotes.length) return
+
+    fetch(`${API_BASE}/api/v1/translate/batch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ texts: allQuotes }),
+    })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        const steamTr = data?.translations?.slice(0, steamQuotes.length) ?? []
+        const criticTr = data?.translations?.slice(steamQuotes.length) ?? []
+        setReviewTranslations({ steam: steamTr, metacritic: criticTr })
+      })
+      .catch(() => setReviewTranslations({ steam: [], metacritic: [] }))
+  }, [summary])
+
+  const translating = !!summary?.representative_reviews?.length && reviewTranslations === null
 
   if (!game && !loading) return <div className="p-10">게임을 찾을 수 없습니다.</div>
 
@@ -227,7 +607,13 @@ function GameDetailPage({ isDark, toggleDark }) {
           />
         )}
 
-        <div className="absolute top-4 right-6 z-10">
+        <div className="absolute top-4 right-6 z-10 flex items-center gap-4">
+          <button
+            onClick={() => navigate('/', { state: { compareId: parseInt(id) } })}
+            className="text-white/70 text-xs cursor-pointer hover:text-white transition-colors bg-transparent border border-white/20 hover:border-white/50 rounded-lg px-3 py-1.5"
+          >
+            ⇄ 다른 게임과 비교
+          </button>
           <span
             onClick={() => navigate('/')}
             className="text-white/70 text-xs cursor-pointer hover:text-white transition-colors"
@@ -315,11 +701,15 @@ function GameDetailPage({ isDark, toggleDark }) {
                       <RepresentativeReviewSection
                         title="Steam 대표 리뷰"
                         reviews={groupedReviews.steam.slice(0, 3)}
+                        translations={reviewTranslations?.steam}
+                        translating={translating}
                         emptyMessage="Steam 대표 리뷰가 없습니다."
                       />
                       <RepresentativeReviewSection
                         title="Metacritic 대표 리뷰"
                         reviews={groupedReviews.metacritic.slice(0, 3)}
+                        translations={reviewTranslations?.metacritic}
+                        translating={translating}
                         emptyMessage="Metacritic 대표 리뷰가 없습니다."
                       />
                     </>
@@ -414,14 +804,24 @@ function GameDetailPage({ isDark, toggleDark }) {
             {!playtimeAnalysis ? (
               <p className="text-sm text-gray-400 dark:text-gray-500">플레이타임 분석 데이터가 없습니다.</p>
             ) : (
-              <div className="flex gap-4">
-                {['early', 'mid', 'late'].map(bucket => (
-                  <PlaytimeBucketCard
-                    key={bucket}
-                    bucket={bucket}
-                    data={playtimeAnalysis.buckets?.[bucket]}
-                  />
-                ))}
+              <div className="flex flex-col gap-6">
+                <div className="flex items-end gap-8">
+                  <PlaytimeBarChart buckets={playtimeAnalysis.buckets} isDark={isDark} />
+                  <div className="flex flex-col gap-1 text-xs text-gray-400 dark:text-gray-500 pb-8">
+                    <span className="flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-sm bg-green-500" /> 긍정적</span>
+                    <span className="flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-sm bg-red-500" /> 부정적</span>
+                    <span className="flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-sm bg-amber-400" /> 중립</span>
+                  </div>
+                </div>
+                <div className="flex gap-4">
+                  {['early', 'mid', 'late'].map(bucket => (
+                    <PlaytimeBucketCard
+                      key={bucket}
+                      bucket={bucket}
+                      data={playtimeAnalysis.buckets?.[bucket]}
+                    />
+                  ))}
+                </div>
               </div>
             )}
           </div>
@@ -492,6 +892,50 @@ function GameDetailPage({ isDark, toggleDark }) {
                     ))}
                   </div>
                 )}
+              </div>
+            )}
+          </div>
+        )}
+        {/* ── Sprint 5: 감성 트렌드 차트 ── */}
+        {!loading && (
+          <div className="bg-white dark:bg-[#1e1e2e] rounded-xl p-7 border border-gray-200 dark:border-[#2a2a3e] shadow-sm">
+            <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0] mb-1">감성 트렌드</h2>
+            <p className="text-xs text-gray-400 dark:text-gray-500 mb-4">
+              Steam 리뷰 월별 부정 비율 추이 — 마커는 여론 변곡점
+            </p>
+            {sentimentTrend
+              ? <SentimentTrendChart data={sentimentTrend} isDark={isDark} />
+              : <p className="text-sm text-gray-400 dark:text-gray-500">감성 트렌드 데이터가 없습니다.</p>
+            }
+          </div>
+        )}
+
+        {/* ── Sprint 5: 이슈 트래킹 ── */}
+        {!loading && (
+          <div className="bg-white dark:bg-[#1e1e2e] rounded-xl p-7 border border-gray-200 dark:border-[#2a2a3e] shadow-sm">
+            <div className="flex items-center justify-between mb-1">
+              <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0]">이슈 트래킹</h2>
+              {events?.events?.length > 0 && (
+                <span className="text-xs text-gray-400 dark:text-gray-500">
+                  {events.events.length}개 이벤트 감지됨
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-gray-400 dark:text-gray-500 mb-4">
+              패치·DLC·논란 등 여론 변곡점과 해당 시점 반응
+            </p>
+
+            {eventsLoading ? (
+              <p className="text-sm text-gray-400 dark:text-gray-500">불러오는 중...</p>
+            ) : !events ? (
+              <p className="text-sm text-gray-400 dark:text-gray-500">이슈 트래킹 데이터가 없습니다.</p>
+            ) : (
+              <div className="relative flex flex-col gap-2">
+                {/* 타임라인 수직선 */}
+                <div className="absolute left-[27px] top-4 bottom-4 w-px bg-gray-200 dark:bg-[#3a3a5e]" />
+                {events.events.map(event => (
+                  <EventCard key={event.id} event={event} />
+                ))}
               </div>
             )}
           </div>

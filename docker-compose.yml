@@ -17,6 +17,7 @@ services:
       - ./database/06_migration_sprint3_m003.sql:/docker-entrypoint-initdb.d/06_migration_sprint3_m003.sql
       - ./database/07_migration_sprint3_m005.sql:/docker-entrypoint-initdb.d/07_migration_sprint3_m005.sql
       - ./database/08_migration_sprint4.sql:/docker-entrypoint-initdb.d/08_migration_sprint4.sql
+      - ./database/09_migration_sprint5_events.sql:/docker-entrypoint-initdb.d/09_migration_sprint5_events.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s
@@ -74,7 +75,7 @@ services:
       - LOCAL_MAP_MODEL=gemma3:4b
       - GROQ_API_KEY=${GROQ_API_KEY}
       - GROQ_MODEL=${GROQ_MODEL:-meta-llama/llama-4-scout-17b-16e-instruct}
-      - PYTHONPATH=/workspace/backend:/workspace/ai-pipeline
+      - PYTHONPATH=/workspace/backend:/workspace/ai-pipeline:/workspace/crawling/steam
     command: sh -c "pip install -r requirements.txt && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
     depends_on:
       postgres:
