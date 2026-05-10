@@ -21,7 +21,7 @@ def is_spam_review(text: str) -> bool:
     if len(words) < SPAM_MIN_WORDS:
         return True
 
-    if re.search(rf"(.)\\1{{{SPAM_REPEAT_LIMIT},}}", cleaned):
+    if re.search(rf"(.)\1{{{SPAM_REPEAT_LIMIT},}}", cleaned):
         return True
 
     # Long-form reviews are more likely to include intentional repetition.

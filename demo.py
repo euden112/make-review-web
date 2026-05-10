@@ -45,6 +45,14 @@ GAME_DISPLAY_NAMES = {
     "crimson-desert":              "Crimson Desert",
 }
 
+GAME_STEAM_APPIDS = {
+    "grand-theft-auto-v":          "271590",
+    "elden-ring":                  "1245620",
+    "playerunknowns-battlegrounds":"578080",
+    "clair-obscur-expedition-33":  "2679460",
+    "crimson-desert":              "2763940",
+}
+
 LANG_DISPLAY = {
     "en": "영어권",
     "ko": "한국어권",
@@ -189,6 +197,8 @@ def show_review_counts(label: str = "현재 DB 리뷰 현황"):
         ],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
     )
     total_r = subprocess.run(
         [
@@ -199,11 +209,13 @@ def show_review_counts(label: str = "현재 DB 리뷰 현황"):
         ],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
     )
-    total = total_r.stdout.strip()
+    total = (total_r.stdout or "").strip()
 
     print(f"\n   {B}{label}{RESET}")
-    for line in r.stdout.strip().splitlines():
+    for line in (r.stdout or "").strip().splitlines():
         parts = line.strip().split("\t", 1)
         if len(parts) == 2:
             name, cnt = parts[0].strip(), parts[1].strip()
@@ -267,8 +279,10 @@ def send_to_api(platform: str):
         cwd=CRAWLING_DIR,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
     )
-    for line in r.stdout.splitlines():
+    for line in (r.stdout or "").splitlines():
         if line.strip():
             info(line.strip())
     if r.returncode == 0:
@@ -286,10 +300,10 @@ def get_game_ids() -> dict[str, int]:
             "-t", "-A", "-F", "\t",
             "-c", "SELECT id, normalized_title FROM games ORDER BY id;",
         ],
-        capture_output=True, text=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     mapping: dict[str, int] = {}
-    for line in r.stdout.strip().splitlines():
+    for line in (r.stdout or "").strip().splitlines():
         parts = line.strip().split("\t", 1)
         if len(parts) == 2 and parts[0].isdigit():
             mapping[parts[1].strip()] = int(parts[0])
@@ -297,6 +311,159 @@ def get_game_ids() -> dict[str, int]:
 
 
 # ─── 요약 트리거 & 폴링 ──────────────────────────────────────────────────────
+def trigger_event_tracking(game_id: int, force: bool = False) -> int:
+    r = httpx.post(
+        f"{BACKEND_URL}/api/v1/games/{game_id}/events/run",
+        params={"force": "true"} if force else None,
+        timeout=15,
+    )
+    return r.status_code
+
+
+def fetch_event_stats(game_id: int) -> dict | None:
+    try:
+        r = httpx.get(f"{BACKEND_URL}/api/v1/games/{game_id}/events/stats", timeout=10)
+        if r.status_code == 200:
+            return r.json()
+    except Exception:
+        pass
+    return None
+
+
+def fetch_events(game_id: int, limit: int = 5) -> list[dict]:
+    try:
+        r = httpx.get(
+            f"{BACKEND_URL}/api/v1/games/{game_id}/events",
+            params={"limit": limit},
+            timeout=10,
+        )
+        if r.status_code == 200:
+            return r.json().get("events", [])
+    except Exception:
+        pass
+    return []
+
+
+def verify_crawlers(targets: dict[str, int]):
+    """크롤러를 직접 임포트해서 Steam API 통신 및 변곡점 감지를 검증."""
+    import sys as _sys
+    steam_dir = str(CRAWLING_DIR / "steam")
+    if steam_dir not in _sys.path:
+        _sys.path.insert(0, steam_dir)
+
+    try:
+        from histogram_crawler import fetch_histogram, detect_inflection_points
+        from news_crawler import fetch_news, match_news_to_inflection
+    except ImportError as e:
+        warn(f"크롤러 임포트 실패 — crawling/steam 패키지 확인 필요: {e}")
+        return
+
+    print(f"\n   {B}[ 크롤러 직접 실행 검증 ]{RESET}")
+
+    for slug in targets:
+        appid = GAME_STEAM_APPIDS.get(slug)
+        name = GAME_DISPLAY_NAMES.get(slug, slug)
+        if not appid:
+            warn(f"Steam appid 없음: {slug}")
+            continue
+
+        print(f"\n   {C}{name}{RESET}  (appid={appid})")
+
+        # Histogram
+        try:
+            monthly = fetch_histogram(appid)
+            if monthly:
+                ok(f"Histogram: {len(monthly)}개월 데이터 수신")
+                inflections = detect_inflection_points(monthly)
+                if inflections:
+                    ok(f"변곡점 {len(inflections)}개 감지")
+                    for inf in inflections[:3]:
+                        direction_label = "부정 급증" if inf.direction == "negative_spike" else "긍정 회복"
+                        info(f"  {inf.month_start}  {direction_label}  Δ{inf.delta:+.0%}  (부정비율 {inf.neg_ratio:.0%})")
+                else:
+                    info("변곡점 없음 (±20%p 기준 미달)")
+            else:
+                warn("Histogram 데이터 없음 (Steam API 응답 없음)")
+                inflections = []
+        except Exception as e:
+            warn(f"Histogram 크롤러 오류: {e}")
+            inflections = []
+
+        # News
+        try:
+            news = fetch_news(appid)
+            if news:
+                type_counts: dict[str, int] = {}
+                for ev in news:
+                    type_counts[ev.event_type] = type_counts.get(ev.event_type, 0) + 1
+                counts_str = "  ".join(f"{t}:{c}" for t, c in sorted(type_counts.items()))
+                ok(f"News: {len(news)}개 항목 수신  ({counts_str})")
+
+                if inflections:
+                    matched = 0
+                    for inf in inflections[:3]:
+                        matched_ev = match_news_to_inflection(inf.month_start, news)
+                        if matched_ev:
+                            matched += 1
+                            direction_label = "부정 급증" if inf.direction == "negative_spike" else "긍정 회복"
+                            info(f"  매칭: {inf.month_start} {direction_label} ← [{matched_ev.event_type}] {matched_ev.title[:50]}")
+                    if matched == 0:
+                        info("변곡점 ↔ News 매칭 없음 (±30일 내 관련 기사 없음)")
+            else:
+                warn("News 데이터 없음 (Steam API 응답 없음)")
+        except Exception as e:
+            warn(f"News 크롤러 오류: {e}")
+
+
+def poll_and_display_events(game_id: int, name: str, timeout: int = 120):
+    """이슈 트래킹 파이프라인 완료까지 폴링 후 결과 표시."""
+    deadline = time.time() + timeout
+    dots = 0
+    stats = None
+
+    print(f"   {name} 이슈 트래킹 대기 중 ", end="", flush=True)
+    while time.time() < deadline:
+        stats = fetch_event_stats(game_id)
+        if stats and stats.get("total_events", 0) > 0:
+            print(f" {G}완료{RESET}")
+            break
+        dots = (dots + 1) % 4
+        print("." * dots + " " * (3 - dots), end="\r", flush=True)
+        print(f"   {name} 이슈 트래킹 대기 중 ", end="", flush=True)
+        time.sleep(10)
+    else:
+        print(f" {Y}타임아웃{RESET}")
+
+    if not stats or stats.get("total_events", 0) == 0:
+        warn(f"{name}: 이슈 트래킹 결과 없음 (백엔드 로그 확인: docker compose logs -f backend)")
+        return
+
+    total = stats["total_events"]
+    spikes = stats["negative_spikes"]
+    recoveries = stats["positive_recoveries"]
+    with_summary = stats.get("events_with_summary", 0)
+
+    ok(f"{name}: 이벤트 {total}개  (부정급증 {spikes}개 / 긍정회복 {recoveries}개 / 요약완료 {with_summary}개)")
+
+    events = fetch_events(game_id, limit=5)
+    if events:
+        print(f"\n   {B}최근 이슈 트래킹 이벤트{RESET}")
+        for ev in events:
+            direction_label = "부정 급증" if ev.get("direction") == "negative_spike" else "긍정 회복"
+            etype = ev.get("event_type", "?")
+            edate = ev.get("event_date", "?")
+            title = ev.get("title") or "(제목 없음)"
+            delta = ev.get("sentiment_delta")
+            delta_str = f"  Δ{delta:+.0%}" if delta is not None else ""
+            col = R if ev.get("direction") == "negative_spike" else G
+            print(f"   {col}●{RESET} {edate}  {direction_label}  [{etype}]{delta_str}")
+            print(f"     {D}{title[:70]}{RESET}")
+            summary = ev.get("summary")
+            if summary and summary.get("summary_text"):
+                text = summary["summary_text"][:100].replace("\n", " ")
+                print(f"     {D}→ {text}{RESET}")
+
+
 def trigger_summarize(game_id: int, force: bool = False) -> int:
     r = httpx.post(
         f"{BACKEND_URL}/api/v1/games/{game_id}/summarize",
@@ -527,6 +694,8 @@ def main():
                         help="요약 대기 최대 시간(초) (기본: 600)")
     parser.add_argument("--force", action="store_true",
                         help="커서를 무시하고 전체 리뷰 강제 재처리 (오류 후 재실행 시 사용)")
+    parser.add_argument("--skip-events", action="store_true",
+                        help="이슈 트래킹 파이프라인 건너뜀")
     args = parser.parse_args()
 
     target_games: list[str] = args.games or DEMO_GAMES
@@ -636,6 +805,28 @@ def main():
         else:
             warn(f"타임아웃 ({args.timeout}초 초과): {name}")
 
+    # ── STEP 10: 이슈 트래킹 파이프라인 ──────────────────────────────────────────
+    step(10, "이슈 트래킹  (크롤러 직접 검증 → 백엔드 파이프라인 → 결과 폴링)")
+    if args.skip_events:
+        warn("--skip-events: 이슈 트래킹 건너뜀")
+    else:
+        # 10a: 크롤러 직접 실행 검증
+        info("Steam Histogram · News API 직접 호출 검증 중...")
+        verify_crawlers(targets)
+
+        # 10b: 백엔드 이슈 트래킹 파이프라인 트리거
+        print(f"\n   {B}[ 백엔드 파이프라인 실행 ]{RESET}")
+        for slug, gid in targets.items():
+            name = GAME_DISPLAY_NAMES.get(slug, slug)
+            code = trigger_event_tracking(gid, force=args.force)
+            ok(f"[{gid}]  {name}  →  HTTP {code}  (백그라운드 실행 중)")
+
+        # 10c: 결과 폴링 & 표시
+        print(f"\n   {B}[ 결과 대기 (최대 120초 / 게임) ]{RESET}")
+        for slug, gid in targets.items():
+            name = GAME_DISPLAY_NAMES.get(slug, slug)
+            poll_and_display_events(gid, name, timeout=120)
+
     # ── 비교 출력 ──────────────────────────────────────────────────────────────
     if results:
         display_comparison_header(len(results))
@@ -652,6 +843,7 @@ def main():
     print(f"  {B}데모 완료{RESET}  {status}")
     print(f"  {D}Swagger UI : http://localhost:8000/docs{RESET}")
     print(f"  {D}DB 어드민  : http://localhost:8080{RESET}")
+    print(f"  {D}이슈 트래킹: http://localhost:8000/api/v1/games/{{id}}/events{RESET}")
     print(f"{B}{C}{'═' * 64}{RESET}\n")
 
 
