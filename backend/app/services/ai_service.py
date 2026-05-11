@@ -137,7 +137,7 @@ def _select_platform_representative_reviews(
 
 
 async def get_pipeline_tasks(game_id: int, db) -> list[tuple[str, str | None]]:
-    """Sprint 4: unified 1회만 실행. regional 파이프라인 제거."""
+    """unified 1회만 실행."""
     return [("unified", None)]
 
 
@@ -212,7 +212,7 @@ async def _upsert_critic_summary(db, game_id: int, ai_result: FinalSummary) -> N
 
 
 async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | None = None, force: bool = False):
-    """AI 요약 파이프라인 실행 (Sprint 4: unified 전용, regional 제거)."""
+    """AI 요약 파이프라인 실행 (unified 전용)."""
     cursor_language_code = "unified"
     review_language = None
 

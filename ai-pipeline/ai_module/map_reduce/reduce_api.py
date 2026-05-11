@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -12,6 +13,15 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+
+
+ASPECT_KEY_MAP = {
+    "그래픽": "graphics", "비주얼": "graphics", "graphics": "graphics", "visual": "graphics",
+    "조작": "controls", "조작감": "controls", "controls": "controls", "control": "controls",
+    "최적화": "optimization", "성능": "optimization", "optimization": "optimization", "performance": "optimization",
+    "콘텐츠": "content", "스토리": "content", "content": "content", "story": "content",
+    "가격": "price_value", "가성비": "price_value", "value": "price_value", "price": "price_value",
+}
 
 
 @dataclass(slots=True)
@@ -52,6 +62,13 @@ REDUCE_SYSTEM_PROMPT = """
 You are a game review synthesis engine.
 Return JSON only. No markdown, no code fences.
 
+Each [map_N] input follows this structure:
+PROS: bullet points of positive points
+CONS: bullet points of negative points / issues
+ASPECTS: aspects discussed (graphics / controls / optimization / content / price_value)
+IDS: evidence review_ids
+Use ASPECTS fields to determine which aspect_scores to populate — only score aspects that appear in at least one chunk's ASPECTS list.
+
 Required top-level keys:
 - unified: {
     one_liner: one sentence overall verdict (Korean),
@@ -61,7 +78,12 @@ Required top-level keys:
       optimization: {label, score},
       content: {label, score},
       price_value: {label, score}
-    }  (scores 0.0–10.0; label is a short Korean adjective),
+    }  (scores 0.0–10.0 with anchors:
+       2.0 = severe issues reported by majority,
+       5.0 = mixed reception with notable complaints,
+       7.0 = generally praised with minor flaws,
+       9.0 = exceptional, widely acclaimed;
+       label is a short Korean adjective),
     sentiment_overall: one of [positive, mixed, negative],
     sentiment_score: number in range 0..100,
     pros: [string] at least 3 items,
@@ -84,6 +106,8 @@ Rules:
 - critic is independent from user sentiment; never compare or mention divergence.
 - If evidence is missing for an aspect, omit it rather than fabricate.
 - If a segment input array is empty, return null for that segment.
+- If [previous_summary] is provided, use it as baseline context. On any point where new map groups conflict with it, the new map evidence takes precedence. Do not reproduce prior sentences verbatim.
+- sentiment_overall and sentiment_score MUST be consistent: positive → score >= 60, negative → score <= 45, mixed → 40 <= score <= 65.
 
 Rules about repetition:
 - full_text MUST NOT begin with the same subject or conclusion as one_liner. Open with a concrete detail.
@@ -94,10 +118,8 @@ Rules about repetition:
 
 def _safe_parse_json(text: str) -> dict[str, Any]:
     raw = text.strip()
-    if raw.startswith("```"):
-        raw = raw.strip("`")
-        if raw.startswith("json"):
-            raw = raw[4:].strip()
+    raw = re.sub(r"^```[a-zA-Z]*\n?", "", raw)
+    raw = re.sub(r"\n?```$", "", raw).strip()
     return json.loads(raw)
 
 
@@ -125,8 +147,11 @@ def _normalize_sentiment_score(value: Any) -> float | None:
 def _parse_bucket(data: Any) -> BucketSummary | None:
     if not isinstance(data, dict):
         return None
+    summary_str = str(data.get("summary", "")).strip()
+    if not summary_str:
+        return None
     return BucketSummary(
-        summary=str(data.get("summary", "")).strip(),
+        summary=summary_str,
         sentiment_overall=_normalize_sentiment_overall(data.get("sentiment_overall")),
         sentiment_score=_normalize_sentiment_score(data.get("sentiment_score")),
         pros=_to_string_list(data.get("pros", [])),
@@ -137,6 +162,27 @@ def _parse_bucket(data: Any) -> BucketSummary | None:
 
 class ReduceParseError(ValueError):
     pass
+
+
+def _is_valid_unified(unified: dict) -> bool:
+    """unified 요약의 핵심 필드 유효성 + sentiment 일관성 검증."""
+    if not (
+        str(unified.get("one_liner", "")).strip()
+        and str(unified.get("full_text", "")).strip()
+        and len(_to_string_list(unified.get("pros", []))) >= 2
+        and len(_to_string_list(unified.get("cons", []))) >= 1
+        and _normalize_sentiment_overall(unified.get("sentiment_overall")) is not None
+    ):
+        return False
+
+    overall = _normalize_sentiment_overall(unified.get("sentiment_overall"))
+    score = _normalize_sentiment_score(unified.get("sentiment_score"))
+    if overall is not None and score is not None:
+        if overall == "positive" and score < 60:
+            return False
+        if overall == "negative" and score > 45:
+            return False
+    return True
 
 
 def classify_reduce_error(exc: Exception) -> tuple[str, bool]:
@@ -179,8 +225,15 @@ def _build_user_prompt(
     prior_summary_text: str | None,
     max_items_map: dict[str, int] | None = None,
     chunk_length_map: dict[str, int] | None = None,
+    representative_quotes: list[str] | None = None,
 ) -> str:
     sections: list[str] = [f"language={language_code}"]
+
+    if representative_quotes:
+        block = "[representative_quotes] (use to ground pros/cons and full_text in actual review language)\n"
+        for i, q in enumerate(representative_quotes, 1):
+            block += f"[Q{i}] {q}\n"
+        sections.append(block.rstrip())
 
     if score_anchors:
         block = "[score_anchors]\n"
@@ -190,7 +243,16 @@ def _build_user_prompt(
             block += f"metacritic_critic_avg: {score_anchors['metacritic_critic_avg']:.2f}\n"
         if score_anchors.get("metacritic_user_avg") is not None:
             block += f"metacritic_user_avg: {score_anchors['metacritic_user_avg']:.2f}\n"
-        block += "→ unified.sentiment_score must be calibrated to these numbers."
+        if score_anchors.get("steam_recommend_ratio") is not None:
+            ratio = score_anchors["steam_recommend_ratio"]
+            block += (
+                f"→ unified.sentiment_score MUST equal round({ratio:.0f}) ± 8. "
+                "This is anchored to actual recommendation ratio. "
+                "Do NOT lower it based on volume of negative content in chunks "
+                "(negative reviews are inherently more verbose)."
+            )
+        else:
+            block += "→ unified.sentiment_score must be calibrated to these numbers."
         sections.append(block)
 
     if category_frequency:
@@ -207,11 +269,23 @@ def _build_user_prompt(
             block += f"→ pros 후보: {', '.join(pros_hints)}\n"
         if cons_hints:
             block += f"→ cons 후보: {', '.join(cons_hints)}\n"
-        block += "→ keywords must include top-frequency categories."
+        block += "→ keywords must include top-frequency categories.\n"
+        mapped = [
+            f"{cat} → aspect_scores.{ASPECT_KEY_MAP[cat.lower()]}"
+            for cat, _, _ in category_frequency
+            if cat.lower() in ASPECT_KEY_MAP
+        ]
+        if mapped:
+            block += f"→ category-to-aspect mapping: {'; '.join(mapped)}"
         sections.append(block)
 
     if prior_summary_text:
-        sections.append(f"[previous_summary]\n{prior_summary_text[:1200]}")
+        sections.append(
+            f"[previous_summary] (prior synthesis — use as baseline context; "
+            f"update any points where new map groups provide conflicting evidence; "
+            f"new map evidence takes precedence over this on any conflicting points)\n"
+            f"{prior_summary_text[:1200]}"
+        )
 
     # 그룹별 map 요약 추가
     # 그룹별로 최대 아이템 수와 청크 길이를 조정하여 토큰 사용을 최적화
@@ -248,6 +322,7 @@ async def run_reduce_stage(
     score_anchors: dict[str, float | None] | None = None,
     category_frequency: list[tuple[str, int, float]] | None = None,
     prior_summary_text: str | None = None,
+    representative_quotes: list[str] | None = None,
     # 하위 호환: map_summaries 단독 전달 시 all 그룹으로 처리
     map_summaries: list[str] | None = None,
 ) -> FinalSummary:
@@ -287,7 +362,7 @@ async def run_reduce_stage(
         "critic": min(6, len(grouped_summaries.get("critic", []))),
     }
     chunk_length_map = {
-        "all": 700,
+        "all": 900,
         "early": 500,
         "mid": 500,
         "late": 500,
@@ -332,6 +407,7 @@ async def run_reduce_stage(
         prior_summary_text=prior_summary_text,
         max_items_map=max_items_map,
         chunk_length_map=chunk_length_map,
+        representative_quotes=representative_quotes,
     )
 
 
@@ -352,6 +428,28 @@ async def run_reduce_stage(
         token_out = int(response.usage.completion_tokens or 0)
 
         unified = parsed.get("unified", {})
+
+        if not _is_valid_unified(unified):
+            logger.warning("reduce output failed validation, retrying once")
+            retry_response = await asyncio.wait_for(
+                _generate_reduce_response(client, model_name, REDUCE_SYSTEM_PROMPT, user_prompt),
+                timeout=timeout_sec,
+            )
+            retry_raw = (retry_response.choices[0].message.content or "").strip()
+            try:
+                retry_parsed = _safe_parse_json(retry_raw)
+                retry_unified = retry_parsed.get("unified", {})
+                if _is_valid_unified(retry_unified):
+                    parsed = retry_parsed
+                    unified = retry_unified
+                    token_in += int(retry_response.usage.prompt_tokens or 0)
+                    token_out += int(retry_response.usage.completion_tokens or 0)
+                    logger.info("reduce retry succeeded validation")
+                else:
+                    logger.warning("reduce retry also failed validation, using first result")
+            except Exception as exc:
+                logger.warning("reduce retry parse failed: %s; using first result", exc)
+
         playtime = parsed.get("playtime", {}) or {}
         critic_data = parsed.get("critic")
 

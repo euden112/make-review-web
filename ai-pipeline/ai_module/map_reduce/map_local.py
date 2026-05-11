@@ -131,8 +131,11 @@ async def run_map_stage(
                 return MapResult(chunk_no=chunk.chunk_no, summary=cached_summary, cached=True, review_ids=chunk.review_ids)
 
             prompt = (
-                "Summarize the following game review chunk in <= 6 sentences. "
-                "Include pros, cons, technical issues(optimization, bugs), and evidence review_id.\n\n"
+                "Summarize this game review chunk using the following structure:\n"
+                "PROS: up to 4 bullet points (e.g. '- smooth combat system')\n"
+                "CONS: up to 4 bullet points (e.g. '- frequent crashes on launch')\n"
+                "ASPECTS: (list only aspects actually discussed: graphics / controls / optimization / content / price_value)\n"
+                "IDS: (comma-separated review_ids as evidence)\n\n"
                 f"{chunk.text}"
             )
             try:

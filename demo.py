@@ -605,7 +605,7 @@ def main():
     step(8, "AI Map-Reduce 요약 파이프라인 시작")
     info(f"Map    단계: {model} (Ollama 로컬) — 청크별 요약")
     info(f"Reduce 단계: Groq API ({groq_model}) — 최종 구조화 요약")
-    info("파이프라인: 통합 요약(unified) + 언어권별 시각(regional) 동시 생성")
+    info("파이프라인: 통합 요약(unified) 생성")
     print()
     for slug, gid in targets.items():
         name = GAME_DISPLAY_NAMES.get(slug, slug)
@@ -632,7 +632,7 @@ def main():
                 perspectives[slug] = persp
                 ok(f"언어권별 시각 {len(persp)}개 수신: {name}")
             else:
-                info(f"언어권별 시각 아직 없음 (regional 파이프라인 처리 중일 수 있음)")
+                info(f"언어권별 시각 아직 없음")
         else:
             warn(f"타임아웃 ({args.timeout}초 초과): {name}")
 

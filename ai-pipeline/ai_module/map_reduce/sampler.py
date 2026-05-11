@@ -309,23 +309,12 @@ def stratified_select_reviews(
 
     selected = steam_pos + steam_neg + meta_low + meta_mid + meta_high
 
-    # 진단 로깅: 선택 후 playtime 분포
-    selected_with_playtime = [r for r in selected if r.playtime_hours is not None and r.playtime_hours > 0]
     logger.info(
-        "stratified_selected: total=%d with_playtime=%d without_playtime=%d ratio=%.1f%%",
+        "stratified_selected: total=%d steam_pos=%d steam_neg=%d meta=%d",
         len(selected),
-        len(selected_with_playtime),
-        len(selected) - len(selected_with_playtime),
-        (len(selected_with_playtime) / len(selected) * 100) if selected else 0,
+        len(steam_pos),
+        len(steam_neg),
+        len(meta_low) + len(meta_mid) + len(meta_high),
     )
 
-    if len(selected) < total_target:
-        used_ids = {row.id for row in selected}
-        fallback = sorted(
-            [row for row in filtered_rows if row.id not in used_ids],
-            key=quality_score,
-            reverse=True,
-        )
-        selected.extend(fallback[: total_target - len(selected)])
-
-    return selected[:total_target]
+    return selected

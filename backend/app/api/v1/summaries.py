@@ -85,7 +85,7 @@ async def trigger_summarization(
     db: AsyncSession = Depends(get_db),
     force: bool = Query(False, description="커서를 무시하고 전체 리뷰 재처리"),
 ):
-    """AI 요약 파이프라인 트리거 — unified 1개 + regional N개 일괄 등록
+    """AI 요약 파이프라인 트리거
 
     force=true: 커서 위치를 무시하고 전체 리뷰를 다시 처리합니다.
     오류 후 재실행하거나 요약을 강제 재생성할 때 사용합니다.
@@ -142,28 +142,6 @@ async def get_unified_summary(
 
     return result
 
-
-@router.get("/{game_id}/perspectives")
-async def get_regional_perspectives(
-    game_id: int,
-    db: AsyncSession = Depends(get_db),
-    compact: bool = Query(True, description="응답에서 None/빈값 제거 (compact)")
-):
-    """언어권별 시각 목록 반환"""
-    rows = (await db.execute(
-        select(GameReviewSummary).where(
-            and_(
-                GameReviewSummary.game_id == game_id,
-                GameReviewSummary.summary_type == "regional",
-                GameReviewSummary.is_current == True,
-            )
-        )
-    )).scalars().all()
-
-    if not rows:
-        raise HTTPException(status_code=404, detail="언어권별 요약본이 없습니다.")
-
-    return [_serialize_summary(s, compact=compact) for s in rows]
 
 
 def _serialize_summary(summary: GameReviewSummary, job: ReviewSummaryJob | None = None, compact: bool = True) -> dict:

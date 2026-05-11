@@ -107,25 +107,18 @@ class ExternalReview(Base):
 # [AI 요약 파이프라인 관련 테이블]
 # ==============================================================================
 
-# 수정됨(Sprint 3): GameSummaryCursor 구조가 Sprint 3에서 확장되었습니다.
-# - summary_type 필드가 추가되어 unified/regional 구분을 명시적으로 기록합니다.
 class GameSummaryCursor(Base):
-    """파이프라인 상태 추적 커서 (게임별·모드별·언어별)
-    
-    Sprint 3: 요약 생성 진행 상황 기록
-    - (game_id, language_code) PK 유지 (backward compatibility)
-    - summary_type: 구분 메타 필드 (추가 정보, PK에 미포함)
+    """파이프라인 상태 추적 커서 (게임별)
+
+    - (game_id, language_code) PK
+    - summary_type: 구분 메타 필드
     - last_summarized_review_id: 증분 파이프라인용 (다음 조회 시작점)
     - last_summary_version: 현재 요약본 버전 (중복 생성 방지)
-    
-    PK 설계 (m005까지 유지):
-    - language_code="unified": unified 모드 커서
-    - language_code="ko": regional 모드 커서 (한국어)
     """
     __tablename__ = "game_summary_cursor"
     game_id = Column(BigInteger, ForeignKey("games.id"), primary_key=True)
     language_code = Column(String(10), primary_key=True)  # 기존 PK 유지 ('unified' | 언어코드)
-    summary_type = Column(String(16), nullable=False, default="unified")  # Sprint 3: 'unified' | 'regional'
+    summary_type = Column(String(16), nullable=False, default="unified")
     last_summarized_review_id = Column(BigInteger, ForeignKey("external_reviews.id"))
     last_summary_version = Column(Integer, nullable=False, default=0)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow)
@@ -182,23 +175,17 @@ class ReviewSummaryChunk(Base):
         UniqueConstraint('job_id', 'chunk_no', name='uq_summary_chunk'),
     )
 
-# 수정됨(Sprint 3): GameReviewSummary에 summary_type/review_language 및 품질 지표들이 추가되었습니다.
 class GameReviewSummary(Base):
     """게임 리뷰 AI 요약본 저장
 
     조회 로직:
     - Unified 요약: summary_type='unified' AND review_language IS NULL AND is_current=TRUE
-    - Regional 요약: summary_type='regional' AND review_language='en' AND is_current=TRUE
-
-    고유성: Partial Index 2개 (uq_game_summary_version_unified / uq_game_summary_version_regional)
-    API 응답: _serialize_summary()에서 language_code 가상 필드 자동 생성 (역호환)
     """
     __tablename__ = "game_review_summaries"
     id = Column(BigInteger, primary_key=True, index=True)
     game_id = Column(BigInteger, ForeignKey("games.id"), nullable=False)
-    # Sprint 3: 요약 모드 구분 필드
-    summary_type = Column(String(16), nullable=False, default="unified")  # 'unified' | 'regional'
-    review_language = Column(String(10), nullable=True)                    # NULL (unified) | 'en'/'ko'/'zh' (regional)
+    summary_type = Column(String(16), nullable=False, default="unified")
+    review_language = Column(String(10), nullable=True)
     job_id = Column(BigInteger, ForeignKey("review_summary_jobs.id"))
     summary_version = Column(Integer, nullable=False)
     summary_text = Column(Text, nullable=False)
