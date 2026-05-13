@@ -1,6 +1,6 @@
 """리뷰 텍스트 한국어 번역 엔드포인트."""
+import asyncio
 import hashlib
-import json
 import logging
 import os
 
@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _groq = AsyncGroq(api_key=os.getenv("GROQ_API_KEY", ""))
+_TRANSLATE_MODEL = os.getenv("GROQ_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
 
 
 def _cache_key(text: str) -> str:
@@ -28,7 +29,7 @@ async def _translate_one(text: str) -> str:
 
     try:
         resp = await _groq.chat.completions.create(
-            model="meta-llama/llama-4-scout-17b-16e-instruct",
+            model=_TRANSLATE_MODEL,
             messages=[
                 {
                     "role": "system",
@@ -67,6 +68,5 @@ async def translate_batch(body: TranslateBatchRequest):
     if len(body.texts) > 20:
         raise HTTPException(status_code=400, detail="한 번에 최대 20개까지 번역 가능합니다.")
 
-    import asyncio
     translations = await asyncio.gather(*[_translate_one(t) for t in body.texts])
     return TranslateBatchResponse(translations=list(translations))

@@ -177,6 +177,6 @@ def match_news_to_inflection(
     if not candidates:
         return None
 
-    priority = {"patch": 0, "dlc": 1, "sale": 2, "controversy": 3, "unknown": 4}
+    priority = {"controversy": 0, "patch": 1, "dlc": 2, "sale": 3, "unknown": 4}
     candidates.sort(key=lambda e: (priority[e.event_type], abs((e.event_date - inflection_date).days)))
     return candidates[0]
