@@ -154,6 +154,7 @@ async def run_map_stage(
 
             prompt = (
                 "Summarize this game review chunk using the following structure:\n"
+                "Output in English regardless of the review language.\n"
                 "PROS: up to 4 bullet points (e.g. '- smooth combat system')\n"
                 "CONS: up to 4 bullet points (e.g. '- frequent crashes on launch')\n"
                 "ASPECTS: (list only aspects actually discussed: graphics / controls / optimization / content / price_value)\n"
