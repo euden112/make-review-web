@@ -158,6 +158,7 @@ class ReviewSummaryJob(Base):
     hallucination_score = Column(Numeric(4, 3))     # 인용 review_id 존재 비율
     sentiment_consistency = Column(Integer)          # label vs score 범위 일치 (0|1)
     anchor_deviation = Column(Numeric(4, 3))         # |AI score - steam_ratio| / 100
+    failure_reasons_json = Column(JSONB)              # chunk별 실패 사유 카운트 {timeout: 0, parse_error: 0, format_invalid: 0, call_failed: 0}
     error_message = Column(Text)
     started_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     ended_at = Column(DateTime(timezone=True))
