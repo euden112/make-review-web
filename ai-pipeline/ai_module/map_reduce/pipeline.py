@@ -246,7 +246,7 @@ async def run_hybrid_summary_pipeline(
             (review.id, review.review_text_clean, review.helpful_count, review.playtime_hours)
             for review in tagged
         ],
-        max_chars=5500,
+        max_chars=None,  # chunker가 OLLAMA_NUM_CTX 환경변수로 안전 한계 결정
     )
 
     map_func = map_runner or run_map_stage

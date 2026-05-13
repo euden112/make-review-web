@@ -72,7 +72,8 @@ services:
       - REDIS_PORT=6379
       - REDIS_DB=0
       - OLLAMA_BASE_URL=http://ollama:11434
-      - LOCAL_MAP_MODEL=gemma3:4b
+      - LOCAL_MAP_MODEL=gemma3:1b
+      # CPU 배포 시 OLLAMA_NUM_CTX=2048 설정하면 chunker가 자동으로 안전 chunk 크기 계산
       - GROQ_API_KEY=${GROQ_API_KEY}
       - GROQ_MODEL=${GROQ_MODEL:-meta-llama/llama-4-scout-17b-16e-instruct}
       - PYTHONPATH=/workspace/backend:/workspace/ai-pipeline:/workspace/crawling/steam

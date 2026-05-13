@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Sequence
 
@@ -11,11 +12,31 @@ class Chunk:
     text: str
 
 
+# 1 토큰 ≈ 2.5 문자 (한·영 혼합 기준 보수적 추정)
+_CHARS_PER_TOKEN = 2.5
+
+# 환경변수 OLLAMA_NUM_CTX 가 설정되면 그 값에서 프롬프트 오버헤드(약 200토큰)와
+# 출력 예약(약 400토큰)을 제외한 만큼만 안전 입력 토큰으로 사용한다.
+def _resolve_max_chars(explicit: int | None) -> int:
+    if explicit is not None:
+        return explicit
+    num_ctx_env = os.getenv("OLLAMA_NUM_CTX")
+    if num_ctx_env:
+        try:
+            num_ctx = int(num_ctx_env)
+            safe_input_tokens = max(num_ctx - 600, 800)
+            return int(safe_input_tokens * _CHARS_PER_TOKEN)
+        except ValueError:
+            pass
+    return 5500  # 기본값 (GPU + 큰 num_ctx 가정)
+
+
 def chunk_reviews_by_chars(
     review_items: Sequence[tuple[int, str] | tuple[int, str, int | None, float | None]],
-    max_chars: int = 5500,
+    max_chars: int | None = None,
     overlap_reviews: int = 2,
 ) -> list[Chunk]:
+    max_chars = _resolve_max_chars(max_chars)
     chunks: list[Chunk] = []
     buffer_ids: list[int] = []
     buffer_texts: list[str] = []

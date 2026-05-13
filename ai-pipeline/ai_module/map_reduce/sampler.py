@@ -14,6 +14,11 @@ MIN_CRITIC_REVIEWS     = 10
 STEAM_PLATFORM_CODE    = "steam"
 METACRITIC_PLATFORM_CODE = "metacritic"
 
+# 통합 게이머 관점 확보를 위해 한국어·영어만 통과시킨다.
+# Steam language_code는 koreana / english 형태.
+_ALLOWED_STEAM_LANGS = {"english", "koreana"}
+_MIN_AFTER_FILTER = 50  # 필터 후 남는 리뷰 수가 이 미만이면 폴백
+
 
 @dataclass(slots=True)
 class ReviewRow:
@@ -139,42 +144,6 @@ def tag_reviews(rows: Sequence[ReviewRow], buckets: PlaytimeBuckets | None) -> l
     return result
 
 
-def group_map_outputs(
-    map_results: list[Any],
-    tagged_rows: Sequence[ReviewRow],
-) -> dict[str, list[str]]:
-    """Map 출력물을 playtime_bucket / reviewer_type 기준으로 그룹핑.
-
-    map_results의 순서는 tagged_rows의 순서와 대응하지 않으므로
-    review_id 기준으로 매핑한다.
-    단, map 단계 출력은 chunk 단위이므로 chunk 전체를 all 에 포함시키고
-    개별 버킷은 review_id set 기반으로 필터링한다.
-    """
-    id_to_bucket = {row.id: row.playtime_bucket for row in tagged_rows}
-    id_to_type   = {row.id: row.reviewer_type   for row in tagged_rows}
-
-    groups: dict[str, list[str]] = {
-        "all": [], "early": [], "mid": [], "late": [], "critic": []
-    }
-
-    for result in map_results:
-        summary_text = result.summary
-        review_ids: list[int] = getattr(result, "review_ids", [])
-
-        groups["all"].append(summary_text)
-
-        buckets_in_chunk = {id_to_bucket.get(rid, "unknown") for rid in review_ids}
-        types_in_chunk   = {id_to_type.get(rid, "user")      for rid in review_ids}
-
-        for bucket in ("early", "mid", "late"):
-            if bucket in buckets_in_chunk:
-                groups[bucket].append(summary_text)
-
-        if "critic" in types_in_chunk:
-            groups["critic"].append(summary_text)
-
-    return groups
-
 
 def allocate(total: int, ratios: dict[str, float]) -> dict[str, int]:
     raw = {k: ratios[k] * total for k in ratios}
@@ -192,6 +161,37 @@ def quality_score(row: ReviewRow) -> float:
     return (0.5 * (playtime + 1.0) ** 0.5) + (1.2 * (helpful + 1.0) ** 0.5)
 
 
+def _apply_language_filter(rows: Sequence[ReviewRow]) -> list[ReviewRow]:
+    """Steam 리뷰는 한·영만 통과. Metacritic은 그대로. 필터 후 너무 적으면 폴백."""
+    lang_counts: dict[str, int] = {}
+    for row in rows:
+        lang_counts[row.language_code or "unknown"] = lang_counts.get(row.language_code or "unknown", 0) + 1
+
+    passed: list[ReviewRow] = []
+    dropped = 0
+    for row in rows:
+        if row.platform_code == METACRITIC_PLATFORM_CODE:
+            passed.append(row)
+            continue
+        if (row.language_code or "").lower() in _ALLOWED_STEAM_LANGS:
+            passed.append(row)
+        else:
+            dropped += 1
+
+    logger.info(
+        "language_filter: total=%d passed=%d dropped=%d (lang_dist=%s)",
+        len(rows), len(passed), dropped, dict(sorted(lang_counts.items(), key=lambda x: -x[1])[:8]),
+    )
+
+    if len(passed) < _MIN_AFTER_FILTER:
+        logger.warning(
+            "language_filter fallback: filtered=%d < min=%d, using original",
+            len(passed), _MIN_AFTER_FILTER,
+        )
+        return list(rows)
+    return passed
+
+
 def stratified_select_reviews(
     rows: Sequence[ReviewRow],
     steam_ratio: tuple[int, int],
@@ -199,6 +199,7 @@ def stratified_select_reviews(
     total_target: int = 300,
     steam_budget_ratio: float = 0.5,
 ) -> list[ReviewRow]:
+    rows = _apply_language_filter(rows)
     filtered_rows = [row for row in rows if not is_spam_review(row.review_text_clean)]
 
     steam_rows = [row for row in filtered_rows if row.platform_code == STEAM_PLATFORM_CODE]
