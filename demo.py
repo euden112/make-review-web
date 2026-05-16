@@ -9,6 +9,7 @@
   python demo.py --skip-metacritic  # Metacritic 크롤링 건너뜀
   python demo.py --skip-docker      # Docker 기동 건너뜀 (이미 실행 중인 경우)
   python demo.py --game elden-ring  # 특정 게임만 요약 (여러 번 사용 가능)
+  python demo.py --skip-crawlers    # 크롤러 검증 건너뜀
 """
 
 from __future__ import annotations
@@ -311,39 +312,6 @@ def get_game_ids() -> dict[str, int]:
 
 
 # ─── 요약 트리거 & 폴링 ──────────────────────────────────────────────────────
-def trigger_event_tracking(game_id: int, force: bool = False) -> int:
-    r = httpx.post(
-        f"{BACKEND_URL}/api/v1/games/{game_id}/events/run",
-        params={"force": "true"} if force else None,
-        timeout=15,
-    )
-    return r.status_code
-
-
-def fetch_event_stats(game_id: int) -> dict | None:
-    try:
-        r = httpx.get(f"{BACKEND_URL}/api/v1/games/{game_id}/events/stats", timeout=10)
-        if r.status_code == 200:
-            return r.json()
-    except Exception:
-        pass
-    return None
-
-
-def fetch_events(game_id: int, limit: int = 5) -> list[dict]:
-    try:
-        r = httpx.get(
-            f"{BACKEND_URL}/api/v1/games/{game_id}/events",
-            params={"limit": limit},
-            timeout=10,
-        )
-        if r.status_code == 200:
-            return r.json().get("events", [])
-    except Exception:
-        pass
-    return []
-
-
 def verify_crawlers(targets: dict[str, int]):
     """크롤러를 직접 임포트해서 Steam API 통신 및 변곡점 감지를 검증."""
     import sys as _sys
@@ -413,55 +381,6 @@ def verify_crawlers(targets: dict[str, int]):
                 warn("News 데이터 없음 (Steam API 응답 없음)")
         except Exception as e:
             warn(f"News 크롤러 오류: {e}")
-
-
-def poll_and_display_events(game_id: int, name: str, timeout: int = 120):
-    """이슈 트래킹 파이프라인 완료까지 폴링 후 결과 표시."""
-    deadline = time.time() + timeout
-    dots = 0
-    stats = None
-
-    print(f"   {name} 이슈 트래킹 대기 중 ", end="", flush=True)
-    while time.time() < deadline:
-        stats = fetch_event_stats(game_id)
-        if stats and stats.get("total_events", 0) > 0:
-            print(f" {G}완료{RESET}")
-            break
-        dots = (dots + 1) % 4
-        print("." * dots + " " * (3 - dots), end="\r", flush=True)
-        print(f"   {name} 이슈 트래킹 대기 중 ", end="", flush=True)
-        time.sleep(10)
-    else:
-        print(f" {Y}타임아웃{RESET}")
-
-    if not stats or stats.get("total_events", 0) == 0:
-        warn(f"{name}: 이슈 트래킹 결과 없음 (백엔드 로그 확인: docker compose logs -f backend)")
-        return
-
-    total = stats["total_events"]
-    spikes = stats["negative_spikes"]
-    recoveries = stats["positive_recoveries"]
-    with_summary = stats.get("events_with_summary", 0)
-
-    ok(f"{name}: 이벤트 {total}개  (부정급증 {spikes}개 / 긍정회복 {recoveries}개 / 요약완료 {with_summary}개)")
-
-    events = fetch_events(game_id, limit=5)
-    if events:
-        print(f"\n   {B}최근 이슈 트래킹 이벤트{RESET}")
-        for ev in events:
-            direction_label = "부정 급증" if ev.get("direction") == "negative_spike" else "긍정 회복"
-            etype = ev.get("event_type", "?")
-            edate = ev.get("event_date", "?")
-            title = ev.get("title") or "(제목 없음)"
-            delta = ev.get("sentiment_delta")
-            delta_str = f"  Δ{delta:+.0%}" if delta is not None else ""
-            col = R if ev.get("direction") == "negative_spike" else G
-            print(f"   {col}●{RESET} {edate}  {direction_label}  [{etype}]{delta_str}")
-            print(f"     {D}{title[:70]}{RESET}")
-            summary = ev.get("summary")
-            if summary and summary.get("summary_text"):
-                text = summary["summary_text"][:100].replace("\n", " ")
-                print(f"     {D}→ {text}{RESET}")
 
 
 def trigger_summarize(game_id: int, force: bool = False) -> int:
@@ -694,8 +613,8 @@ def main():
                         help="요약 대기 최대 시간(초) (기본: 600)")
     parser.add_argument("--force", action="store_true",
                         help="커서를 무시하고 전체 리뷰 강제 재처리 (오류 후 재실행 시 사용)")
-    parser.add_argument("--skip-events", action="store_true",
-                        help="이슈 트래킹 파이프라인 건너뜀")
+    parser.add_argument("--skip-crawlers", action="store_true",
+                        help="Histogram·News 크롤러 직접 검증 건너뜀")
     args = parser.parse_args()
 
     target_games: list[str] = args.games or DEMO_GAMES
@@ -805,27 +724,13 @@ def main():
         else:
             warn(f"타임아웃 ({args.timeout}초 초과): {name}")
 
-    # ── STEP 10: 이슈 트래킹 파이프라인 ──────────────────────────────────────────
-    step(10, "이슈 트래킹  (크롤러 직접 검증 → 백엔드 파이프라인 → 결과 폴링)")
-    if args.skip_events:
-        warn("--skip-events: 이슈 트래킹 건너뜀")
+    # ── STEP 10: 크롤러 직접 검증 (Histogram · News) ──────────────────────────
+    step(10, "Steam Histogram · News 크롤러 직접 검증")
+    if args.skip_crawlers:
+        warn("--skip-crawlers: 크롤러 검증 건너뜀")
     else:
-        # 10a: 크롤러 직접 실행 검증
         info("Steam Histogram · News API 직접 호출 검증 중...")
         verify_crawlers(targets)
-
-        # 10b: 백엔드 이슈 트래킹 파이프라인 트리거
-        print(f"\n   {B}[ 백엔드 파이프라인 실행 ]{RESET}")
-        for slug, gid in targets.items():
-            name = GAME_DISPLAY_NAMES.get(slug, slug)
-            code = trigger_event_tracking(gid, force=args.force)
-            ok(f"[{gid}]  {name}  →  HTTP {code}  (백그라운드 실행 중)")
-
-        # 10c: 결과 폴링 & 표시
-        print(f"\n   {B}[ 결과 대기 (최대 120초 / 게임) ]{RESET}")
-        for slug, gid in targets.items():
-            name = GAME_DISPLAY_NAMES.get(slug, slug)
-            poll_and_display_events(gid, name, timeout=120)
 
     # ── 비교 출력 ──────────────────────────────────────────────────────────────
     if results:
@@ -843,7 +748,8 @@ def main():
     print(f"  {B}데모 완료{RESET}  {status}")
     print(f"  {D}Swagger UI : http://localhost:8000/docs{RESET}")
     print(f"  {D}DB 어드민  : http://localhost:8080{RESET}")
-    print(f"  {D}이슈 트래킹: http://localhost:8000/api/v1/games/{{id}}/events{RESET}")
+    print(f"  {D}하이라이트 : http://localhost:8000/api/v1/games/{{id}}/highlights{RESET}")
+    print(f"  {D}구매 시그널: http://localhost:8000/api/v1/games/{{id}}/buy-signal{RESET}")
     print(f"{B}{C}{'═' * 64}{RESET}\n")
 
 
