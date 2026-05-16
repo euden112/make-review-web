@@ -5,6 +5,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1 import reviews
 from app.api.v1.summaries import router as summaries_router
 from app.api.v1.analysis import router as analysis_router
+from app.api.v1.translate import router as translate_router
+from app.api.v1.highlights import router as highlights_router
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -37,6 +39,8 @@ app.include_router(reviews.router, prefix="/api/v1/reviews", tags=["Reviews Data
 # 추가: 메인 앱에 summaries API 연결
 app.include_router(summaries_router, prefix="/api/v1/games", tags=["Summaries"])
 app.include_router(analysis_router, prefix="/api/v1/games", tags=["Analysis"])
+app.include_router(translate_router, prefix="/api/v1", tags=["Translate"])
+app.include_router(highlights_router, prefix="/api/v1/games", tags=["Highlights"])
 # 서버가 잘 켜졌는지 확인하기 위한 기본(Root) 경로입니다.
 # 브라우저에서 http://localhost:8000 에 접속하면 아래 메시지가 보입니다.
 @app.get("/")
