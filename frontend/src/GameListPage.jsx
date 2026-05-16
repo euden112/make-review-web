@@ -238,7 +238,7 @@ function StarRating({ rating }) {
   )
 }
 
-function GameCard({ game, onClick, isSelected, onToggleCompare, compareDisabled }) {
+function GameCard({ game, onClick, isSelected, onToggleCompare, compareDisabled, buySignal }) {
   const [hovered, setHovered] = useState(false)
 
   return (
@@ -279,11 +279,19 @@ function GameCard({ game, onClick, isSelected, onToggleCompare, compareDisabled 
             <h2 className="text-gray-900 dark:text-[#e0e0e0] text-sm font-bold m-0 truncate flex-1">
               {game.canonical_title}
             </h2>
-            {game.rating != null && (
-              <div className="bg-[#f5a623] text-[#eeeeee] text-xs font-bold rounded px-1.5 py-0.5 min-w-[38px] text-center">
-                {game.rating.toFixed(1)}
-              </div>
-            )}
+            <div className="flex items-center gap-1.5">
+              {buySignal?.is_good_timing && (
+                <span className="text-[10px] font-black px-1.5 py-0.5 rounded-full whitespace-nowrap"
+                  style={{ background: 'rgba(34,197,94,0.15)', color: '#22c55e', border: '1px solid rgba(34,197,94,0.4)' }}>
+                  ✦ 적기{buySignal.discount_percent > 0 ? ` -${buySignal.discount_percent}%` : ''}
+                </span>
+              )}
+              {game.rating != null && (
+                <div className="bg-[#f5a623] text-[#eeeeee] text-xs font-bold rounded px-1.5 py-0.5 min-w-[38px] text-center">
+                  {game.rating.toFixed(1)}
+                </div>
+              )}
+            </div>
           </div>
 
           <StarRating rating={game.rating != null ? Math.round(game.rating) : null} />
@@ -307,6 +315,7 @@ function GameCard({ game, onClick, isSelected, onToggleCompare, compareDisabled 
 function GameListPage({ isDark, toggleDark }) {
   const [games, setGames] = useState([])
   const [loading, setLoading] = useState(true)
+  const [buySignals, setBuySignals] = useState({})
   const navigate = useNavigate()
   const location = useLocation()
 
@@ -329,6 +338,15 @@ function GameListPage({ isDark, toggleDark }) {
       .then(data => {
         setGames(data)
         setLoading(false)
+        // buy-signal 비동기 개별 조회 (non-blocking)
+        data.forEach(game => {
+          fetch(`${API_BASE}/api/v1/games/${game.id}/buy-signal`)
+            .then(r => r.ok ? r.json() : null)
+            .then(signal => {
+              if (signal) setBuySignals(prev => ({ ...prev, [game.id]: signal }))
+            })
+            .catch(() => null)
+        })
       })
       .catch(() => setLoading(false))
   }, [])
@@ -380,6 +398,7 @@ function GameListPage({ isDark, toggleDark }) {
                   isSelected={compareIds.includes(game.id)}
                   onToggleCompare={toggleCompare}
                   compareDisabled={compareIds.length >= 2}
+                  buySignal={buySignals[game.id]}
                 />
               ))
             ) : (

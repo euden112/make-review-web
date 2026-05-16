@@ -18,78 +18,6 @@ const SENTIMENT_CONFIG = {
   mixed:    { label: '중립',   cls: 'bg-gray-50 text-gray-600 dark:bg-gray-700 dark:text-gray-300' },
 }
 
-const EVENT_TYPE_CONFIG = {
-  patch:       { label: '패치',   color: '#3b82f6', bg: 'bg-blue-50 dark:bg-blue-900/20',     text: 'text-blue-600 dark:text-blue-300',   border: 'border-blue-200 dark:border-blue-700' },
-  dlc:         { label: 'DLC',    color: '#8b5cf6', bg: 'bg-purple-50 dark:bg-purple-900/20', text: 'text-purple-600 dark:text-purple-300', border: 'border-purple-200 dark:border-purple-700' },
-  controversy: { label: '논란',   color: '#ef4444', bg: 'bg-red-50 dark:bg-red-900/20',       text: 'text-red-600 dark:text-red-300',     border: 'border-red-200 dark:border-red-700' },
-  sale:        { label: '할인',   color: '#10b981', bg: 'bg-green-50 dark:bg-green-900/20',   text: 'text-green-600 dark:text-green-300', border: 'border-green-200 dark:border-green-700' },
-  unknown:     { label: '기타',   color: '#6b7280', bg: 'bg-gray-50 dark:bg-gray-700',        text: 'text-gray-600 dark:text-gray-300',   border: 'border-gray-200 dark:border-gray-600' },
-}
-
-function EventTypeTag({ type }) {
-  const cfg = EVENT_TYPE_CONFIG[type] || EVENT_TYPE_CONFIG.unknown
-  return (
-    <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full border ${cfg.bg} ${cfg.text} ${cfg.border}`}>
-      {cfg.label}
-    </span>
-  )
-}
-
-function DirectionBadge({ direction, delta }) {
-  const isSpike = direction === 'negative_spike'
-  const pct = delta !== null ? Math.abs(delta * 100).toFixed(0) : null
-  return (
-    <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${
-      isSpike
-        ? 'bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-300'
-        : 'bg-green-50 dark:bg-green-900/20 text-green-600 dark:text-green-300'
-    }`}>
-      {isSpike ? `↑ 부정 +${pct}%p` : `↓ 긍정 회복 ${pct}%p`}
-    </span>
-  )
-}
-
-function EventCard({ event }) {
-  return (
-    <div className="border border-gray-200 dark:border-[#3a3a5e] rounded-xl overflow-hidden">
-      <div className="px-5 py-4 flex items-start gap-3">
-        <div className="flex flex-col items-center gap-1 min-w-[56px]">
-          <span className="text-[11px] text-gray-400 dark:text-gray-500 font-mono">
-            {event.event_date}
-          </span>
-          <div
-            className="w-2.5 h-2.5 rounded-full border-2"
-            style={{
-              borderColor: EVENT_TYPE_CONFIG[event.event_type]?.color || '#6b7280',
-              background: EVENT_TYPE_CONFIG[event.event_type]?.color || '#6b7280',
-            }}
-          />
-        </div>
-
-        <div className="flex-1 min-w-0">
-          <div className="flex flex-wrap items-center gap-2 mb-1">
-            <EventTypeTag type={event.event_type} />
-            <DirectionBadge direction={event.direction} delta={event.sentiment_delta} />
-          </div>
-          <p className="text-sm font-semibold text-gray-800 dark:text-[#e0e0e0] truncate">
-            {event.title || '제목 없음'}
-          </p>
-          {event.news_url && (
-            <a
-              href={event.news_url}
-              target="_blank"
-              rel="noreferrer"
-              className="text-[11px] text-blue-500 hover:underline mt-0.5 inline-block"
-            >
-              원문 →
-            </a>
-          )}
-        </div>
-      </div>
-    </div>
-  )
-}
-
 function SentimentBadge({ value }) {
   const cfg = SENTIMENT_CONFIG[value] || SENTIMENT_CONFIG.mixed
   return (
@@ -497,8 +425,8 @@ function GameDetailPage({ isDark, toggleDark }) {
   const [summary, setSummary] = useState(null)
   const [playtimeAnalysis, setPlaytimeAnalysis] = useState(null)
   const [criticSummary, setCriticSummary] = useState(null)
-  const [events, setEvents] = useState(null)
-  const [eventsLoading, setEventsLoading] = useState(true)
+  const [buySignal, setBuySignal] = useState(null)
+  const [highlights, setHighlights] = useState(null)
   const [sentimentTrend, setSentimentTrend] = useState(null)
   const [reviewTranslations, setReviewTranslations] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -516,13 +444,14 @@ function GameDetailPage({ isDark, toggleDark }) {
       setError(null)
 
       try {
-        const [gamesRes, summaryRes, playtimeRes, criticRes, eventsRes, trendRes] = await Promise.all([
+        const [gamesRes, summaryRes, playtimeRes, criticRes, trendRes, buySignalRes, highlightsRes] = await Promise.all([
           fetch(`${API_BASE}/api/v1/games/`),
           fetch(`${API_BASE}/api/v1/games/${id}/summary`),
           fetch(`${API_BASE}/api/v1/games/${id}/playtime-analysis`),
           fetch(`${API_BASE}/api/v1/games/${id}/critic-summary`),
-          fetch(`${API_BASE}/api/v1/games/${id}/events`).catch(() => null),
           fetch(`${API_BASE}/api/v1/games/${id}/sentiment-trend`).catch(() => null),
+          fetch(`${API_BASE}/api/v1/games/${id}/buy-signal`).catch(() => null),
+          fetch(`${API_BASE}/api/v1/games/${id}/highlights?limit=5`).catch(() => null),
         ])
 
         if (gamesRes.ok) {
@@ -545,18 +474,21 @@ function GameDetailPage({ isDark, toggleDark }) {
           setCriticSummary(await criticRes.json())
         }
 
-        if (eventsRes?.ok) {
-          setEvents(await eventsRes.json())
-        }
-
         if (trendRes?.ok) {
           setSentimentTrend(await trendRes.json())
+        }
+
+        if (buySignalRes?.ok) {
+          setBuySignal(await buySignalRes.json())
+        }
+
+        if (highlightsRes?.ok) {
+          setHighlights(await highlightsRes.json())
         }
       } catch {
         setError('서버에 연결할 수 없습니다.')
       } finally {
         setLoading(false)
-        setEventsLoading(false)
       }
     }
 
@@ -633,6 +565,24 @@ function GameDetailPage({ isDark, toggleDark }) {
           <h1 className="text-white text-4xl font-extrabold mb-3">
             {game?.canonical_title || ''}
           </h1>
+
+          {buySignal?.is_good_timing && (
+            <div className="flex items-center gap-2 mb-3 flex-wrap">
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black"
+                style={{ background: 'rgba(34,197,94,0.2)', color: '#22c55e', border: '1px solid rgba(34,197,94,0.4)' }}>
+                ✦ 지금이 적기
+              </span>
+              {buySignal.discount_percent > 0 && (
+                <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-black"
+                  style={{ background: '#ef4444', color: '#fff' }}>
+                  -{buySignal.discount_percent}%
+                </span>
+              )}
+              {buySignal.reasons?.slice(0, 2).map((r, i) => (
+                <span key={i} className="text-xs text-white/70">{r}</span>
+              ))}
+            </div>
+          )}
 
           {game?.rating != null && (
             <div className="flex items-center gap-2 mb-4">
@@ -910,34 +860,90 @@ function GameDetailPage({ isDark, toggleDark }) {
           </div>
         )}
 
-        {/* ── Sprint 5: 이슈 트래킹 ── */}
-        {!loading && (
-          <div className="bg-white dark:bg-[#1e1e2e] rounded-xl p-7 border border-gray-200 dark:border-[#2a2a3e] shadow-sm">
-            <div className="flex items-center justify-between mb-1">
-              <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0]">이슈 트래킹</h2>
-              {events?.events?.length > 0 && (
-                <span className="text-xs text-gray-400 dark:text-gray-500">
-                  {events.events.length}개 이벤트 감지됨
+        {/* ── 구매 타이밍 시그널 ── */}
+        {!loading && buySignal && (
+          <div className={`rounded-xl p-7 border shadow-sm ${
+            buySignal.is_good_timing
+              ? 'bg-green-50 dark:bg-[#0d2a1a] border-green-200 dark:border-green-800'
+              : 'bg-white dark:bg-[#1e1e2e] border-gray-200 dark:border-[#2a2a3e]'
+          }`}>
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0] flex items-center gap-2">
+                구매 타이밍
+                {buySignal.is_good_timing && (
+                  <span className="text-xs px-2 py-0.5 rounded-full font-black"
+                    style={{ background: 'rgba(34,197,94,0.15)', color: '#22c55e', border: '1px solid rgba(34,197,94,0.35)' }}>
+                    ✦ 지금이 적기
+                  </span>
+                )}
+              </h2>
+              {buySignal.discount_percent > 0 && (
+                <span className="text-sm font-black px-3 py-1 rounded-full"
+                  style={{ background: '#ef4444', color: '#fff' }}>
+                  -{buySignal.discount_percent}% 할인 중
                 </span>
               )}
             </div>
-            <p className="text-xs text-gray-400 dark:text-gray-500 mb-4">
-              패치·DLC·논란 등 여론 변곡점과 해당 시점 반응
-            </p>
 
-            {eventsLoading ? (
-              <p className="text-sm text-gray-400 dark:text-gray-500">불러오는 중...</p>
-            ) : !events ? (
-              <p className="text-sm text-gray-400 dark:text-gray-500">이슈 트래킹 데이터가 없습니다.</p>
-            ) : (
-              <div className="relative flex flex-col gap-2">
-                {/* 타임라인 수직선 */}
-                <div className="absolute left-[27px] top-4 bottom-4 w-px bg-gray-200 dark:bg-[#3a3a5e]" />
-                {events.events.map(event => (
-                  <EventCard key={event.id} event={event} />
-                ))}
+            {buySignal.original_price != null && buySignal.original_price > 0 && (
+              <div className="flex items-baseline gap-2 mb-3">
+                <span className="text-2xl font-black text-green-600 dark:text-green-400">
+                  ₩{(buySignal.final_price ?? buySignal.original_price).toLocaleString()}
+                </span>
+                {buySignal.discount_percent > 0 && (
+                  <span className="text-sm text-gray-400 line-through">
+                    ₩{buySignal.original_price.toLocaleString()}
+                  </span>
+                )}
               </div>
             )}
+
+            <ul className="flex flex-col gap-1">
+              {buySignal.reasons?.map((reason, i) => (
+                <li key={i} className="text-sm text-gray-700 dark:text-[#cccccc] flex items-center gap-2">
+                  <span className={buySignal.is_good_timing ? 'text-green-500' : 'text-gray-400'}>•</span>
+                  {reason}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {/* ── 이 게임의 명장면 ── */}
+        {!loading && highlights?.highlights?.length > 0 && (
+          <div className="bg-white dark:bg-[#1e1e2e] rounded-xl p-7 border border-gray-200 dark:border-[#2a2a3e] shadow-sm">
+            <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0] mb-1">이 게임의 명장면</h2>
+            <p className="text-xs text-gray-400 dark:text-gray-500 mb-4">
+              가장 많은 공감을 받은 감동 리뷰 — 플레이어가 실제로 느낀 순간
+            </p>
+            <div className="flex gap-4 overflow-x-auto pb-2" style={{ scrollSnapType: 'x mandatory' }}>
+              {highlights.highlights.map((h, i) => (
+                <div key={h.review_id ?? i}
+                  className="flex-none w-72 bg-gray-50 dark:bg-[#2a2a3e] rounded-xl p-5 border border-gray-200 dark:border-[#3a3a5e] flex flex-col gap-3"
+                  style={{ scrollSnapAlign: 'start' }}>
+                  <p className="text-sm leading-relaxed text-gray-800 dark:text-[#e0e0e0] italic line-clamp-5">
+                    "{h.text}"
+                  </p>
+                  <div className="flex items-center gap-3 mt-auto pt-2 border-t border-gray-200 dark:border-[#3a3a5e]">
+                    {h.playtime_hours != null && (
+                      <span className="text-xs text-gray-500 dark:text-gray-400">
+                        {Math.round(h.playtime_hours)}h 플레이
+                      </span>
+                    )}
+                    {h.helpful_count > 0 && (
+                      <span className="text-xs text-gray-500 dark:text-gray-400">
+                        공감 {h.helpful_count}
+                      </span>
+                    )}
+                    {h.linked_aspect && (
+                      <span className="ml-auto text-xs px-2 py-0.5 rounded-full bg-blue-50 dark:bg-[#1a2a4a] text-blue-600 dark:text-blue-300 border border-blue-200 dark:border-blue-700">
+                        {h.linked_aspect}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         )}
       </div>
