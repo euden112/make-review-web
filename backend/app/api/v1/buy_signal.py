@@ -14,7 +14,10 @@ from sqlalchemy.future import select
 from sqlalchemy import and_
 
 from app.core.database import get_db
+from app.core.redis_client import get_json_cache, set_json_cache
 from app.models.domain import GamePlatformMap, Platform
+
+_CACHE_TTL = 6 * 3600  # 가격·여론은 일 단위 변동 → 6시간
 
 # crawling/steam 은 PYTHONPATH에 포함됨 (docker-compose backend.environment).
 # 기획서 3-2/6: histogram·appdetails 크롤러를 기능 A에서 재사용 (BUG-2 통합).
@@ -112,6 +115,11 @@ def _build_response(price: PriceInfo | None, sentiment: dict) -> dict:
 
 @router.get("/{game_id}/buy-signal")
 async def get_buy_signal(game_id: int, db: AsyncSession = Depends(get_db)):
+    cache_key = f"buy_signal:{game_id}"
+    cached = await get_json_cache(cache_key)
+    if cached is not None:
+        return cached
+
     appid = await _get_steam_appid(game_id, db)
     if not appid:
         raise HTTPException(status_code=404, detail="Steam appid를 찾을 수 없음")
@@ -122,4 +130,6 @@ async def get_buy_signal(game_id: int, db: AsyncSession = Depends(get_db)):
         asyncio.to_thread(fetch_histogram, appid),
     )
     sentiment = _analyze_sentiment(monthly)
-    return _build_response(price, sentiment)
+    result = _build_response(price, sentiment)
+    await set_json_cache(cache_key, result, _CACHE_TTL)
+    return result

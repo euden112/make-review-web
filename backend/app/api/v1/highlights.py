@@ -5,9 +5,12 @@ from sqlalchemy.future import select
 from sqlalchemy import and_
 
 from app.core.database import get_db
+from app.core.redis_client import get_json_cache, set_json_cache
 from app.models.domain import ExternalReview
 
 router = APIRouter()
+
+_CACHE_TTL = 24 * 3600  # 재수집 시에만 변경 → 24시간
 
 _EMOTION_RE = re.compile(
     r'인생|최고|소름|울었|순삭|중독|명작|감동|눈물|환상|전설|완벽|압도|걸작|역대급|불후'
@@ -47,6 +50,11 @@ async def get_highlights(
     limit: int = Query(5, ge=1, le=20),
     db: AsyncSession = Depends(get_db),
 ):
+    cache_key = f"highlights:{game_id}:{limit}"
+    cached = await get_json_cache(cache_key)
+    if cached is not None:
+        return cached
+
     result = await db.execute(
         select(ExternalReview).where(
             and_(
@@ -66,7 +74,7 @@ async def get_highlights(
     scored = [(r, s) for r, s in scored if s > 0]
     scored.sort(key=lambda x: x[1], reverse=True)
 
-    return {
+    response = {
         "highlights": [
             {
                 "review_id": r.id,
@@ -78,3 +86,5 @@ async def get_highlights(
             for r, _ in scored[:limit]
         ]
     }
+    await set_json_cache(cache_key, response, _CACHE_TTL)
+    return response
