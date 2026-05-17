@@ -12,8 +12,13 @@ router = APIRouter()
 
 _CACHE_TTL = 24 * 3600  # 재수집 시에만 변경 → 24시간
 
+# 한·영 감정 강도 키워드 (BUG-6: 영어 리뷰 저평가 보정, IGNORECASE)
 _EMOTION_RE = re.compile(
     r'인생|최고|소름|울었|순삭|중독|명작|감동|눈물|환상|전설|완벽|압도|걸작|역대급|불후'
+    r'|masterpiece|emotional|cried|tears|addict|unforgettable|breathtaking'
+    r'|incredible|amazing|best\s+game|life\s*-?\s*changing|goosebumps|flawless'
+    r'|stunning|phenomenal|obsessed|hooked',
+    re.IGNORECASE,
 )
 
 
@@ -55,6 +60,8 @@ async def get_highlights(
     if cached is not None:
         return cached
 
+    # BUG-5: ORDER BY 없는 limit는 임의 부분집합 → helpful_count 높은 순으로
+    # 정렬 후 상위 3000개를 평가 (진짜 명장면 후보가 누락되지 않도록)
     result = await db.execute(
         select(ExternalReview).where(
             and_(
@@ -63,6 +70,9 @@ async def get_highlights(
                 ExternalReview.review_text_clean != None,
                 ExternalReview.review_text_clean != "",
             )
+        ).order_by(
+            ExternalReview.helpful_count.desc(),
+            ExternalReview.id.desc(),
         ).limit(3000)
     )
     reviews = result.scalars().all()
