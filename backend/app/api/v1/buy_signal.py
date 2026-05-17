@@ -7,9 +7,7 @@ GET /api/v1/games/{game_id}/buy-signal
 """
 
 import asyncio
-from datetime import date
 
-import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -18,10 +16,13 @@ from sqlalchemy import and_
 from app.core.database import get_db
 from app.models.domain import GamePlatformMap, Platform
 
+# crawling/steam 은 PYTHONPATH에 포함됨 (docker-compose backend.environment).
+# 기획서 3-2/6: histogram·appdetails 크롤러를 기능 A에서 재사용 (BUG-2 통합).
+from appdetails_crawler import fetch_price_info, PriceInfo
+from histogram_crawler import fetch_histogram
+
 router = APIRouter()
 
-_APPDETAILS_URL = "https://store.steampowered.com/api/appdetails"
-_HISTOGRAM_URL = "https://store.steampowered.com/appreviewhistogram/{appid}?l=en"
 _HISTOGRAM_THRESHOLD = 0.20
 _MIN_MONTHLY_VOLUME = 20
 
@@ -41,53 +42,6 @@ async def _get_steam_appid(game_id: int, db: AsyncSession) -> str | None:
         )
     )).scalar_one_or_none()
     return row.external_game_id if row else None
-
-
-async def _fetch_price(appid: str) -> dict | None:
-    async with httpx.AsyncClient(timeout=10) as client:
-        try:
-            r = await client.get(
-                _APPDETAILS_URL,
-                params={"appids": appid, "cc": "kr", "filters": "price_overview"},
-            )
-            r.raise_for_status()
-            data = r.json()
-            game = data.get(str(appid), {})
-            if not game.get("success"):
-                return None
-            return (game.get("data") or {}).get("price_overview")
-        except Exception:
-            return None
-
-
-async def _fetch_histogram(appid: str) -> list[dict]:
-    async with httpx.AsyncClient(timeout=10) as client:
-        try:
-            r = await client.get(_HISTOGRAM_URL.format(appid=appid))
-            r.raise_for_status()
-            data = r.json()
-            if data.get("success") != 1:
-                return []
-            results = data.get("results") or {}
-            rollups = results.get("rollups") or results.get("recent") or []
-            monthly = []
-            for entry in rollups:
-                ts = entry.get("date")
-                if ts is None:
-                    continue
-                try:
-                    month_start = date.fromtimestamp(int(ts))
-                except (OSError, ValueError):
-                    continue
-                monthly.append({
-                    "month_start": month_start,
-                    "positive": int(entry.get("recommendations_up", 0)),
-                    "negative": int(entry.get("recommendations_down", 0)),
-                })
-            monthly.sort(key=lambda x: x["month_start"])
-            return monthly
-        except Exception:
-            return []
 
 
 def _analyze_sentiment(monthly: list[dict]) -> dict:
@@ -124,8 +78,9 @@ def _analyze_sentiment(monthly: list[dict]) -> dict:
     }
 
 
-def _build_response(price: dict | None, sentiment: dict) -> dict:
-    discount = int((price or {}).get("discount_percent", 0))
+def _build_response(price: PriceInfo | None, sentiment: dict) -> dict:
+    # price 금액은 appdetails_crawler가 이미 표시 단위로 환산함(BUG-1 //100).
+    discount = price.discount_percent if price else 0
     is_on_sale = discount > 0
     state = sentiment["state"]
     is_positive = state == "positive_recovery" or sentiment["is_at_minimum"]
@@ -144,17 +99,12 @@ def _build_response(price: dict | None, sentiment: dict) -> dict:
     if state == "negative_spike":
         reasons.append("최근 부정 여론 급증 — 구매 전 확인 권장")
 
-    # Steam price_overview는 최소 통화 단위(×100, KRW 포함)로 반환하므로
-    # 표시용 금액으로 환산하려면 100으로 나눈다 (BUG-1).
-    original = (price or {}).get("initial")
-    final = (price or {}).get("final")
-
     return {
         "is_good_timing": is_good_timing,
         "discount_percent": discount,
-        "original_price": int(original) // 100 if original is not None else None,
-        "final_price": int(final) // 100 if final is not None else None,
-        "sale_ends_at": None,
+        "original_price": price.original_price if price else None,
+        "final_price": price.final_price if price else None,
+        "sale_ends_at": price.sale_ends_at if price else None,
         "sentiment_state": state,
         "reasons": reasons,
     }
@@ -166,9 +116,10 @@ async def get_buy_signal(game_id: int, db: AsyncSession = Depends(get_db)):
     if not appid:
         raise HTTPException(status_code=404, detail="Steam appid를 찾을 수 없음")
 
+    # 동기 크롤러(requests 기반)를 스레드로 위임해 이벤트 루프 블로킹 방지
     price, monthly = await asyncio.gather(
-        _fetch_price(appid),
-        _fetch_histogram(appid),
+        asyncio.to_thread(fetch_price_info, appid, "kr"),
+        asyncio.to_thread(fetch_histogram, appid),
     )
     sentiment = _analyze_sentiment(monthly)
     return _build_response(price, sentiment)
