@@ -270,6 +270,7 @@ function GameDetailPage({ isDark, toggleDark }) {
   const [criticSummary, setCriticSummary] = useState(null)
   const [buySignal, setBuySignal] = useState(null)
   const [highlights, setHighlights] = useState(null)
+  const [divergence, setDivergence] = useState(null)
   const [reviewTranslations, setReviewTranslations] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -286,13 +287,14 @@ function GameDetailPage({ isDark, toggleDark }) {
       setError(null)
 
       try {
-        const [gamesRes, summaryRes, playtimeRes, criticRes, buySignalRes, highlightsRes] = await Promise.all([
+        const [gamesRes, summaryRes, playtimeRes, criticRes, buySignalRes, highlightsRes, divergenceRes] = await Promise.all([
           fetch(`${API_BASE}/api/v1/games/`),
           fetch(`${API_BASE}/api/v1/games/${id}/summary`),
           fetch(`${API_BASE}/api/v1/games/${id}/playtime-analysis`),
           fetch(`${API_BASE}/api/v1/games/${id}/critic-summary`),
           fetch(`${API_BASE}/api/v1/games/${id}/buy-signal`).catch(() => null),
           fetch(`${API_BASE}/api/v1/games/${id}/highlights?limit=5`).catch(() => null),
+          fetch(`${API_BASE}/api/v1/games/${id}/divergence`).catch(() => null),
         ])
 
         if (gamesRes.ok) {
@@ -322,6 +324,10 @@ function GameDetailPage({ isDark, toggleDark }) {
 
         if (highlightsRes?.ok) {
           setHighlights(await highlightsRes.json())
+        }
+
+        if (divergenceRes?.ok) {
+          setDivergence(await divergenceRes.json())
         }
       } catch {
         setError('서버에 연결할 수 없습니다.')
@@ -456,6 +462,55 @@ function GameDetailPage({ isDark, toggleDark }) {
         {!loading && error && (
           <div className="bg-white dark:bg-[#1e1e2e] rounded-xl p-7 border border-gray-200 dark:border-[#2a2a3e] shadow-sm text-center text-gray-400">
             {error}
+          </div>
+        )}
+
+        {/* ── 기능 D: 유저/평론 괴리 지표 (8-4 동적·비대칭 노출) ── */}
+        {!loading && divergence?.has_divergence_data && (
+          <div className={`rounded-xl p-7 border shadow-sm ${
+            divergence.divergence_type === 'user_favors'
+              ? 'bg-green-50 dark:bg-[#0d2a1a] border-green-200 dark:border-green-800'
+              : divergence.divergence_type === 'critic_favors'
+                ? 'bg-amber-50 dark:bg-[#2a210d] border-amber-200 dark:border-amber-800'
+                : 'bg-white dark:bg-[#1e1e2e] border-gray-200 dark:border-[#2a2a3e]'
+          }`}>
+            <div className="flex items-center gap-2 mb-3">
+              <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0]">유저 vs 평론</h2>
+              {divergence.divergence_type === 'user_favors' && (
+                <span className="text-xs px-2 py-0.5 rounded-full font-black"
+                  style={{ background: 'rgba(34,197,94,0.15)', color: '#22c55e', border: '1px solid rgba(34,197,94,0.35)' }}>
+                  숨은 호평작
+                </span>
+              )}
+              {divergence.divergence_type === 'critic_favors' && (
+                <span className="text-xs px-2 py-0.5 rounded-full font-black"
+                  style={{ background: 'rgba(245,158,11,0.15)', color: '#f59e0b', border: '1px solid rgba(245,158,11,0.35)' }}>
+                  구매 주의
+                </span>
+              )}
+            </div>
+
+            <p className="text-sm font-semibold text-gray-800 dark:text-[#e0e0e0] mb-4">
+              {divergence.one_liner}
+            </p>
+
+            {/* 2트랙 강조: 괴리 임계 초과 시에만 (8-4 #2) */}
+            {divergence.show_dual_track && (
+              <div className="grid grid-cols-2 gap-4">
+                <div className="bg-white/60 dark:bg-[#1e1e2e]/60 rounded-lg p-4 border border-gray-200 dark:border-[#3a3a5e]">
+                  <p className="text-xs font-bold text-gray-500 dark:text-gray-400 mb-1">유저 평가</p>
+                  <p className="text-2xl font-black text-gray-900 dark:text-[#e0e0e0]">
+                    {Math.round(divergence.user_score)}<span className="text-sm text-gray-400">/100</span>
+                  </p>
+                </div>
+                <div className="bg-white/60 dark:bg-[#1e1e2e]/60 rounded-lg p-4 border border-gray-200 dark:border-[#3a3a5e]">
+                  <p className="text-xs font-bold text-gray-500 dark:text-gray-400 mb-1">평론가 평가</p>
+                  <p className="text-2xl font-black text-gray-900 dark:text-[#e0e0e0]">
+                    {Math.round(divergence.critic_score)}<span className="text-sm text-gray-400">/100</span>
+                  </p>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
