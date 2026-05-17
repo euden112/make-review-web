@@ -312,75 +312,42 @@ def get_game_ids() -> dict[str, int]:
 
 
 # ─── 요약 트리거 & 폴링 ──────────────────────────────────────────────────────
-def verify_crawlers(targets: dict[str, int]):
-    """크롤러를 직접 임포트해서 Steam API 통신 및 변곡점 감지를 검증."""
-    import sys as _sys
-    steam_dir = str(CRAWLING_DIR / "steam")
-    if steam_dir not in _sys.path:
-        _sys.path.insert(0, steam_dir)
+def verify_purchase_features(targets: dict[str, int]):
+    """기능 A·C 엔드포인트(buy-signal / highlights)를 호출해 동작을 검증."""
+    print(f"\n   {B}[ 구매 욕구 유발 기능 검증 ]{RESET}")
 
-    try:
-        from histogram_crawler import fetch_histogram, detect_inflection_points
-        from news_crawler import fetch_news, match_news_to_inflection
-    except ImportError as e:
-        warn(f"크롤러 임포트 실패 — crawling/steam 패키지 확인 필요: {e}")
-        return
-
-    print(f"\n   {B}[ 크롤러 직접 실행 검증 ]{RESET}")
-
-    for slug in targets:
-        appid = GAME_STEAM_APPIDS.get(slug)
+    for slug, gid in targets.items():
         name = GAME_DISPLAY_NAMES.get(slug, slug)
-        if not appid:
-            warn(f"Steam appid 없음: {slug}")
-            continue
+        print(f"\n   {C}{name}{RESET}  (game_id={gid})")
 
-        print(f"\n   {C}{name}{RESET}  (appid={appid})")
-
-        # Histogram
+        # 기능 A — 구매 타이밍 시그널
         try:
-            monthly = fetch_histogram(appid)
-            if monthly:
-                ok(f"Histogram: {len(monthly)}개월 데이터 수신")
-                inflections = detect_inflection_points(monthly)
-                if inflections:
-                    ok(f"변곡점 {len(inflections)}개 감지")
-                    for inf in inflections[:3]:
-                        direction_label = "부정 급증" if inf.direction == "negative_spike" else "긍정 회복"
-                        info(f"  {inf.month_start}  {direction_label}  Δ{inf.delta:+.0%}  (부정비율 {inf.neg_ratio:.0%})")
-                else:
-                    info("변곡점 없음 (±20%p 기준 미달)")
+            r = httpx.get(f"{BACKEND_URL}/api/v1/games/{gid}/buy-signal", timeout=30)
+            if r.status_code == 200:
+                d = r.json()
+                timing = "지금이 적기" if d.get("is_good_timing") else "대기 권장"
+                ok(f"buy-signal: {timing}  할인 {d.get('discount_percent', 0)}%  "
+                   f"여론 {d.get('sentiment_state', '?')}")
+                for reason in (d.get("reasons") or [])[:3]:
+                    info(f"  · {reason}")
             else:
-                warn("Histogram 데이터 없음 (Steam API 응답 없음)")
-                inflections = []
+                warn(f"buy-signal HTTP {r.status_code}")
         except Exception as e:
-            warn(f"Histogram 크롤러 오류: {e}")
-            inflections = []
+            warn(f"buy-signal 오류: {e}")
 
-        # News
+        # 기능 C — 감성 하이라이트
         try:
-            news = fetch_news(appid)
-            if news:
-                type_counts: dict[str, int] = {}
-                for ev in news:
-                    type_counts[ev.event_type] = type_counts.get(ev.event_type, 0) + 1
-                counts_str = "  ".join(f"{t}:{c}" for t, c in sorted(type_counts.items()))
-                ok(f"News: {len(news)}개 항목 수신  ({counts_str})")
-
-                if inflections:
-                    matched = 0
-                    for inf in inflections[:3]:
-                        matched_ev = match_news_to_inflection(inf.month_start, news)
-                        if matched_ev:
-                            matched += 1
-                            direction_label = "부정 급증" if inf.direction == "negative_spike" else "긍정 회복"
-                            info(f"  매칭: {inf.month_start} {direction_label} ← [{matched_ev.event_type}] {matched_ev.title[:50]}")
-                    if matched == 0:
-                        info("변곡점 ↔ News 매칭 없음 (±30일 내 관련 기사 없음)")
+            r = httpx.get(f"{BACKEND_URL}/api/v1/games/{gid}/highlights?limit=3", timeout=30)
+            if r.status_code == 200:
+                hs = r.json().get("highlights", [])
+                ok(f"highlights: {len(hs)}개 명장면 선별")
+                for h in hs[:2]:
+                    text = (h.get("text") or "").replace("\n", " ")[:60]
+                    info(f"  · 공감 {h.get('helpful_count', 0)}  \"{text}…\"")
             else:
-                warn("News 데이터 없음 (Steam API 응답 없음)")
+                warn(f"highlights HTTP {r.status_code}")
         except Exception as e:
-            warn(f"News 크롤러 오류: {e}")
+            warn(f"highlights 오류: {e}")
 
 
 def trigger_summarize(game_id: int, force: bool = False) -> int:
@@ -614,7 +581,7 @@ def main():
     parser.add_argument("--force", action="store_true",
                         help="커서를 무시하고 전체 리뷰 강제 재처리 (오류 후 재실행 시 사용)")
     parser.add_argument("--skip-crawlers", action="store_true",
-                        help="Histogram·News 크롤러 직접 검증 건너뜀")
+                        help="기능 A·C(buy-signal·highlights) 검증 건너뜀")
     args = parser.parse_args()
 
     target_games: list[str] = args.games or DEMO_GAMES
@@ -724,13 +691,13 @@ def main():
         else:
             warn(f"타임아웃 ({args.timeout}초 초과): {name}")
 
-    # ── STEP 10: 크롤러 직접 검증 (Histogram · News) ──────────────────────────
-    step(10, "Steam Histogram · News 크롤러 직접 검증")
+    # ── STEP 10: 구매 욕구 유발 기능 검증 (buy-signal · highlights) ────────────
+    step(10, "기능 A·C 검증  (구매 타이밍 시그널 · 감성 하이라이트)")
     if args.skip_crawlers:
-        warn("--skip-crawlers: 크롤러 검증 건너뜀")
+        warn("--skip-crawlers: 기능 A·C 검증 건너뜀")
     else:
-        info("Steam Histogram · News API 직접 호출 검증 중...")
-        verify_crawlers(targets)
+        info("buy-signal · highlights 엔드포인트 호출 검증 중...")
+        verify_purchase_features(targets)
 
     # ── 비교 출력 ──────────────────────────────────────────────────────────────
     if results:

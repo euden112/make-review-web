@@ -260,163 +260,6 @@ function groupRepresentativeReviews(reviews) {
   return grouped
 }
 
-function SentimentTrendChart({ data, isDark }) {
-  const [tooltip, setTooltip] = useState(null)
-  if (!data?.monthly?.length) return null
-
-  const W = 800, H = 200, PAD = { top: 16, right: 20, bottom: 36, left: 48 }
-  const inner = { w: W - PAD.left - PAD.right, h: H - PAD.top - PAD.bottom }
-
-  const monthly = data.monthly
-  const inflectionMap = {}
-  ;(data.inflections || []).forEach(inf => { inflectionMap[inf.date] = inf })
-
-  const ratios = monthly.map(m => m.neg_ratio)
-  const minR = Math.min(...ratios)
-  const maxR = Math.max(...ratios)
-  const span = maxR - minR || 0.01
-
-  const xStep = inner.w / Math.max(monthly.length - 1, 1)
-  const toX = i => PAD.left + i * xStep
-  const toY = r => PAD.top + inner.h - ((r - minR) / span) * inner.h
-
-  const points = monthly.map((m, i) => `${toX(i).toFixed(1)},${toY(m.neg_ratio).toFixed(1)}`).join(' ')
-  const fillPoints = [
-    `${toX(0).toFixed(1)},${(PAD.top + inner.h).toFixed(1)}`,
-    ...monthly.map((m, i) => `${toX(i).toFixed(1)},${toY(m.neg_ratio).toFixed(1)}`),
-    `${toX(monthly.length - 1).toFixed(1)},${(PAD.top + inner.h).toFixed(1)}`,
-  ].join(' ')
-
-  const tickIndices = monthly.length <= 12
-    ? monthly.map((_, i) => i)
-    : monthly.reduce((acc, _, i) => {
-        if (i === 0 || i === monthly.length - 1 || i % Math.ceil(monthly.length / 10) === 0) acc.push(i)
-        return acc
-      }, [])
-
-  const gridLines = 4
-  const stroke = isDark ? '#3a3a5e' : '#e5e7eb'
-  const axisColor = isDark ? '#6b7280' : '#9ca3af'
-  const lineColor = '#6366f1'
-  const fillColor = isDark ? 'rgba(99,102,241,0.12)' : 'rgba(99,102,241,0.08)'
-
-  return (
-    <div className="relative w-full overflow-x-auto">
-      <svg
-        viewBox={`0 0 ${W} ${H}`}
-        className="w-full"
-        style={{ minWidth: 480 }}
-        onMouseLeave={() => setTooltip(null)}
-      >
-        {/* grid */}
-        {Array.from({ length: gridLines + 1 }, (_, gi) => {
-          const y = PAD.top + (inner.h / gridLines) * gi
-          const val = maxR - (span / gridLines) * gi
-          return (
-            <g key={gi}>
-              <line x1={PAD.left} y1={y} x2={PAD.left + inner.w} y2={y} stroke={stroke} strokeWidth={1} />
-              <text x={PAD.left - 6} y={y + 4} textAnchor="end" fontSize={10} fill={axisColor}>
-                {(val * 100).toFixed(0)}%
-              </text>
-            </g>
-          )
-        })}
-
-        {/* fill */}
-        <polygon points={fillPoints} fill={fillColor} />
-
-        {/* line */}
-        <polyline points={points} fill="none" stroke={lineColor} strokeWidth={2} strokeLinejoin="round" />
-
-        {/* x-axis ticks */}
-        {tickIndices.map(i => (
-          <text key={i} x={toX(i)} y={PAD.top + inner.h + 16} textAnchor="middle" fontSize={9} fill={axisColor}>
-            {monthly[i].date.slice(0, 7)}
-          </text>
-        ))}
-
-        {/* inflection markers */}
-        {monthly.map((m, i) => {
-          const inf = inflectionMap[m.date]
-          if (!inf) return null
-          const cx = toX(i), cy = toY(m.neg_ratio)
-          const isSpike = inf.direction === 'negative_spike'
-          return (
-            <g key={i}>
-              <circle
-                cx={cx} cy={cy} r={6}
-                fill={isSpike ? '#ef4444' : '#22c55e'}
-                stroke={isDark ? '#1e1e2e' : '#fff'}
-                strokeWidth={2}
-                style={{ cursor: 'pointer' }}
-                onMouseEnter={() => setTooltip({ x: cx, y: cy, inf, m })}
-              />
-            </g>
-          )
-        })}
-
-        {/* hover dots */}
-        {monthly.map((m, i) => {
-          const inf = inflectionMap[m.date]
-          if (inf) return null
-          return (
-            <circle
-              key={i}
-              cx={toX(i)} cy={toY(m.neg_ratio)} r={3}
-              fill="transparent"
-              style={{ cursor: 'crosshair' }}
-              onMouseEnter={() => setTooltip({ x: toX(i), y: toY(m.neg_ratio), m })}
-            />
-          )
-        })}
-
-        {/* tooltip */}
-        {tooltip && (() => {
-          const { x, y, inf, m } = tooltip
-          const tw = 160, th = inf ? 72 : 44
-          const tx = Math.min(x + 10, W - tw - 4)
-          const ty = Math.max(y - th - 10, PAD.top)
-          const bg = isDark ? '#1e1e2e' : '#fff'
-          const border = isDark ? '#3a3a5e' : '#e5e7eb'
-          const fg = isDark ? '#e0e0e0' : '#111827'
-          const sub = isDark ? '#9ca3af' : '#6b7280'
-          return (
-            <g>
-              <rect x={tx} y={ty} width={tw} height={th} rx={6} fill={bg} stroke={border} strokeWidth={1} />
-              <text x={tx + 8} y={ty + 16} fontSize={10} fontWeight="bold" fill={fg}>{m.date.slice(0, 7)}</text>
-              <text x={tx + 8} y={ty + 30} fontSize={10} fill={sub}>
-                부정비율 {(m.neg_ratio * 100).toFixed(1)}%  총 {m.total.toLocaleString()}건
-              </text>
-              {inf && (
-                <>
-                  <text x={tx + 8} y={ty + 46} fontSize={10} fill={inf.direction === 'negative_spike' ? '#ef4444' : '#22c55e'}>
-                    {inf.direction === 'negative_spike' ? '↑ 부정 급증' : '↓ 긍정 회복'} {(Math.abs(inf.delta) * 100).toFixed(0)}%p
-                  </text>
-                  {inf.patch_title && (
-                    <text x={tx + 8} y={ty + 60} fontSize={9} fill={sub}>
-                      {inf.patch_title.slice(0, 22)}{inf.patch_title.length > 22 ? '…' : ''}
-                    </text>
-                  )}
-                </>
-              )}
-            </g>
-          )
-        })()}
-      </svg>
-
-      {/* legend */}
-      <div className="flex gap-4 mt-2 text-xs text-gray-500 dark:text-gray-400">
-        <span className="flex items-center gap-1">
-          <span className="inline-block w-3 h-3 rounded-full bg-red-500" /> 부정 급증
-        </span>
-        <span className="flex items-center gap-1">
-          <span className="inline-block w-3 h-3 rounded-full bg-green-500" /> 긍정 회복
-        </span>
-      </div>
-    </div>
-  )
-}
-
 function GameDetailPage({ isDark, toggleDark }) {
   const { id } = useParams()
   const navigate = useNavigate()
@@ -427,7 +270,6 @@ function GameDetailPage({ isDark, toggleDark }) {
   const [criticSummary, setCriticSummary] = useState(null)
   const [buySignal, setBuySignal] = useState(null)
   const [highlights, setHighlights] = useState(null)
-  const [sentimentTrend, setSentimentTrend] = useState(null)
   const [reviewTranslations, setReviewTranslations] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -444,12 +286,11 @@ function GameDetailPage({ isDark, toggleDark }) {
       setError(null)
 
       try {
-        const [gamesRes, summaryRes, playtimeRes, criticRes, trendRes, buySignalRes, highlightsRes] = await Promise.all([
+        const [gamesRes, summaryRes, playtimeRes, criticRes, buySignalRes, highlightsRes] = await Promise.all([
           fetch(`${API_BASE}/api/v1/games/`),
           fetch(`${API_BASE}/api/v1/games/${id}/summary`),
           fetch(`${API_BASE}/api/v1/games/${id}/playtime-analysis`),
           fetch(`${API_BASE}/api/v1/games/${id}/critic-summary`),
-          fetch(`${API_BASE}/api/v1/games/${id}/sentiment-trend`).catch(() => null),
           fetch(`${API_BASE}/api/v1/games/${id}/buy-signal`).catch(() => null),
           fetch(`${API_BASE}/api/v1/games/${id}/highlights?limit=5`).catch(() => null),
         ])
@@ -474,9 +315,6 @@ function GameDetailPage({ isDark, toggleDark }) {
           setCriticSummary(await criticRes.json())
         }
 
-        if (trendRes?.ok) {
-          setSentimentTrend(await trendRes.json())
-        }
 
         if (buySignalRes?.ok) {
           setBuySignal(await buySignalRes.json())
@@ -844,19 +682,6 @@ function GameDetailPage({ isDark, toggleDark }) {
                 )}
               </div>
             )}
-          </div>
-        )}
-        {/* ── Sprint 5: 감성 트렌드 차트 ── */}
-        {!loading && (
-          <div className="bg-white dark:bg-[#1e1e2e] rounded-xl p-7 border border-gray-200 dark:border-[#2a2a3e] shadow-sm">
-            <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0] mb-1">감성 트렌드</h2>
-            <p className="text-xs text-gray-400 dark:text-gray-500 mb-4">
-              Steam 리뷰 월별 부정 비율 추이 — 마커는 여론 변곡점
-            </p>
-            {sentimentTrend
-              ? <SentimentTrendChart data={sentimentTrend} isDark={isDark} />
-              : <p className="text-sm text-gray-400 dark:text-gray-500">감성 트렌드 데이터가 없습니다.</p>
-            }
           </div>
         )}
 
