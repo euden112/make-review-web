@@ -1,4 +1,6 @@
-# 구매 욕구 유발 기능 기획서 (A·C)
+# 리뷰 구조 변경 및 구매 욕구 유발 기능 기획서 (A·C·D)
+
+> 작업 브랜치: **`feature/review-restructure`** (베이스 `6a97e24`). 메인 테마: 리뷰 구조 변경(기능 D) + 구매 욕구 유발(기능 A·C).
 
 ## 1. 배경
 
@@ -161,13 +163,17 @@ Response:
 
 ## 5. 구현 순서
 
-| 순위 | 작업 | 비용 | 근거 |
-|---|---|---|---|
-| 1 | C. 감성 하이라이트 | 낮음 (선별 알고리즘 + 엔드포인트) | 신규 수집 0, 즉효성 |
-| 2 | A. 구매 타이밍 시그널 — `appdetails` 수집 추가 | 중간 | 신규 API 1개 |
-| 3 | A. 판정 로직 + signal API | 중간 | 이슈 트래킹 코드 이관·반전 |
-| 4 | A·C 프론트엔드 (배지·카운트다운·캐러셀) | 중간 | UI 통합 |
-| 5 | 이슈 트래킹 폐지 정리 (`events.py` 제거, `GameEvent` 처리) | 낮음 | 자산 이관 완료 후 |
+> ⚠️ **본 절은 초기 계획이며 폐기됨.** 기능 A·C·프론트·이슈 트래킹 폐지는 모두 완료(7-2 참조). 유효한 잔여 작업 순서는 **9-3**으로 일원화됨.
+
+(초기 계획 — 이력 보존용)
+
+| 순위 | 작업 | 상태 |
+|---|---|---|
+| 1 | C. 감성 하이라이트 | ✅ 완료 |
+| 2 | A. `appdetails` 수집 | ✅ 완료 |
+| 3 | A. 판정 로직 + signal API | ✅ 완료 |
+| 4 | A·C 프론트엔드 | ✅ 완료 |
+| 5 | 이슈 트래킹 폐지 정리 | ✅ 완료(백엔드)/⚠️ 잔존(BUG-4·9) |
 
 ---
 
@@ -182,72 +188,60 @@ Response:
 
 ## 7. 브랜치 재정비 및 작업 로드맵
 
-### 7-1. 배경 및 기준점 정정
+### 7-1. 배경 및 기준점
 
-기존 분기 구조에서 `feature/issue-tracking-test`가 가장 앞서 있었으나, 이슈 트래킹 폐지와 방향 전환에 따라 **실제 공유 베이스에서 다시 시작**한다.
-
-**기준점 정정 (중요):** 초기에는 공통 조상을 `7c592a4`로 잡았으나, 검증 결과 잘못된 전제였다.
+이슈 트래킹 폐지와 방향 전환에 따라 실제 공유 베이스 **`6a97e24`** 에서 다시 시작했다. (초기 `7c592a4`로 잡았다 검증 후 정정)
 
 ```
-7c592a4 "frontend Docker 설정"  = 로컬 feature/playtime-critic-user-analysis (stale)
-   └─> 6a97e24 "fix(sprint4): DB 타입·하드코딩·마이그레이션 수정"
-        = origin/feature/playtime-critic-user-analysis (원격 tip)
-        = ai-chatbot · cloud-deploy 의 실제 베이스
-        ├── feature/issue-tracking-test
-        ├── ai-chatbot
-        └── cloud-deploy
+6a97e24 "fix(sprint4): DB 타입·하드코딩·마이그레이션 수정"   ← 확정 베이스
+  = origin/feature/playtime-critic-user-analysis 의 tip
+  ├── feature/review-restructure  ← 현재 작업 브랜치 (구 feature/purchase-desire, rename됨)
+  ├── feature/ai-chatbot
+  └── feature/cloud-deploy
 ```
 
-- 팀이 원격에서 실제로 작업을 쌓은 진짜 공통 베이스는 **`6a97e24`** (7c592a4 아님)
-- `6a97e24`는 Sprint4 DB 정합성 수정 포함: `playtime_analyses`/`critic_summaries` FLOAT→NUMERIC·INTEGER→BIGINT, API `tags`/`rating` 필드 추가 — **기능 C·D와 직접 관련**
-- 로컬 `feature/playtime-critic-user-analysis`는 원격보다 1커밋 뒤(stale), fast-forward 가능
+- `6a97e24`는 Sprint4 DB 정합성 수정 포함: `playtime_analyses`/`critic_summaries` FLOAT→NUMERIC·INTEGER→BIGINT, API `tags`/`rating` 필드 추가 — **기능 C·D와 직접 관련**, 현재 브랜치 베이스에 포함됨
+- `feature/issue-tracking-test`는 유효 작업 이관 완료 후 **로컬·원격 모두 삭제됨** (이력은 `backup/issue-tracking-test-archive`에 보존)
 
-**확정 기준점: `6a97e24` (= origin/feature/playtime-critic-user-analysis)**
+### 7-2. 완료된 작업 (코드 검증 기준 2026-05-17)
 
-### 7-2. 완료된 작업 (코드 검증 기준 2026-05-17, rebase 후 갱신)
+작업 브랜치 **`feature/review-restructure`** (베이스 `6a97e24`). rebase 및 후속 정리로 커밋이 재구성되어, 아래는 **현재 브랜치 기준 커밋**.
 
-작업은 신규 브랜치 **`feature/purchase-desire`** (베이스 `6a97e24`)에서 진행됨.
-
-| 항목 | 상태 | 근거 |
+| 항목 | 상태 | 현재 브랜치 커밋 |
 |---|---|---|
-| AI 파이프라인 CPU 최적화 이관 | ✅ 완료 | `930ea5f`, `cc66671` |
-| 번역 API·게임 비교 이관 | ✅ 완료 | `299332f`, `3c98276`, `translate.py` |
-| 이슈 트래킹 폐지 | ✅ 완료 | `events.py`·`GameEvent`·`EventSummary`·관련 SQL 제거, `b1a2308` 데모 재편 |
-| 기능 C — 감성 하이라이트 (API) | ✅ 완료 | `a0996bc`, `highlights.py` 라우팅됨 |
-| 기능 A — appdetails 수집 | ✅ 완료 | `d902f2e`, `appdetails_crawler.py` |
-| 기능 A — buy-signal API | ✅ 완료 | `fbd23c5`, `buy_signal.py` 라우팅됨 |
-| A·C 프론트엔드 | ✅ 완료 | `a66d787` (배지+명장면 캐러셀) |
+| AI 파이프라인 CPU 최적화 이관 | ✅ 완료 | `2a76178` |
+| 번역 API·게임 비교 이관 | ✅ 완료 | `456ac9f`, `55351b6`, `translate.py` |
+| 이슈 트래킹 폐지 | ⚠️ 백엔드 완료/잔존 | `bbad28c` (데모 재편) — BUG-4·9 잔존 |
+| 기능 C — 감성 하이라이트 (API) | ✅ 완료 | `ce56dcb`, `highlights.py` 라우팅됨 |
+| 기능 A — appdetails 수집 | ✅ 완료 | `1f3c785`, `appdetails_crawler.py` |
+| 기능 A — buy-signal API | ✅ 완료 | `24709f8`, `buy_signal.py` 라우팅됨 |
+| A·C 프론트엔드 | ✅ 완료 | `f2c924e` (배지+명장면 캐러셀) |
+| A·C·AI 통합 정리 | ✅ 완료 | `ab42b03` |
+
+> 정정 이력: 7-2의 구 커밋 해시(`930ea5f`·`a66d787` 등)는 rebase 전 것으로 현재 브랜치에 없음. 위 표는 `git log 6a97e24..feature/review-restructure` 기준 실제 해시.
 
 ### 7-3. 기준점 정렬 — 완료
 
-기준점 불일치(`feature/purchase-desire`가 옛 `7c592a4` 기반)는 **`6a97e24` 위로 rebase 하여 해소됨**.
-
 | 항목 | 상태 | 비고 |
 |---|---|---|
-| `feature/purchase-desire` → `6a97e24` rebase | ✅ 완료 | 15커밋 재적용, 충돌 3파일 해결 |
-| 충돌 해결: `summaries.py` | ✅ | `6a97e24` tags/rating(Metacritic 환산) + purchase-desire 배치 쿼리 최적화 **병합** |
+| 구 `feature/purchase-desire` → `6a97e24` rebase | ✅ 완료 | 17커밋 재적용(`6a97e24..HEAD`), 충돌 3파일 해결 |
+| 충돌 해결: `summaries.py` | ✅ | `6a97e24` tags/rating(Metacritic 환산) + 배치 쿼리 최적화 **병합** (검증: 구문·로직 정상) |
 | 충돌 해결: `GameListPage.jsx` | ✅ | API `g.tags`(GAME_META 제거) + 대소문자 무시 검색 + buy-signal 배지 병합 |
 | 충돌 해결: `GameDetailPage.jsx` | ✅ | API `game.rating` 사용(제거된 `meta.rating` 폐기) + buy-signal 배너 보존 |
-| Sprint4 DB 정합성 수정 포함 | ✅ | `09_migration_sprint4_fixes.sql` 등 베이스에 포함 확인 |
-| 백업 ref | ✅ | `backup/purchase-desire-prerebase` (= 구 `a66d787`) 롤백 안전망 |
+| 브랜치 rename | ✅ | `feature/purchase-desire` → `feature/review-restructure` (로컬·원격, 구 원격 브랜치 삭제) |
+| 원격 반영 | ✅ | `origin/feature/review-restructure` push 완료 (upstream 추적) |
+| 백업 ref (롤백 안전망) | ✅ | `backup/purchase-desire-prerebase` (rebase 전), `backup/purchase-desire-remote-archive` (구 원격 `ab42b03`), `backup/issue-tracking-test-archive` (폐지 브랜치 `8e6bfcb`) |
 
 ### 7-4. 남은 작업
 
-| 순위 | 작업 | 분류 | 상태 | 비고 |
-|---|---|---|---|---|
-| 1 | 기능 C 동작 검증 (rebase 후 회귀 확인) | 검증 | ⬜ | highlights API + 명장면 캐러셀 정상 동작 확인 |
-| 2 | 프론트엔드 빌드/렌더 검증 | 검증 | ⬜ | 충돌 해결한 2 JSX 파일 실제 렌더 확인 (dev server) |
-| 3 | 기능 D — 유저/평론 분리 요약 (API/파이프라인) | 신규 (1차) | ⬜ | 섹션 8. 베이스 정렬 완료로 착수 가능 |
-| 4 | 기능 D 프론트엔드 (2트랙 패널·괴리 지표) | 신규 (1차) | ⬜ | 8-4 동적·비대칭 노출 |
-| 5 | 로컬 `main`·`playtime`·`origin/main` 정렬 | git·의사결정 | ⬜ | `origin/main` push 시 force 필요(원격 `644e4a7` 삭제) — 승인 필요 |
-
-> 기능 B(발견 피드)는 AI 챗봇 개발 파트가 별도 담당 — 본 로드맵 범위 외.
+> 본 절의 작업은 **9-3으로 일원화**됨 (버그 수정 + 기능 D + 검증 + git 정렬). 9-3 참조.
 
 ### 7-5. 자산 이관 주의사항
 
-- 자산 이관(AI 최적화·번역·게임 비교)·이슈 트래킹 폐지·기능 A·C·기준점 rebase는 **완료** (7-2, 7-3)
+- 자산 이관(AI 최적화·번역·게임 비교)·기능 A·C·기준점 rebase·브랜치 rename·원격 push는 **완료** (7-2, 7-3)
+- 이슈 트래킹 폐지는 백엔드 완료, **프론트(`sentiment-trend`)·`demo.py` 잔존**(BUG-4·9) — 9-3 #2에서 완결
 - `game_events` 타입 버그는 이슈 트래킹 폐지로 자연 해소됨 (완료)
-- rebase 충돌 해결 시 `6a97e24` 의도(GAME_META 제거→API tags/rating) 우선 적용 — purchase-desire의 dead `meta.rating` 참조는 폐기됨. 프론트 렌더 검증으로 회귀 없음 확인 필요 (7-4 #2)
+- rebase 충돌 해결 시 `6a97e24` 의도(GAME_META 제거→API tags/rating) 우선 적용 — dead `meta.rating` 폐기됨. 프론트 렌더 검증 필요(9-3 #10)
 
 ---
 
@@ -293,3 +287,60 @@ Response:
 ### 8-5. 추가 여부 결론
 
 **조건부 추가 채택.** 저비용·고재사용이며 기획서 명시 니즈를 직격. 단 (a) 1차 기능으로 정직히 분류, (b) 8-4 동적·비대칭 노출을 필수 조건으로 구현. 작업 우선순위는 기능 C 이후, 기능 A와 병행 가능(파이프라인 영역이 달라 충돌 적음).
+
+---
+
+## 9. 정적 분석 결과 및 수정 작업 (2026-05-17)
+
+전체 코드 정적 분석 결과. Python 구문(`compileall`)은 전체 정상. 아래는 발견된 버그·오류·미완 항목.
+
+### 9-1. 진행 현황 (2026-05-17 BUG 수정·기능 D 완료 후 갱신)
+
+| 기능 | 상태 | 비고 |
+|---|---|---|
+| 기능 A — appdetails 수집 (`appdetails_crawler.py`) | ✅ 완료 | BUG-1·2 수정, 크롤러 연결됨 |
+| 기능 A — buy-signal API (`buy_signal.py`) | ✅ 완료 | BUG-1·2·8 수정. BUG-3(sale_ends_at)만 의사결정 보류 |
+| 기능 C — 감성 하이라이트 (`highlights.py`) | ✅ 완료 | BUG-5·6·8 수정 (정렬·영어키워드·캐싱) |
+| A·C 프론트엔드 (wiring) | ✅ 정상 | vite build 통과 (28 모듈) |
+| 이슈 트래킹 폐지 | ✅ 완료 | BUG-4·9 완결 (프론트 sentiment-trend·demo 잔존 제거) |
+| 기능 D | ✅ 완료 | `/divergence` API + 괴리 지표 패널 (8-4 동적·비대칭) |
+
+### 9-2. 발견된 버그·오류 (수정 작업)
+
+| ID | 심각도 | 위치 | 내용 | 수정 작업 |
+|---|---|---|---|---|
+| BUG-1 | **높음** | `appdetails_crawler.py:77-83`, `buy_signal.py:153-154` | Steam `price_overview.initial/final`은 KRW도 ×100(센트 표기)로 반환되나, 주석이 "원 단위 그대로"라 잘못 단정하고 `/100` 누락 → 가격 100배 표시 (₩55,000→₩5,500,000) | 가격값 `// 100` 적용, 잘못된 주석 정정, 통화별 minor-unit 처리 |
+| BUG-2 | 중간 | `buy_signal.py:46-90` | `appdetails_crawler`·`histogram_crawler` 둘 다 미import, `_fetch_price`·`_fetch_histogram` 인라인 재구현 → 크롤러 2종 데드코드·로직 중복. 기획서 3-2/6은 두 크롤러 재사용을 명시 | buy-signal이 `appdetails_crawler.fetch_price_info`·`histogram_crawler.fetch_histogram` 사용하도록 통합, 인라인 제거 |
+| BUG-3 | 중간 | `buy_signal.py:155`, `appdetails_crawler.py:84` | `sale_ends_at` 항상 None → 기획서 3-5/8-4 세일 종료 카운트다운(FOMO 핵심 레버) 동작 불가 | 세일 종료일 소스 확보(스토어 페이지 파싱 등) 또는 기획서에서 카운트다운 범위 조정 |
+| BUG-4 | 중간 | `GameDetailPage.jsx:263,430,447,452,477-478,854-857` | 폐지된 `/sentiment-trend` 엔드포인트를 프론트가 여전히 호출·렌더(`SentimentTrendChart`). 백엔드 제거됨 → 항상 빈 결과 (크래시는 `.catch`로 방지되나 데드 UI·네트워크 낭비) | `SentimentTrendChart`·`sentimentTrend` state·fetch·렌더 블록 제거 (이슈 트래킹 폐지 정리 누락분) |
+| BUG-5 | 낮음 | `highlights.py:58` | `.limit(3000)` ORDER BY 없음 → 리뷰 3000개 초과 게임에서 임의 부분집합만 평가, 진짜 명장면 누락 가능 | helpful_count 등 정렬 후 상위 N 또는 전수 스코어링 전략 재설계 |
+| BUG-6 | 낮음 | `highlights.py:12-14` | 감정 키워드 정규식 한국어 전용 → 영어 리뷰(Steam english) 감정 점수 저평가, 한국어 편향 | 영어 감정 키워드 추가 또는 언어 무관 신호(평점·helpful·길이) 가중 강화 |
+| BUG-7 | 낮음 | `backend/app/api/v1/__pycache__/events.cpython-311.pyc` | 폐지된 events 소스 삭제됐으나 컴파일 캐시 잔존 (무해하나 크러프트) | `__pycache__` 정리, `.gitignore`로 재발 방지 |
+| BUG-8 | 낮음 | `buy_signal.py`, `highlights.py` | 캐싱 없음 — 매 요청마다 Steam 외부 2콜(각 10s) 또는 최대 3000행 스코어링. 구 events API엔 Redis 캐싱 존재 | Redis 캐싱 도입 (게임별 TTL), 외부 호출 레이트리밋 대비 |
+| BUG-9 | 중간 | `demo.py:318-360+` | 커밋 `bbad28c`가 "demo 이슈 트래킹 제거"라 명시했으나 demo.py는 여전히 `fetch_histogram→detect_inflection_points→fetch_news→match_news_to_inflection` 전체 이슈 트래킹 파이프라인을 "크롤러 검증"으로 실행. `news_crawler`는 이 잔존 흐름에서만 사용됨 → 폐지 상태와 불일치 | demo의 issue-tracking 흐름 제거(또는 buy-signal/highlights 검증으로 대체), `news_crawler` 폐기 여부 확정, 커밋 메시지와 코드 정합화 |
+
+> **추가 검토 정상 확인**: 제거된 `GameEvent`/`EventSummary` 잔존 참조 없음. rebase 병합한 `summaries.py:get_games`는 batched 쿼리·tags/rating 보존 로직·구문 모두 정상.
+
+### 9-3. 작업 완료/미완료 현황 (2026-05-17 갱신)
+
+| 순위 | 작업 | 분류 | 상태 | 커밋 |
+|---|---|---|---|---|
+| 1 | BUG-1 가격 100배 오류 수정 | 버그 | ✅ 완료 | `682742e` |
+| 2 | BUG-4·9 이슈 트래킹 폐지 정리 완결 | 회귀 | ✅ 완료 | `91118a9` |
+| 3 | BUG-2 appdetails·histogram 크롤러 통합 | 리팩터 | ✅ 완료 | `deda870` |
+| 4 | BUG-3 sale_ends_at 처리 | 미완 | ⏸ **의사결정 보류** | — |
+| 5 | BUG-8 buy-signal/highlights Redis 캐싱 | 성능 | ✅ 완료 | `cf6b2ba` |
+| 6 | BUG-5·6 highlights 표본·언어 편향 보정 | 품질 | ✅ 완료 | `ad89270` |
+| 7 | BUG-7 `__pycache__` 정리 + `.gitignore` | 크러프트 | ✅ 완료 | `844be5d` |
+| 8 | 기능 D — 유저/평론 분리 요약 (API) | 신규(1차) | ✅ 완료 | `8368816` |
+| 9 | 기능 D 프론트엔드 (2트랙 패널·괴리 지표) | 신규(1차) | ✅ 완료 | `098e6df` |
+| 10 | 기능 C 동작 검증 + 프론트 렌더 검증 | 검증 | ✅ 완료 | compileall·vite build·라우터 검증 통과 |
+| 11 | 로컬 `main`·`playtime`·`origin/main` 정렬 | git | ✅ 완료 | `e0d13dd` (force-push 승인됨, 구 원격 브랜치 삭제) |
+
+**미완료 1건 — BUG-3 `sale_ends_at`**: Steam appdetails API가 세일 종료일 미제공.
+선택지 (a) 스펙 조정: 카운트다운 제거, `sale_ends_at` 공식 null 허용, 프론트는 '할인 중' 강조로 degrade (견고·저유지보수) / (b) 스토어 페이지 파싱: 카운트다운 유지하나 Steam UI 변경 시 깨지는 프래질 의존성. 사용자 결정 대기 중.
+
+> 7-4의 기존 항목은 본 9-3으로 통합·갱신됨. 기능 B(발견 피드)는 AI 챗봇 파트 담당 — 범위 외.
+> 기능 D 구현 방식: 8-2 "재배치 중심" 채택 — AI 파이프라인 재실행 없이 저장된
+> user(`GameReviewSummary`)·critic(`CriticSummary`) 요약에서 괴리 재산출.
+> `reduce_api.py` critic 프롬프트 반전(8-2)은 미적용(저비용·저리스크 우선, 8-5 부합).
