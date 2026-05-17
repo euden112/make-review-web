@@ -144,14 +144,16 @@ def _build_response(price: dict | None, sentiment: dict) -> dict:
     if state == "negative_spike":
         reasons.append("최근 부정 여론 급증 — 구매 전 확인 권장")
 
+    # Steam price_overview는 최소 통화 단위(×100, KRW 포함)로 반환하므로
+    # 표시용 금액으로 환산하려면 100으로 나눈다 (BUG-1).
     original = (price or {}).get("initial")
     final = (price or {}).get("final")
 
     return {
         "is_good_timing": is_good_timing,
         "discount_percent": discount,
-        "original_price": int(original) if original is not None else None,
-        "final_price": int(final) if final is not None else None,
+        "original_price": int(original) // 100 if original is not None else None,
+        "final_price": int(final) // 100 if final is not None else None,
         "sale_ends_at": None,
         "sentiment_state": state,
         "reasons": reasons,

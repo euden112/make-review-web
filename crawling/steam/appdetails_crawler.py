@@ -71,15 +71,17 @@ def fetch_price_info(appid: str, country: str = "kr") -> PriceInfo | None:
         )
 
     discount = int(price.get("discount_percent", 0))
-    initial = price.get("initial")   # 원가 (센트 단위)
-    final = price.get("final")       # 현재가 (센트 단위)
+    initial = price.get("initial")   # 최소 통화 단위(×100, KRW 포함)
+    final = price.get("final")       # 최소 통화 단위(×100, KRW 포함)
 
-    # Steam는 KRW에서 센트 단위가 아닌 원 단위를 반환하므로 그대로 사용
+    # Steam price_overview는 모든 통화를 최소 단위(×100)로 반환한다.
+    # KRW는 실제로 소수 단위가 없지만 Steam은 동일하게 ×100을 적용하므로
+    # 표시용 금액으로 환산하려면 100으로 나눠야 한다 (BUG-1).
     return PriceInfo(
         appid=appid,
         is_on_sale=discount > 0,
         discount_percent=discount,
-        original_price=int(initial) if initial is not None else None,
-        final_price=int(final) if final is not None else None,
+        original_price=int(initial) // 100 if initial is not None else None,
+        final_price=int(final) // 100 if final is not None else None,
         sale_ends_at=None,  # Steam appdetails는 세일 종료일을 직접 제공하지 않음
     )
