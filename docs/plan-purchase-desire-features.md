@@ -341,7 +341,7 @@ Response:
 
 ### 9-2. 버그 처리 결과
 
-정적 분석으로 발견된 9건 중 **9건 전부 해결** (BUG-3: 스펙축소 + 리프레셔/스케줄러 운영화 + compose 잡 컨테이너 완료).
+정적 분석 9건 + **E2E 테스트 중 추가 발견 2건(BUG-10·11)** = 총 11건, **전부 해결**. (BUG-3: 스펙축소 + 리프레셔/스케줄러 운영화 + compose 잡 컨테이너 완료. BUG-10·11: 정적 분석이 import·런타임 경로를 못 본 한계로 누락됐던 실결함, `docs/e2e-test-analysis-log.md`에서 발견·수정)
 
 | ID | 심각도 | 요약 | 상태 | 커밋 |
 |---|---|---|---|---|
@@ -354,8 +354,12 @@ Response:
 | BUG-7 | 낮음 | 폐지 `events.pyc` 추적 잔존 | ✅ 해결 | `844be5d` |
 | BUG-8 | 낮음 | buy-signal/highlights 캐싱 없음 | ✅ 해결 | `cf6b2ba` |
 | BUG-9 | 중간 | `demo.py` 이슈 트래킹 흐름 잔존(폐지 상태 불일치) | ✅ 해결 | `91118a9` |
+| BUG-10 | **높음** | `ai_service`가 import하는 `invalidate_playtime_cache`·`invalidate_critic_cache` 미정의 → ImportError로 backend 부팅 차단 (정적 분석 누락, E2E서 발견) | ✅ 해결 | `f67f469` |
+| BUG-11 | 중간 | `summaries.py`가 `joinedload(GameReviewSummary.job)` 사용하나 모델에 `job` 관계 누락 → `/summary` 500 (정적 분석 누락, E2E서 발견) | ✅ 해결 | `19f1818` |
 
 > 정상 확인: `GameEvent`/`EventSummary` 잔존 참조 없음. rebase 병합 `summaries.py:get_games` 구문·로직 정상.
+> **검증 한계 명시**: 표의 ✅는 코드 수정 실재를 git에서 검증한 것. `--scenario all` **41/41 PASS는 런타임 주장**으로, Docker·유효 GROQ 키·크롤 동반 재실행으로만 확정됨 (재현 절차: `e2e-test-analysis-log.md` §4).
+> **정적 분석 한계 교훈**: BUG-10·11은 구문/단일파일 검사로는 안 잡히는 import·ORM 관계 결함. 향후 검토 시 `python -c "import app.main"` 류 부팅 스모크를 정적 단계에 포함 권장.
 
 ### 9-3. 작업 현황 — 완료 요약 + 잔여
 
