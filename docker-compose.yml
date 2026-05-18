@@ -87,6 +87,38 @@ services:
       ollama:
         condition: service_started
 
+  # 일일 잡 컨테이너 (기획서 9-3): 매일 17:05 UTC 정렬로
+  # 가격·여론 리프레셔 → AI 요약 배치 실행. API 프로세스와 격리해
+  # 응답 지연·잡 중복 실행(레이트리밋/Groq 한도 침해)을 방지한다.
+  # 단일 인스턴스로만 기동(scale 금지).
+  scheduler:
+    image: python:3.11-slim
+    container_name: capstone_scheduler
+    working_dir: /app
+    volumes:
+      - ./backend:/app
+      - .:/workspace
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:password@postgres:5432/review_db
+      - REDIS_URL=redis://redis:6379/0
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - LOCAL_MAP_MODEL=gemma3:1b
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - GROQ_MODEL=${GROQ_MODEL:-meta-llama/llama-4-scout-17b-16e-instruct}
+      - PYTHONPATH=/workspace/backend:/workspace/ai-pipeline:/workspace/crawling/steam
+    command: sh -c "pip install -r requirements.txt && python -m app.jobs.scheduler --loop"
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+
   frontend:
     build:
       context: ./frontend

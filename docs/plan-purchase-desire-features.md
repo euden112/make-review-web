@@ -88,22 +88,26 @@ Response:
 - `GameListPage` 카드: "지금이 적기" 배지 + 할인율
 - `GameDetailPage` 히어로: 사유 + 할인율 강조 + "가격은 Steam에서 확인" 스토어 링크 (카운트다운 없음)
 
-### 3-5b. 데이터 신선도 설계 (가격 staleness·레이트리밋 대응)
+### 3-5b. 데이터 신선도 설계 (가격 staleness·레이트리밋·크롤링 비용 대응)
 
-`buy-signal`은 변동 속도가 정반대인 두 데이터로 구성된다.
+> **설계 정정 (2026-05-18)**: 초기 "가격 전용 잡 1~3h 주기"는 과설계로 폐기. Steam 할인은 거의 전부 **17:00 UTC 경계에서 일 1회 토글**(시즈널 세일·데일리/미드위크 딜·퍼블리셔 딜 모두 Steamworks 스케줄러가 이 경계 사용)되므로, 시간 단위 폴링은 정보 가치 없이 비용만 12배. **일 1회 17:05 UTC 정렬 패스**로 변경하고, 멀티 appid 배치로 호출량을 추가 압축한다.
+
+`buy-signal`은 변동 속도가 다른 두 데이터로 구성된다.
 
 | 구성 | 변동성 | 갱신 |
 |---|---|---|
-| 가격·할인 (appdetails) | 시간 단위 급변 | **가격 전용 경량 잡, 1~3h 주기** (일 AI 배치와 분리) |
-| 여론·histogram | 주~월 완만 | 일 단위 캐시 |
+| 가격·할인 (appdetails) | **일 1회(≈17:00 UTC) 토글** | 일 1회 17:05 UTC 정렬 패스, **멀티 appid 배치** |
+| 여론·histogram | 주~월 완만 | 같은 일일 패스에 포함 (appid별, 배치 불가) |
 
-**핵심 원칙: 사용자 요청은 Steam을 직접 호출하지 않고 캐시만 읽는다.**
+**핵심 원칙: 사용자 요청은 Steam을 직접 호출하지 않고 Redis 캐시만 읽는다.**
 
-1. **서버측 스로틀 리프레셔**: 가격 전용 잡이 카탈로그를 `1.5s` 간격으로 순회(약 200req/5분 한도 내), Steam 가격 변경 시각(≈17:00 UTC) 직후 1회 포함, 결과를 Redis에 `game_id`별 저장. 429 시 백오프 + 마지막 성공값 유지(graceful degrade)
-2. **신선도 게이팅**: 가격 스냅샷이 신선도 임계(예 잡 주기 + 여유) 초과면 `is_good_timing`을 강제 `false`로 degrade — 확신 없는 할인을 단정하지 않음
+1. **일일 정렬 리프레셔**: 매일 17:05 UTC(가격 경계 직후 + 전파 버퍼)에 1회 패스. 가격은 `appdetails?filters=price_overview`에 **콤마 다중 appid**로 배치 조회(청크 실패 시 해당 청크만 단건 폴백), 여론은 appid별 조회. 결과를 Redis에 `game_id`별 저장. 1차 실패분만 2차 패스에서 재시도. 429 시 백오프 + 마지막 성공값 유지(graceful degrade)
+2. **신선도 게이팅**: 가격 스냅샷이 신선도 임계(`PRICE_STALE_SECONDS` ≈ 28h = 일 1패스 + 여유) 초과면 `is_good_timing`을 강제 `false`로 degrade — 확신 없는 할인을 단정하지 않음
 3. **UX 헤지**: `price_as_of` 표기 + 스토어 링크로 최종 확인 위임
 
-**효과**: ① staleness 24h → ≤잡 주기(1~3h) ② 외부 호출량 = O(카탈로그/주기), 사용자 트래픽과 독립 → 레이트리밋 노출 0 (100게임·2h ≈ 0.8req/분, 한도의 2%)
+**효과**: ① staleness ≤ 28h(가격이 어차피 일 1회만 변동하므로 정보 손실 없음) ② 외부 호출량 = 일 단위 상수, 사용자 트래픽과 독립 → 레이트리밋 노출 0. 100게임 기준: 가격 ~5req(배치) + 여론 ~100req = **일 ~105req**(한도의 1% 미만, 기존 2h 루프 ~1,200req 대비 ~12배, 배치 포함 시 가격만 ~20배 절감)
+
+> 여론을 주 1회로 더 줄이는 안은 폐기됨: 가격 배치 후 Steam 예산이 충분(한도 1%↓)하고, 일일 단일 패스로 통일하면 운영이 단순하며, 긍정 회복 점화(buy-signal 핵심 레버)의 신선도 이점이 크다. Groq 일 한도는 AI 요약 파이프라인에만 적용되며 여론 경로(순수 histogram 크롤·계산)와 무관.
 
 ### 3-6. 이슈 트래킹 자산 전환
 
@@ -329,7 +333,7 @@ Response:
 | 기능 | 상태 | 비고 |
 |---|---|---|
 | 기능 A — appdetails 수집 (`appdetails_crawler.py`) | ✅ 완료 | BUG-1·2 수정, 크롤러 연결됨 |
-| 기능 A — buy-signal API (`buy_signal.py`) | ⚠️ 구현/잔여 | BUG-1·2·8 수정. BUG-3 설계 확정(스펙축소+신선도설계 3-5b), 구현 잔여 |
+| 기능 A — buy-signal API (`buy_signal.py`) | ✅ 완료 | 스펙축소·Redis read-only·신선도 게이팅 구현. 리프레셔→스케줄러→compose `scheduler` 잡 컨테이너로 운영화 (A안 실패 격리 적용) |
 | 기능 C — 감성 하이라이트 (`highlights.py`) | ✅ 완료 | BUG-5·6·8 수정 (정렬·영어키워드·캐싱) |
 | A·C 프론트엔드 (wiring) | ✅ 정상 | vite build 통과 (28 모듈) |
 | 이슈 트래킹 폐지 | ✅ 완료 | BUG-4·9 완결 (프론트 sentiment-trend·demo 잔존 제거) |
@@ -337,13 +341,13 @@ Response:
 
 ### 9-2. 버그 처리 결과
 
-정적 분석으로 발견된 9건 중 **8건 수정 완료, 1건(BUG-3) 설계 확정·구현 잔여**.
+정적 분석으로 발견된 9건 중 **9건 전부 해결** (BUG-3: 스펙축소 + 리프레셔/스케줄러 운영화 + compose 잡 컨테이너 완료).
 
 | ID | 심각도 | 요약 | 상태 | 커밋 |
 |---|---|---|---|---|
 | BUG-1 | 높음 | Steam 가격 minor-unit(×100) 미환산 → 가격 100배 표시 | ✅ 해결 | `682742e` |
 | BUG-2 | 중간 | `appdetails`·`histogram` 크롤러 인라인 재구현(데드코드·중복) | ✅ 해결 | `deda870` |
-| BUG-3 | 중간 | `sale_ends_at` 항상 None → 세일 카운트다운 동작 불가 | 🔧 **설계 확정, 구현 잔여** | 3-4·3-5b |
+| BUG-3 | 중간 | `sale_ends_at` 항상 None → 세일 카운트다운 동작 불가 | ✅ 해결 (스펙축소 + 리프레셔·스케줄러·compose 운영화) | 3-4·3-5b·9-3 |
 | BUG-4 | 중간 | 프론트가 폐지된 `/sentiment-trend` 호출·렌더 | ✅ 해결 | `91118a9` |
 | BUG-5 | 낮음 | `highlights` `.limit(3000)` 정렬 없음 → 명장면 누락 가능 | ✅ 해결 | `ad89270` |
 | BUG-6 | 낮음 | 감정 키워드 한국어 전용 → 영어 리뷰 편향 | ✅ 해결 | `ad89270` |
@@ -370,16 +374,23 @@ Response:
 | 기능 C·프론트 검증 | compileall·vite build·라우터 통과 |
 | `main`·`playtime`·`origin/main` 정렬 | `e0d13dd` (force-push 승인 완료) |
 
-**잔여 (1건) — BUG-3 구현 (설계 확정됨)**
+**리프레셔 운영화 + 스케줄링 — ✅ 전부 완료 (2026-05-18)**
 
-의사결정 완료: **(a) 스펙 축소 채택**. `sale_ends_at`·카운트다운 제거, 할인율을 FOMO 레버로 유지. 추가로 일 배치–가격 staleness 및 레이트리밋 문제까지 설계 확정(3-4·3-5b). 잔여는 **구현**:
+(진단 이력 보존) 코드 검증 결과: 스펙 축소(`sale_ends_at` 제거·`price_as_of` 추가), buy-signal/list Redis read-only, 신선도 게이팅, `price_refresher.py` 모듈 자체는 구현 완료였으나, **리프레셔를 기동하는 스케줄러가 없어** Redis 스냅샷이 비어 buy-signal이 항상 `is_good_timing=false`로만 응답(기능 A 운영상 비활성)하던 상태였다. "1~3h 주기"는 과설계로 정정됨(3-5b). → **해소 완료**: `ai_batch.py` 추출 + `scheduler.run_daily` 실패 격리(A안) + compose `scheduler` 잡 컨테이너 추가로 운영화. 항목별 상태는 아래 표(전부 ✅):
 
-| 구현 항목 | 내용 |
-|---|---|
-| 스펙 축소 | `buy_signal.py`·`appdetails_crawler.py`에서 `sale_ends_at` 제거, `reasons`에서 "세일 종료 D-N" 제거, `price_as_of`(스냅샷 시각) 추가. 프론트 카운트다운 UI → 스토어 링크 헤지로 교체 |
-| 가격 전용 리프레셔 | 일 AI 배치와 분리된 1~3h 주기 가격 갱신 잡 (`1.5s` 스로틀, 17:00 UTC 직후 포함, 429 백오프·last-known 유지). 결과 Redis `game_id`별 저장 |
-| 신선도 게이팅 | 가격 스냅샷이 임계 초과면 `is_good_timing=false` degrade |
-| 사용자 read-only | buy-signal/list 응답은 Redis만 read — Steam 직접 호출 제거 (레이트리밋 노출 0) |
+| 잔여 항목 | 내용 | 상태 |
+|---|---|---|
+| 멀티 appid 배치 | `appdetails_crawler.py` `fetch_price_info_batch` — `filters=price_overview` 콤마 다중 appid(20개/청크) + 청크 실패 시 단건 폴백 | ✅ 코드 완료 |
+| 리프레셔 일일 정렬 | `price_refresher.py` 재작성 — 매일 17:05 UTC 정렬, 가격 배치, 1차 실패분만 2차 재시도, 여론 같은 패스 일단위 통일 | ✅ 코드 완료 |
+| 스케줄러 잡 | `app/jobs/scheduler.py` 신규 — 17:05 UTC까지 sleep → 가격·여론 리프레셔 → AI 요약 증분 배치 직렬화. `--once`/`--loop` | ✅ 코드 완료 |
+| 신선도 임계 상향 | `buy_signal_logic.PRICE_STALE_SECONDS` `5h` → `28h` (일 1패스 + 여유) | ✅ 코드 완료 |
+| 스펙 축소·read-only | `sale_ends_at` 제거·`price_as_of`·신선도 게이팅·Redis read-only | ✅ 코드 완료 |
+| 스케줄러 작업 분리 (A안) | `_ai_summary_batch`를 `app/jobs/ai_batch.py`(독립 `--once/--loop`)로 추출 + `scheduler.run_daily`에서 리프레셔·AI를 각각 `try`로 감싸 실패 독립화 | ✅ 코드 완료 (`ai_batch.py` 신규, scheduler 리팩터) |
+| compose `scheduler` 서비스 | `docker-compose.yml`에 격리 잡 컨테이너(`python -m app.jobs.scheduler --loop`, `restart: unless-stopped`) 추가 | ✅ 반영 (compose config 검증 통과) |
+
+> **스케줄러 메커니즘 결정 (2026-05-18)**: 잡 컨테이너 방식 채택. 근거 — ① AI 요약 배치(CPU 추론 수십 분)를 API 프로세스와 격리해야 응답 지연 없음 ② `uvicorn --reload`에 APScheduler를 얹으면 잡 중복 실행(레이트리밋 폭증·Groq 한도 소진) ③ `price_refresher.py`에 `--loop` 골격 존재, compose가 이미 오케스트레이션. cron 사이드카는 차선(컨테이너 비용 동일 + crontab·시간대 관리 표면 추가). 가격·AI 두 잡을 17:05 UTC 한 타임라인에 배치.
+
+> **스케줄러 작업 분리 결정 (2026-05-18, A안)**: 가격·여론 리프레셔와 AI 요약 배치는 **데이터 의존이 없다**(AI는 크롤된 리뷰만 의존, Redis 가격 스냅샷 미참조 / buy-signal은 Redis만, divergence는 저장 요약만 참조 → 순서 불요). 따라서 직렬 강제는 운영 편의일 뿐. **A안 채택**: `ai_batch.py` 독립 모듈 추출 + scheduler에서 각 작업 `try` 독립화. 근거 — AI 일 1회 전제에서 B(완전 독립 2잡)의 유일 차별점인 "독립 케이던스"가 무가치해지고, A가 단일 컨테이너로 실패 격리·독립 재실행·관측 분리를 모두 달성하며 "잡 컨테이너 단일 인스턴스" 결정과 충돌하지 않음. C(현행)는 가격 실패 시 AI가 통째 스킵되는 실패 전파 결함 잔존. **B 승격 트리거**: 향후 AI를 가격과 다른 빈도(신규 크롤 직후·일 다회 등)로 돌릴 필요가 생길 때 — A 구조는 B 확장을 막지 않으므로 선제 채택 불요.
 
 > 기능 D 구현 방식: 8-2 "재배치 중심" 채택 — AI 재실행 없이 저장된 user(`GameReviewSummary`)·critic(`CriticSummary`) 요약에서 괴리 재산출. `reduce_api.py` critic 프롬프트 반전(8-2)은 미적용(저비용·저리스크 우선, 8-5 부합).
 > 5장·7-4는 본 9장으로 일원화됨. 기능 B는 AI 챗봇 파트 담당 — 범위 외.

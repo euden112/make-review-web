@@ -786,6 +786,22 @@ function GameDetailPage({ isDark, toggleDark }) {
                 </li>
               ))}
             </ul>
+
+            {/* BUG-3: 세일 카운트다운 미제공 → 스냅샷 시각 + 스토어 확인 헤지 */}
+            <div className="mt-4 pt-3 border-t border-gray-200 dark:border-[#2a2a3e] flex flex-wrap items-center justify-between gap-2">
+              {buySignal.price_as_of && (
+                <span className="text-xs text-gray-400">
+                  가격 기준 {new Date(buySignal.price_as_of).toLocaleString('ko-KR')}
+                  {buySignal.price_is_stale && ' · 최신이 아닐 수 있음'}
+                </span>
+              )}
+              {buySignal.store_url && (
+                <a href={buySignal.store_url} target="_blank" rel="noopener noreferrer"
+                  className="text-xs font-bold text-blue-600 dark:text-blue-400 hover:underline">
+                  최종 가격은 Steam에서 확인 →
+                </a>
+              )}
+            </div>
           </div>
         )}
 
