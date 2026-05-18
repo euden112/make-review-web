@@ -73,18 +73,48 @@ Response:
   "discount_percent": 50,
   "original_price": 39000,
   "final_price": 19500,
-  "sale_ends_at": "2026-05-25",
   "sentiment_state": "positive_recovery",
-  "reasons": ["50% 할인 중", "최근 평가가 역대 최고 구간", "세일 종료 D-9"]
+  "price_as_of": "2026-05-18T17:30:00Z",   // 가격 스냅샷 기준 시각
+  "reasons": ["50% 할인 중", "최근 평가가 역대 최고 구간"]
 }
 ```
+
+> **BUG-3 결정 (스펙 축소, 권장안 채택)**: Steam `appdetails`가 세일 종료일을 미제공 → `sale_ends_at`·카운트다운 제거. FOMO 레버는 **할인율**로 유지. 대신 `price_as_of`(가격 스냅샷 시각)를 노출해 준실시간임을 명시.
 
 목록 페이지 일괄 조회 부담을 줄이기 위해 게임 목록 응답에 경량 플래그(`is_good_timing`, `discount_percent`)만 포함하고, 상세 사유는 본 엔드포인트로 분리한다.
 
 ### 3-5. UI
 
 - `GameListPage` 카드: "지금이 적기" 배지 + 할인율
-- `GameDetailPage` 히어로: 사유 + 세일 종료 카운트다운 (FOMO)
+- `GameDetailPage` 히어로: 사유 + 할인율 강조 + "가격은 Steam에서 확인" 스토어 링크 (카운트다운 없음)
+
+### 3-5b. 데이터 신선도 설계 (가격 staleness·레이트리밋 대응)
+
+`buy-signal`은 변동 속도가 정반대인 두 데이터로 구성된다.
+
+| 구성 | 변동성 | 갱신 |
+|---|---|---|
+| 가격·할인 (appdetails) | 시간 단위 급변 | **가격 전용 경량 잡, 1~3h 주기** (일 AI 배치와 분리) |
+| 여론·histogram | 주~월 완만 | 일 단위 캐시 |
+
+**핵심 원칙: 사용자 요청은 Steam을 직접 호출하지 않고 캐시만 읽는다.**
+
+1. **서버측 스로틀 리프레셔**: 가격 전용 잡이 카탈로그를 `1.5s` 간격으로 순회(약 200req/5분 한도 내), Steam 가격 변경 시각(≈17:00 UTC) 직후 1회 포함, 결과를 Redis에 `game_id`별 저장. 429 시 백오프 + 마지막 성공값 유지(graceful degrade)
+2. **신선도 게이팅**: 가격 스냅샷이 신선도 임계(예 잡 주기 + 여유) 초과면 `is_good_timing`을 강제 `false`로 degrade — 확신 없는 할인을 단정하지 않음
+3. **UX 헤지**: `price_as_of` 표기 + 스토어 링크로 최종 확인 위임
+
+**효과**: ① staleness 24h → ≤잡 주기(1~3h) ② 외부 호출량 = O(카탈로그/주기), 사용자 트래픽과 독립 → 레이트리밋 노출 0 (100게임·2h ≈ 0.8req/분, 한도의 2%)
+
+### 3-6. 이슈 트래킹 자산 전환
+
+| 이슈 트래킹 (폐지) | 구매 타이밍 시그널 (신규) |
+|---|---|
+| `histogram_crawler` → 변곡점 경고 | → 긍정 피크 점화 |
+| `news_crawler` → 논란/패치 매칭 | → 세일 이벤트 감지 |
+| `event_service` 오케스트레이션 | → signal 산출로 재배치 |
+| `GameEvent` 테이블 | 미사용 (드롭 또는 보류) |
+
+폐지를 손실이 아닌 **자산 전환**으로 만든다 — 매몰비용 회수 + 출구 전략.
 
 ### 3-6. 이슈 트래킹 자산 전환
 
@@ -299,48 +329,57 @@ Response:
 | 기능 | 상태 | 비고 |
 |---|---|---|
 | 기능 A — appdetails 수집 (`appdetails_crawler.py`) | ✅ 완료 | BUG-1·2 수정, 크롤러 연결됨 |
-| 기능 A — buy-signal API (`buy_signal.py`) | ✅ 완료 | BUG-1·2·8 수정. BUG-3(sale_ends_at)만 의사결정 보류 |
+| 기능 A — buy-signal API (`buy_signal.py`) | ⚠️ 구현/잔여 | BUG-1·2·8 수정. BUG-3 설계 확정(스펙축소+신선도설계 3-5b), 구현 잔여 |
 | 기능 C — 감성 하이라이트 (`highlights.py`) | ✅ 완료 | BUG-5·6·8 수정 (정렬·영어키워드·캐싱) |
 | A·C 프론트엔드 (wiring) | ✅ 정상 | vite build 통과 (28 모듈) |
 | 이슈 트래킹 폐지 | ✅ 완료 | BUG-4·9 완결 (프론트 sentiment-trend·demo 잔존 제거) |
 | 기능 D | ✅ 완료 | `/divergence` API + 괴리 지표 패널 (8-4 동적·비대칭) |
 
-### 9-2. 발견된 버그·오류 (수정 작업)
+### 9-2. 버그 처리 결과
 
-| ID | 심각도 | 위치 | 내용 | 수정 작업 |
+정적 분석으로 발견된 9건 중 **8건 수정 완료, 1건(BUG-3) 설계 확정·구현 잔여**.
+
+| ID | 심각도 | 요약 | 상태 | 커밋 |
 |---|---|---|---|---|
-| BUG-1 | **높음** | `appdetails_crawler.py:77-83`, `buy_signal.py:153-154` | Steam `price_overview.initial/final`은 KRW도 ×100(센트 표기)로 반환되나, 주석이 "원 단위 그대로"라 잘못 단정하고 `/100` 누락 → 가격 100배 표시 (₩55,000→₩5,500,000) | 가격값 `// 100` 적용, 잘못된 주석 정정, 통화별 minor-unit 처리 |
-| BUG-2 | 중간 | `buy_signal.py:46-90` | `appdetails_crawler`·`histogram_crawler` 둘 다 미import, `_fetch_price`·`_fetch_histogram` 인라인 재구현 → 크롤러 2종 데드코드·로직 중복. 기획서 3-2/6은 두 크롤러 재사용을 명시 | buy-signal이 `appdetails_crawler.fetch_price_info`·`histogram_crawler.fetch_histogram` 사용하도록 통합, 인라인 제거 |
-| BUG-3 | 중간 | `buy_signal.py:155`, `appdetails_crawler.py:84` | `sale_ends_at` 항상 None → 기획서 3-5/8-4 세일 종료 카운트다운(FOMO 핵심 레버) 동작 불가 | 세일 종료일 소스 확보(스토어 페이지 파싱 등) 또는 기획서에서 카운트다운 범위 조정 |
-| BUG-4 | 중간 | `GameDetailPage.jsx:263,430,447,452,477-478,854-857` | 폐지된 `/sentiment-trend` 엔드포인트를 프론트가 여전히 호출·렌더(`SentimentTrendChart`). 백엔드 제거됨 → 항상 빈 결과 (크래시는 `.catch`로 방지되나 데드 UI·네트워크 낭비) | `SentimentTrendChart`·`sentimentTrend` state·fetch·렌더 블록 제거 (이슈 트래킹 폐지 정리 누락분) |
-| BUG-5 | 낮음 | `highlights.py:58` | `.limit(3000)` ORDER BY 없음 → 리뷰 3000개 초과 게임에서 임의 부분집합만 평가, 진짜 명장면 누락 가능 | helpful_count 등 정렬 후 상위 N 또는 전수 스코어링 전략 재설계 |
-| BUG-6 | 낮음 | `highlights.py:12-14` | 감정 키워드 정규식 한국어 전용 → 영어 리뷰(Steam english) 감정 점수 저평가, 한국어 편향 | 영어 감정 키워드 추가 또는 언어 무관 신호(평점·helpful·길이) 가중 강화 |
-| BUG-7 | 낮음 | `backend/app/api/v1/__pycache__/events.cpython-311.pyc` | 폐지된 events 소스 삭제됐으나 컴파일 캐시 잔존 (무해하나 크러프트) | `__pycache__` 정리, `.gitignore`로 재발 방지 |
-| BUG-8 | 낮음 | `buy_signal.py`, `highlights.py` | 캐싱 없음 — 매 요청마다 Steam 외부 2콜(각 10s) 또는 최대 3000행 스코어링. 구 events API엔 Redis 캐싱 존재 | Redis 캐싱 도입 (게임별 TTL), 외부 호출 레이트리밋 대비 |
-| BUG-9 | 중간 | `demo.py:318-360+` | 커밋 `bbad28c`가 "demo 이슈 트래킹 제거"라 명시했으나 demo.py는 여전히 `fetch_histogram→detect_inflection_points→fetch_news→match_news_to_inflection` 전체 이슈 트래킹 파이프라인을 "크롤러 검증"으로 실행. `news_crawler`는 이 잔존 흐름에서만 사용됨 → 폐지 상태와 불일치 | demo의 issue-tracking 흐름 제거(또는 buy-signal/highlights 검증으로 대체), `news_crawler` 폐기 여부 확정, 커밋 메시지와 코드 정합화 |
+| BUG-1 | 높음 | Steam 가격 minor-unit(×100) 미환산 → 가격 100배 표시 | ✅ 해결 | `682742e` |
+| BUG-2 | 중간 | `appdetails`·`histogram` 크롤러 인라인 재구현(데드코드·중복) | ✅ 해결 | `deda870` |
+| BUG-3 | 중간 | `sale_ends_at` 항상 None → 세일 카운트다운 동작 불가 | 🔧 **설계 확정, 구현 잔여** | 3-4·3-5b |
+| BUG-4 | 중간 | 프론트가 폐지된 `/sentiment-trend` 호출·렌더 | ✅ 해결 | `91118a9` |
+| BUG-5 | 낮음 | `highlights` `.limit(3000)` 정렬 없음 → 명장면 누락 가능 | ✅ 해결 | `ad89270` |
+| BUG-6 | 낮음 | 감정 키워드 한국어 전용 → 영어 리뷰 편향 | ✅ 해결 | `ad89270` |
+| BUG-7 | 낮음 | 폐지 `events.pyc` 추적 잔존 | ✅ 해결 | `844be5d` |
+| BUG-8 | 낮음 | buy-signal/highlights 캐싱 없음 | ✅ 해결 | `cf6b2ba` |
+| BUG-9 | 중간 | `demo.py` 이슈 트래킹 흐름 잔존(폐지 상태 불일치) | ✅ 해결 | `91118a9` |
 
-> **추가 검토 정상 확인**: 제거된 `GameEvent`/`EventSummary` 잔존 참조 없음. rebase 병합한 `summaries.py:get_games`는 batched 쿼리·tags/rating 보존 로직·구문 모두 정상.
+> 정상 확인: `GameEvent`/`EventSummary` 잔존 참조 없음. rebase 병합 `summaries.py:get_games` 구문·로직 정상.
 
-### 9-3. 작업 완료/미완료 현황 (2026-05-17 갱신)
+### 9-3. 작업 현황 — 완료 요약 + 잔여
 
-| 순위 | 작업 | 분류 | 상태 | 커밋 |
-|---|---|---|---|---|
-| 1 | BUG-1 가격 100배 오류 수정 | 버그 | ✅ 완료 | `682742e` |
-| 2 | BUG-4·9 이슈 트래킹 폐지 정리 완결 | 회귀 | ✅ 완료 | `91118a9` |
-| 3 | BUG-2 appdetails·histogram 크롤러 통합 | 리팩터 | ✅ 완료 | `deda870` |
-| 4 | BUG-3 sale_ends_at 처리 | 미완 | ⏸ **의사결정 보류** | — |
-| 5 | BUG-8 buy-signal/highlights Redis 캐싱 | 성능 | ✅ 완료 | `cf6b2ba` |
-| 6 | BUG-5·6 highlights 표본·언어 편향 보정 | 품질 | ✅ 완료 | `ad89270` |
-| 7 | BUG-7 `__pycache__` 정리 + `.gitignore` | 크러프트 | ✅ 완료 | `844be5d` |
-| 8 | 기능 D — 유저/평론 분리 요약 (API) | 신규(1차) | ✅ 완료 | `8368816` |
-| 9 | 기능 D 프론트엔드 (2트랙 패널·괴리 지표) | 신규(1차) | ✅ 완료 | `098e6df` |
-| 10 | 기능 C 동작 검증 + 프론트 렌더 검증 | 검증 | ✅ 완료 | compileall·vite build·라우터 검증 통과 |
-| 11 | 로컬 `main`·`playtime`·`origin/main` 정렬 | git | ✅ 완료 | `e0d13dd` (force-push 승인됨, 구 원격 브랜치 삭제) |
+**완료 (10/11 항목)** — 모두 `feature/review-restructure` 브랜치에 반영됨.
 
-**미완료 1건 — BUG-3 `sale_ends_at`**: Steam appdetails API가 세일 종료일 미제공.
-선택지 (a) 스펙 조정: 카운트다운 제거, `sale_ends_at` 공식 null 허용, 프론트는 '할인 중' 강조로 degrade (견고·저유지보수) / (b) 스토어 페이지 파싱: 카운트다운 유지하나 Steam UI 변경 시 깨지는 프래질 의존성. 사용자 결정 대기 중.
+| 작업 | 커밋 |
+|---|---|
+| BUG-1 가격 100배 수정 | `682742e` |
+| BUG-2 크롤러 통합 | `deda870` |
+| BUG-4·9 이슈 트래킹 폐지 완결 | `91118a9` |
+| BUG-5·6 highlights 편향 보정 | `ad89270` |
+| BUG-7 `__pycache__` 정리 | `844be5d` |
+| BUG-8 Redis 캐싱 | `cf6b2ba` |
+| 기능 D — 괴리 지표 API | `8368816` |
+| 기능 D — 괴리 지표 프론트 | `098e6df` |
+| 기능 C·프론트 검증 | compileall·vite build·라우터 통과 |
+| `main`·`playtime`·`origin/main` 정렬 | `e0d13dd` (force-push 승인 완료) |
 
-> 7-4의 기존 항목은 본 9-3으로 통합·갱신됨. 기능 B(발견 피드)는 AI 챗봇 파트 담당 — 범위 외.
-> 기능 D 구현 방식: 8-2 "재배치 중심" 채택 — AI 파이프라인 재실행 없이 저장된
-> user(`GameReviewSummary`)·critic(`CriticSummary`) 요약에서 괴리 재산출.
-> `reduce_api.py` critic 프롬프트 반전(8-2)은 미적용(저비용·저리스크 우선, 8-5 부합).
+**잔여 (1건) — BUG-3 구현 (설계 확정됨)**
+
+의사결정 완료: **(a) 스펙 축소 채택**. `sale_ends_at`·카운트다운 제거, 할인율을 FOMO 레버로 유지. 추가로 일 배치–가격 staleness 및 레이트리밋 문제까지 설계 확정(3-4·3-5b). 잔여는 **구현**:
+
+| 구현 항목 | 내용 |
+|---|---|
+| 스펙 축소 | `buy_signal.py`·`appdetails_crawler.py`에서 `sale_ends_at` 제거, `reasons`에서 "세일 종료 D-N" 제거, `price_as_of`(스냅샷 시각) 추가. 프론트 카운트다운 UI → 스토어 링크 헤지로 교체 |
+| 가격 전용 리프레셔 | 일 AI 배치와 분리된 1~3h 주기 가격 갱신 잡 (`1.5s` 스로틀, 17:00 UTC 직후 포함, 429 백오프·last-known 유지). 결과 Redis `game_id`별 저장 |
+| 신선도 게이팅 | 가격 스냅샷이 임계 초과면 `is_good_timing=false` degrade |
+| 사용자 read-only | buy-signal/list 응답은 Redis만 read — Steam 직접 호출 제거 (레이트리밋 노출 0) |
+
+> 기능 D 구현 방식: 8-2 "재배치 중심" 채택 — AI 재실행 없이 저장된 user(`GameReviewSummary`)·critic(`CriticSummary`) 요약에서 괴리 재산출. `reduce_api.py` critic 프롬프트 반전(8-2)은 미적용(저비용·저리스크 우선, 8-5 부합).
+> 5장·7-4는 본 9장으로 일원화됨. 기능 B는 AI 챗봇 파트 담당 — 범위 외.
