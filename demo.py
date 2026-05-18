@@ -599,7 +599,7 @@ def main():
             "       .env 파일에 GROQ_API_KEY=your_key_here 를 추가하세요."
         )
     ok("GROQ_API_KEY 확인")
-    model = os.environ.get("LOCAL_MAP_MODEL", "gemma3:4b")
+    model = os.environ.get("LOCAL_MAP_MODEL", "qwen2.5:1.5b")
     groq_model = os.environ.get("GROQ_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
     ok(f"LOCAL_MAP_MODEL = {model}  (Map 단계 로컬 추론)")
     ok(f"Reduce 모델    = Groq API  ({groq_model})")

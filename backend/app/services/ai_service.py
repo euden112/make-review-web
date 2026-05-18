@@ -383,7 +383,7 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
                 metacritic_ratio=(meta_pos, meta_mix, meta_neg),
                 cache=RedisCache(get_redis_cache()),
                 ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
-                local_model_name=os.getenv("LOCAL_MAP_MODEL", "gemma3:4b"),
+                local_model_name=os.getenv("LOCAL_MAP_MODEL", "qwen2.5:1.5b"),
                 reduce_api_key=os.getenv("GROQ_API_KEY", ""),
                 reduce_model_name=os.getenv("GROQ_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct"),
                 prior_summary_text=prior_summary_text,

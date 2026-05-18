@@ -47,15 +47,18 @@ services:
       - ollama_data:/root/.ollama
     environment:
       - OLLAMA_HOST=0.0.0.0:11434
-    # Note: Ollama requires significant resources. 
+    # Note: Ollama requires significant resources.
     # You may need to adjust docker memory settings.
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+    # CPU 배포(학교 클라우드·로컬 CPU 테스트, plan-cpu-deployment §3 조치#3):
+    # GPU 예약 블록은 nvidia 런타임 부재 호스트에서 ollama 기동을 막는다.
+    # GPU 호스트에서 가속하려면 아래 블록의 주석을 해제할 것.
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
 
   backend:
     image: python:3.11-slim
@@ -73,8 +76,10 @@ services:
       - REDIS_PORT=6379
       - REDIS_DB=0
       - OLLAMA_BASE_URL=http://ollama:11434
-      - LOCAL_MAP_MODEL=gemma3:1b
-      # CPU 배포 시 OLLAMA_NUM_CTX=2048 설정하면 chunker가 자동으로 안전 chunk 크기 계산
+      # Map 모델: 벤치마크 기반 qwen2.5:1.5b 채택 (plan-cpu-deployment §2)
+      - LOCAL_MAP_MODEL=qwen2.5:1.5b
+      # CPU 배포: NUM_CTX=2048 → num_predict 400·chunker 안전 입력 자동 축소 (§3 조치#2)
+      - OLLAMA_NUM_CTX=2048
       - GROQ_API_KEY=${GROQ_API_KEY}
       - GROQ_MODEL=${GROQ_MODEL:-meta-llama/llama-4-scout-17b-16e-instruct}
       - PYTHONPATH=/workspace/backend:/workspace/ai-pipeline:/workspace/crawling/steam
@@ -105,7 +110,9 @@ services:
       - REDIS_PORT=6379
       - REDIS_DB=0
       - OLLAMA_BASE_URL=http://ollama:11434
-      - LOCAL_MAP_MODEL=gemma3:1b
+      # Map 모델·CPU 컨텍스트 (plan-cpu-deployment §2·§3, backend와 동일)
+      - LOCAL_MAP_MODEL=qwen2.5:1.5b
+      - OLLAMA_NUM_CTX=2048
       - GROQ_API_KEY=${GROQ_API_KEY}
       - GROQ_MODEL=${GROQ_MODEL:-meta-llama/llama-4-scout-17b-16e-instruct}
       - PYTHONPATH=/workspace/backend:/workspace/ai-pipeline:/workspace/crawling/steam
