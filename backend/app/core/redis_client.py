@@ -26,6 +26,14 @@ async def invalidate_summary_cache(game_id: int, language: str):
     key = f"game_summary:{game_id}:{language}"
     await redis_db.delete(key)
 
+async def invalidate_playtime_cache(game_id: int):
+    """파이프라인 재실행 시 플레이타임 분석 캐시 파기"""
+    await redis_db.delete(f"playtime_analysis:{game_id}")
+
+async def invalidate_critic_cache(game_id: int):
+    """파이프라인 재실행 시 비평가 요약 캐시 파기"""
+    await redis_db.delete(f"critic_summary:{game_id}")
+
 def get_redis_cache():
     """AI 파이프라인(Map 단계)에서 Redis 클라이언트 인스턴스에 직접 접근하기 위한 의존성 함수"""
     return redis_db
