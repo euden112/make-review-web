@@ -188,6 +188,7 @@ class GameReviewSummary(Base):
     summary_type = Column(String(16), nullable=False, default="unified")
     review_language = Column(String(10), nullable=True)
     job_id = Column(BigInteger, ForeignKey("review_summary_jobs.id"))
+    job = relationship("ReviewSummaryJob", lazy="select")
     summary_version = Column(Integer, nullable=False)
     summary_text = Column(Text, nullable=False)
     representative_reviews_json = Column(JSONB)
