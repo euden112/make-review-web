@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -98,6 +99,42 @@ def info(msg: str):
 def abort(msg: str):
     print(f"\n   {R}✗  오류: {msg}{RESET}\n")
     sys.exit(1)
+
+
+# ─── 테스트 어서션 레이어 ─────────────────────────────────────────────────────
+# (--test 미지정 시 미사용 — 기존 데모 동작 100% 보존)
+_TEST_RESULTS: list[tuple[str, bool, str]] = []
+
+
+def assert_ok(cond: bool, name: str, detail: str = "") -> bool:
+    """PASS/FAIL 집계 + 색상 출력 공통 헬퍼."""
+    passed = bool(cond)
+    _TEST_RESULTS.append((name, passed, detail))
+    if passed:
+        print(f"   {G}PASS{RESET}  {name}")
+    else:
+        extra = f"  {D}({detail}){RESET}" if detail else ""
+        print(f"   {R}FAIL{RESET}  {name}{extra}")
+    return passed
+
+
+def _pg(query: str) -> str:
+    """capstone_postgres에서 psql 단일 쿼리 실행 → stdout(trim) 반환."""
+    r = subprocess.run(
+        ["docker", "exec", "capstone_postgres", "psql", "-U", "postgres",
+         "-d", "review_db", "-t", "-A", "-c", query],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    return (r.stdout or "").strip()
+
+
+def _redis_cli(*args: str) -> str:
+    """capstone_redis에서 redis-cli 실행 → stdout(trim) 반환."""
+    r = subprocess.run(
+        ["docker", "exec", "capstone_redis", "redis-cli", *args],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    return (r.stdout or "").strip()
 
 
 # ─── 의존성 부트스트랩 ────────────────────────────────────────────────────────
@@ -311,9 +348,42 @@ def get_game_ids() -> dict[str, int]:
     return mapping
 
 
-# ─── 요약 트리거 & 폴링 ──────────────────────────────────────────────────────
-def verify_purchase_features(targets: dict[str, int]):
-    """기능 A·C 엔드포인트(buy-signal / highlights)를 호출해 동작을 검증."""
+# ─── 검증 스위트 (--test 전용) ───────────────────────────────────────────────
+def verify_pipeline_e2e(results: dict[str, dict]):
+    """TS-1: 통합 요약 필드 비어있지 않음 + Map 출력 영어 고정(한글 혼입 0)."""
+    print(f"\n   {B}[ TS-1 파이프라인 E2E ]{RESET}")
+    assert_ok(len(results) > 0, "TS-1 통합 요약 polling 성공",
+              f"{len(results)} games")
+    for slug, data in results.items():
+        nm = GAME_DISPLAY_NAMES.get(slug, slug)
+        st = (data.get("summary_text") or "").strip()
+        one_liner = st.splitlines()[0].strip() if st else ""
+        assert_ok(bool(one_liner), f"TS-1 [{nm}] one_liner 비어있지 않음")
+        assert_ok(bool(data.get("pros")), f"TS-1 [{nm}] pros 비어있지 않음")
+        assert_ok(bool(data.get("cons")), f"TS-1 [{nm}] cons 비어있지 않음")
+        assert_ok(bool(data.get("aspect_sentiment")),
+                  f"TS-1 [{nm}] aspect_scores 비어있지 않음")
+
+    # Map 출력 영어 고정 회귀: chunk 요약에 한글 혼입 0
+    hangul = _pg(
+        "SELECT COUNT(*) FROM review_summary_chunks "
+        "WHERE chunk_summary_text ~ '[가-힣]';"
+    )
+    if hangul.isdigit():
+        assert_ok(int(hangul) == 0,
+                  "TS-1 Map 출력 영어 고정 (chunk 한글 혼입 0)",
+                  f"{hangul} chunks with Hangul")
+    else:
+        assert_ok(False, "TS-1 Map 한글 검사 쿼리 실패", hangul[:80])
+
+
+def verify_purchase_features(targets: dict[str, int], *,
+                             assertions: bool = False, args=None):
+    """기능 A·C 엔드포인트 검증.
+
+    assertions=False(기본): 기존 데모 표시(하위호환).
+    assertions=True: TS-2/TS-3 어서션화.
+    """
     print(f"\n   {B}[ 구매 욕구 유발 기능 검증 ]{RESET}")
 
     for slug, gid in targets.items():
@@ -325,29 +395,220 @@ def verify_purchase_features(targets: dict[str, int]):
             r = httpx.get(f"{BACKEND_URL}/api/v1/games/{gid}/buy-signal", timeout=30)
             if r.status_code == 200:
                 d = r.json()
-                timing = "지금이 적기" if d.get("is_good_timing") else "대기 권장"
-                ok(f"buy-signal: {timing}  할인 {d.get('discount_percent', 0)}%  "
-                   f"여론 {d.get('sentiment_state', '?')}")
-                for reason in (d.get("reasons") or [])[:3]:
-                    info(f"  · {reason}")
+                if not assertions:
+                    timing = "지금이 적기" if d.get("is_good_timing") else "대기 권장"
+                    ok(f"buy-signal: {timing}  할인 {d.get('discount_percent', 0)}%  "
+                       f"여론 {d.get('sentiment_state', '?')}")
+                    for reason in (d.get("reasons") or [])[:3]:
+                        info(f"  · {reason}")
+                else:
+                    disc = d.get("discount_percent", 0)
+                    op = d.get("original_price")
+                    # A-1/A-2: 할인 여부 ↔ is_good_timing 정합
+                    if disc > 0:
+                        assert_ok(
+                            any("할인" in s for s in (d.get("reasons") or [])),
+                            f"A-1 [{name}] 할인 사유 노출 (disc={disc})")
+                    else:
+                        assert_ok(d.get("is_good_timing") is False,
+                                  f"A-2 [{name}] 비할인 → is_good_timing=false")
+                    # A-3: 가격 단위 sane (BUG-1 회귀)
+                    assert_ok(op is None or 1_000 <= op <= 300_000,
+                              f"A-3 [{name}] 가격 범위 sane", f"original_price={op}")
+                    # A-6: 스펙 축소 — sale_ends_at 부재, price_as_of 존재
+                    assert_ok("sale_ends_at" not in d,
+                              f"A-6 [{name}] sale_ends_at 키 부재")
+                    assert_ok("price_as_of" in d,
+                              f"A-6 [{name}] price_as_of 키 존재")
             else:
-                warn(f"buy-signal HTTP {r.status_code}")
+                if assertions:
+                    assert_ok(False, f"A [{name}] buy-signal HTTP 200",
+                              f"got {r.status_code}")
+                else:
+                    warn(f"buy-signal HTTP {r.status_code}")
         except Exception as e:
-            warn(f"buy-signal 오류: {e}")
+            if assertions:
+                assert_ok(False, f"A [{name}] buy-signal 호출", str(e)[:80])
+            else:
+                warn(f"buy-signal 오류: {e}")
+
+        if assertions:
+            # A-5: read-only/레이트리밋 — 연속 3회 모두 200
+            codes = []
+            for _ in range(3):
+                try:
+                    codes.append(httpx.get(
+                        f"{BACKEND_URL}/api/v1/games/{gid}/buy-signal",
+                        timeout=30).status_code)
+                except Exception:
+                    codes.append(0)
+            assert_ok(all(c == 200 for c in codes),
+                      f"A-5 [{name}] 연속 3회 모두 200 (캐시 read-only)",
+                      f"codes={codes}")
 
         # 기능 C — 감성 하이라이트
         try:
             r = httpx.get(f"{BACKEND_URL}/api/v1/games/{gid}/highlights?limit=3", timeout=30)
             if r.status_code == 200:
                 hs = r.json().get("highlights", [])
-                ok(f"highlights: {len(hs)}개 명장면 선별")
-                for h in hs[:2]:
-                    text = (h.get("text") or "").replace("\n", " ")[:60]
-                    info(f"  · 공감 {h.get('helpful_count', 0)}  \"{text}…\"")
+                if not assertions:
+                    ok(f"highlights: {len(hs)}개 명장면 선별")
+                    for h in hs[:2]:
+                        text = (h.get("text") or "").replace("\n", " ")[:60]
+                        info(f"  · 공감 {h.get('helpful_count', 0)}  \"{text}…\"")
+                else:
+                    # C-4: linked_aspect 정합 (있으면 문자열)
+                    aspects_ok = all(
+                        (h.get("linked_aspect") is None
+                         or isinstance(h.get("linked_aspect"), str))
+                        for h in hs
+                    )
+                    assert_ok(aspects_ok, f"C-4 [{name}] linked_aspect 타입 정합")
+                    # C-2: 정렬 결정성 — 2회 호출 동일
+                    import time as _t
+                    t0 = _t.time()
+                    r2 = httpx.get(
+                        f"{BACKEND_URL}/api/v1/games/{gid}/highlights?limit=3",
+                        timeout=30)
+                    dt2 = _t.time() - t0
+                    ids1 = [h.get("review_id") for h in hs]
+                    ids2 = [h.get("review_id") for h in r2.json().get("highlights", [])]
+                    assert_ok(ids1 == ids2,
+                              f"C-2 [{name}] 정렬 결정성 (2회 동일)")
+                    # C-5: 캐시 — 2회차 빠름(또는 동일 캐시 응답)
+                    assert_ok(dt2 < 5.0,
+                              f"C-5 [{name}] 2회차 캐시 응답 (<5s)",
+                              f"{dt2:.2f}s")
             else:
-                warn(f"highlights HTTP {r.status_code}")
+                if assertions:
+                    assert_ok(False, f"C [{name}] highlights HTTP 200",
+                              f"got {r.status_code}")
+                else:
+                    warn(f"highlights HTTP {r.status_code}")
         except Exception as e:
-            warn(f"highlights 오류: {e}")
+            if assertions:
+                assert_ok(False, f"C [{name}] highlights 호출", str(e)[:80])
+            else:
+                warn(f"highlights 오류: {e}")
+
+    # A-4: 신선도 게이팅 — --stale-price 시 stale 스냅샷 주입 후 degrade 확인
+    if assertions and args is not None and getattr(args, "stale_price", False):
+        for slug, gid in targets.items():
+            nm = GAME_DISPLAY_NAMES.get(slug, slug)
+            stale_snap = json.dumps({
+                "discount_percent": 50, "original_price": 50000,
+                "final_price": 25000, "is_on_sale": True,
+                "price_as_of": "2020-01-01T00:00:00+00:00",
+                "store_url": f"https://store.steampowered.com/app/{gid}",
+            })
+            _redis_cli("SET", f"buy_signal:price:{gid}", stale_snap)
+            _redis_cli("DEL", f"buy_signal:result:{gid}")
+            try:
+                d = httpx.get(f"{BACKEND_URL}/api/v1/games/{gid}/buy-signal",
+                              timeout=30).json()
+                assert_ok(d.get("is_good_timing") is False
+                          and d.get("price_is_stale") is True,
+                          f"A-4 [{nm}] stale 가격 → is_good_timing=false degrade",
+                          f"is_good_timing={d.get('is_good_timing')} "
+                          f"stale={d.get('price_is_stale')}")
+            except Exception as e:
+                assert_ok(False, f"A-4 [{nm}] stale degrade 호출", str(e)[:80])
+            finally:
+                _redis_cli("DEL", f"buy_signal:price:{gid}")
+                _redis_cli("DEL", f"buy_signal:result:{gid}")
+
+
+def verify_divergence(targets: dict[str, int]):
+    """TS-4: 유저/평론 괴리 — 임계·2트랙·비대칭 프레이밍·null-safe."""
+    print(f"\n   {B}[ TS-4 유저/평론 괴리 ]{RESET}")
+    for slug, gid in targets.items():
+        nm = GAME_DISPLAY_NAMES.get(slug, slug)
+        try:
+            r = httpx.get(f"{BACKEND_URL}/api/v1/games/{gid}/divergence", timeout=30)
+            assert_ok(r.status_code == 200,
+                      f"TS-4 [{nm}] divergence HTTP 200", f"got {r.status_code}")
+            if r.status_code != 200:
+                continue
+            d = r.json()
+            # D-4: 데이터 결손 null-safe (크래시 없이 일관 스키마)
+            assert_ok("has_divergence_data" in d and "show_dual_track" in d,
+                      f"D-4 [{nm}] 스키마 일관 (null-safe)")
+            if d.get("has_divergence_data"):
+                dtype = d.get("divergence_type")
+                assert_ok(dtype in ("user_favors", "critic_favors", "aligned"),
+                          f"TS-4 [{nm}] divergence_type 유효", f"{dtype}")
+                # D-1/D-2: show_dual_track ↔ |괴리| 임계 정합
+                div = abs(d.get("divergence") or 0)
+                assert_ok(d.get("show_dual_track") == (div >= 15.0),
+                          f"D-1/2 [{nm}] 2트랙 노출 ↔ 임계(15) 정합",
+                          f"|div|={div} dual={d.get('show_dual_track')}")
+                # D-3: 비대칭 프레이밍 — user_favors는 '숨은' 프레이밍
+                if dtype == "user_favors":
+                    assert_ok("숨은" in (d.get("one_liner") or ""),
+                              f"D-3 [{nm}] 유저↑평론↓ 숨은 호평작 프레이밍")
+                # 한줄평 항상 괴리 인지형(점수 언급)
+                assert_ok(any(c.isdigit() for c in (d.get("one_liner") or "")),
+                          f"TS-4 [{nm}] 한줄평 괴리 인지형(점수 기반)")
+            else:
+                assert_ok(d.get("show_dual_track") is False,
+                          f"D-4 [{nm}] 데이터 결손 시 2트랙 억제")
+        except Exception as e:
+            assert_ok(False, f"TS-4 [{nm}] divergence 호출", str(e)[:80])
+
+
+def verify_regression():
+    """TS-5: 폐지·회귀 정합 (sentiment-trend·demo 자기검사·GameEvent·pyc)."""
+    print(f"\n   {B}[ TS-5 폐지·회귀 정합 ]{RESET}")
+
+    # R-1: /sentiment-trend 라우트 부재 (404)
+    try:
+        sc = httpx.get(f"{BACKEND_URL}/api/v1/games/1/sentiment-trend",
+                       timeout=10).status_code
+        assert_ok(sc == 404, "R-1 /sentiment-trend 제거됨(404)", f"got {sc}")
+    except Exception as e:
+        assert_ok(False, "R-1 sentiment-trend 호출", str(e)[:80])
+
+    # R-2: demo.py 자기검사 — 이슈 트래킹 흐름 부재
+    src = Path(__file__).read_text(encoding="utf-8")
+    issue_flow = ("detect_inflection_points" in src
+                  or "match_news_to_inflection" in src
+                  or "fetch_news(" in src)
+    assert_ok(not issue_flow,
+              "R-2 demo 이슈트래킹 흐름 부재 (histogram/news 매칭)")
+    assert_ok("verify_purchase_features" in src,
+              "R-2 demo buy-signal/highlights 검증 존재")
+
+    # R-3: GameEvent/EventSummary 잔존 참조 0 (backend 소스)
+    r = subprocess.run(
+        ["grep", "-rIl", "-E", r"GameEvent|EventSummary",
+         str(ROOT / "backend" / "app")],
+        capture_output=True, text=True,
+    )
+    assert_ok(not (r.stdout or "").strip(),
+              "R-3 GameEvent/EventSummary 참조 0",
+              (r.stdout or "").strip()[:120])
+
+    # R-4: events.cpython-*.pyc 크러프트 부재
+    pyc = list((ROOT / "backend").rglob("events.cpython-*.pyc"))
+    assert_ok(not pyc, "R-4 events.pyc 크러프트 부재",
+              ";".join(str(p) for p in pyc)[:120])
+
+
+def print_test_summary() -> bool:
+    """총 PASS/FAIL 표 출력 → 전부 통과 여부 반환."""
+    total = len(_TEST_RESULTS)
+    passed = sum(1 for _, ok_, _ in _TEST_RESULTS if ok_)
+    failed = total - passed
+    print(f"\n{B}{C}{_divider()}{RESET}")
+    print(f"{B}{C}  테스트 결과  {passed}/{total} PASS"
+          f"{('  ' + R + str(failed) + ' FAIL' + RESET) if failed else ''}{RESET}")
+    print(f"{B}{C}{_divider()}{RESET}")
+    if failed:
+        for nm, ok_, detail in _TEST_RESULTS:
+            if not ok_:
+                extra = f"  ({detail})" if detail else ""
+                print(f"   {R}FAIL{RESET}  {nm}{extra}")
+    return failed == 0
 
 
 def trigger_summarize(game_id: int, force: bool = False) -> int:
@@ -582,6 +843,14 @@ def main():
                         help="커서를 무시하고 전체 리뷰 강제 재처리 (오류 후 재실행 시 사용)")
     parser.add_argument("--skip-crawlers", action="store_true",
                         help="기능 A·C(buy-signal·highlights) 검증 건너뜀")
+    parser.add_argument("--test", action="store_true",
+                        help="테스트 모드: 시나리오 어서션 실행, 실패 시 exit code≠0")
+    parser.add_argument("--scenario", choices=["e2e", "A", "C", "D", "regression", "all"],
+                        default="all", help="실행 시나리오 선택 (기본 all)")
+    parser.add_argument("--discount-appid", metavar="APPID", default=None,
+                        help="TS-2 할인 케이스용 할인 게임 Steam appid 주입")
+    parser.add_argument("--stale-price", action="store_true",
+                        help="TS-A4/TS-6: price_as_of 강제 stale 시뮬레이션")
     args = parser.parse_args()
 
     target_games: list[str] = args.games or DEMO_GAMES
@@ -656,42 +925,62 @@ def main():
     if not targets:
         abort("요약할 게임이 없습니다.")
 
-    # ── STEP 8: AI 요약 파이프라인 트리거 ─────────────────────────────────────
-    step(8, "AI Map-Reduce 요약 파이프라인 시작")
-    info(f"Map    단계: {model} (Ollama 로컬) — 청크별 요약")
-    info(f"Reduce 단계: Groq API ({groq_model}) — 최종 구조화 요약")
-    info("파이프라인: 통합 요약(unified) 생성")
-    print()
-    for slug, gid in targets.items():
-        name = GAME_DISPLAY_NAMES.get(slug, slug)
-        code = trigger_summarize(gid, force=args.force)
-        ok(f"[{gid}]  {name}  →  HTTP {code}")
-
-    # ── STEP 9: 결과 대기 & 비교 출력 ─────────────────────────────────────────
-    step(9, f"요약 결과 대기 (최대 {args.timeout}초 / 게임)")
-    print(f"   {D}백엔드 로그에서 map/reduce 진행 상황을 확인할 수 있습니다:{RESET}")
-    print(f"   {D}  docker compose logs -f backend{RESET}\n")
+    # regression 단독 테스트는 크롤·요약 없이 저비용으로 도는 경로
+    _skip_summary = args.test and args.scenario == "regression"
 
     results: dict[str, dict] = {}
     perspectives: dict[str, list[dict]] = {}
 
-    for slug, gid in targets.items():
-        name = GAME_DISPLAY_NAMES.get(slug, slug)
-        info(f"통합 요약 대기 중: {name}")
-        data = poll_summary(gid, timeout=args.timeout)
-        if data:
-            results[slug] = data
-            ok(f"통합 요약 완료: {name}")
-            persp = fetch_perspectives(gid)
-            if persp:
-                perspectives[slug] = persp
-                ok(f"언어권별 시각 {len(persp)}개 수신: {name}")
-            else:
-                info(f"언어권별 시각 아직 없음")
-        else:
-            warn(f"타임아웃 ({args.timeout}초 초과): {name}")
+    if _skip_summary:
+        warn("--test --scenario regression: STEP 8·9(요약) 건너뜀 (저비용 경로)")
+    else:
+        # ── STEP 8: AI 요약 파이프라인 트리거 ─────────────────────────────────
+        step(8, "AI Map-Reduce 요약 파이프라인 시작")
+        info(f"Map    단계: {model} (Ollama 로컬) — 청크별 요약")
+        info(f"Reduce 단계: Groq API ({groq_model}) — 최종 구조화 요약")
+        info("파이프라인: 통합 요약(unified) 생성")
+        print()
+        for slug, gid in targets.items():
+            name = GAME_DISPLAY_NAMES.get(slug, slug)
+            code = trigger_summarize(gid, force=args.force)
+            ok(f"[{gid}]  {name}  →  HTTP {code}")
 
-    # ── STEP 10: 구매 욕구 유발 기능 검증 (buy-signal · highlights) ────────────
+        # ── STEP 9: 결과 대기 & 비교 출력 ─────────────────────────────────────
+        step(9, f"요약 결과 대기 (최대 {args.timeout}초 / 게임)")
+        print(f"   {D}백엔드 로그에서 map/reduce 진행 상황을 확인할 수 있습니다:{RESET}")
+        print(f"   {D}  docker compose logs -f backend{RESET}\n")
+
+        for slug, gid in targets.items():
+            name = GAME_DISPLAY_NAMES.get(slug, slug)
+            info(f"통합 요약 대기 중: {name}")
+            data = poll_summary(gid, timeout=args.timeout)
+            if data:
+                results[slug] = data
+                ok(f"통합 요약 완료: {name}")
+                persp = fetch_perspectives(gid)
+                if persp:
+                    perspectives[slug] = persp
+                    ok(f"언어권별 시각 {len(persp)}개 수신: {name}")
+                else:
+                    info(f"언어권별 시각 아직 없음")
+            else:
+                warn(f"타임아웃 ({args.timeout}초 초과): {name}")
+
+    # ── STEP 10: 검증 ─────────────────────────────────────────────────────────
+    if args.test:
+        step(10, f"검증 스위트  (scenario={args.scenario})")
+        sc = args.scenario
+        if sc in ("e2e", "all"):
+            verify_pipeline_e2e(results)
+        if sc in ("A", "C", "all"):
+            verify_purchase_features(targets, assertions=True, args=args)
+        if sc in ("D", "all"):
+            verify_divergence(targets)
+        if sc in ("regression", "all"):
+            verify_regression()
+        all_pass = print_test_summary()
+        sys.exit(0 if all_pass else 1)
+
     step(10, "기능 A·C 검증  (구매 타이밍 시그널 · 감성 하이라이트)")
     if args.skip_crawlers:
         warn("--skip-crawlers: 기능 A·C 검증 건너뜀")
