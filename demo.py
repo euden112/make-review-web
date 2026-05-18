@@ -22,6 +22,14 @@ import sys
 import time
 from pathlib import Path
 
+# Windows 콘솔(cp949) 등에서 유니코드(✓·박스문자) 출력 시 UnicodeEncodeError
+# 방지 — 테스트 러너가 환경 무관하게 동작하도록 stdout/stderr를 UTF-8로 고정
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
 # ─── 색상 코드 ────────────────────────────────────────────────────────────────
 G = "\033[92m"   # 초록
 Y = "\033[93m"   # 노랑
@@ -569,13 +577,28 @@ def verify_regression():
         assert_ok(False, "R-1 sentiment-trend 호출", str(e)[:80])
 
     # R-2: demo.py 자기검사 — 이슈 트래킹 흐름 부재
-    src = Path(__file__).read_text(encoding="utf-8")
-    issue_flow = ("detect_inflection_points" in src
-                  or "match_news_to_inflection" in src
-                  or "fetch_news(" in src)
+    # 문자열 스캔은 어서션 리터럴과 자기충돌하므로 AST로 실제 import·
+    # 함수정의를 검사 (문자열 리터럴에 속지 않음).
+    import ast as _ast
+    tree = _ast.parse(Path(__file__).read_text(encoding="utf-8"))
+    imported_mods: set[str] = set()
+    func_defs: set[str] = set()
+    for node in _ast.walk(tree):
+        if isinstance(node, _ast.ImportFrom) and node.module:
+            imported_mods.add(node.module)
+        elif isinstance(node, _ast.Import):
+            for a in node.names:
+                imported_mods.add(a.name)
+        elif isinstance(node, _ast.FunctionDef):
+            func_defs.add(node.name)
+    issue_track_crawlers = {"histogram_crawler", "news_crawler"}
+    issue_flow = bool(imported_mods & issue_track_crawlers) \
+        or "verify_crawlers" in func_defs
     assert_ok(not issue_flow,
-              "R-2 demo 이슈트래킹 흐름 부재 (histogram/news 매칭)")
-    assert_ok("verify_purchase_features" in src,
+              "R-2 demo 이슈트래킹 흐름 부재 (histogram/news 매칭)",
+              f"imports={sorted(imported_mods & issue_track_crawlers)} "
+              f"verify_crawlers={'verify_crawlers' in func_defs}")
+    assert_ok("verify_purchase_features" in func_defs,
               "R-2 demo buy-signal/highlights 검증 존재")
 
     # R-3: GameEvent/EventSummary 잔존 참조 0 (backend 소스)
@@ -909,9 +932,14 @@ def main():
 
     # ── STEP 7: 게임 ID 조회 ──────────────────────────────────────────────────
     step(7, "DB 게임 목록 확인")
+    # regression 단독 테스트는 게임 데이터에 의존하지 않으므로 빈 DB 허용
+    _regression_only = args.test and args.scenario == "regression"
     game_map = get_game_ids()
     if not game_map:
-        abort("DB에 게임 데이터가 없습니다. 크롤링을 먼저 실행하세요.")
+        if _regression_only:
+            warn("DB 비어있음 — regression 시나리오는 게임 데이터 불필요, 계속 진행")
+        else:
+            abort("DB에 게임 데이터가 없습니다. 크롤링을 먼저 실행하세요.")
     for slug, gid in game_map.items():
         name = GAME_DISPLAY_NAMES.get(slug, slug)
         ok(f"[{gid}]  {name}")
@@ -922,7 +950,7 @@ def main():
             targets[slug] = game_map[slug]
         else:
             warn(f"게임을 찾을 수 없음: {slug}")
-    if not targets:
+    if not targets and not _regression_only:
         abort("요약할 게임이 없습니다.")
 
     # regression 단독 테스트는 크롤·요약 없이 저비용으로 도는 경로
