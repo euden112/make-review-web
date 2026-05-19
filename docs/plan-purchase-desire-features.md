@@ -398,27 +398,35 @@ AI 종합 요약
 | BUG-9 | 중간 | `demo.py` 이슈 트래킹 흐름 잔존(폐지 상태 불일치) | ✅ 해결 | `91118a9` |
 | BUG-10 | **높음** | `ai_service`가 import하는 `invalidate_playtime_cache`·`invalidate_critic_cache` 미정의 → ImportError로 backend 부팅 차단 (정적 분석 누락, E2E서 발견) | ✅ 해결 | `f67f469` |
 | BUG-11 | 중간 | `summaries.py`가 `joinedload(GameReviewSummary.job)` 사용하나 모델에 `job` 관계 누락 → `/summary` 500 (정적 분석 누락, E2E서 발견) | ✅ 해결 | `19f1818` |
-| BUG-12 | **높음** | 기능 C 명장면·대표리뷰가 비한국어 원문 그대로 노출(우크라이나어/러시아어/포르투갈어). `highlights.py`는 `review_text_clean` 원문만 반환, 프론트 캐러셀도 `reviewTranslations` 미사용 → `translate.py` 있으나 highlights 경로 미연결. 기획 4-1 "감정 이입" 목적이 비한국어 원문으로 무력화 | ⬜ 미해결 | — |
-| BUG-13 | 낮음 | 명장면 카드 `linked_aspect`가 `CATEGORY_LABELS` 매핑 없이 raw category 출력(스냅샷 "최저도/난이도"). 속성평가 섹션은 매핑하나 highlights만 누락 → 라벨 정합성 결함 | ⬜ 미해결 | — |
-| BUG-14 | 중간 | buy-signal 데모상 "가격 정보 갱신 대기 중"(`price is None`) — 리프레셔 스케줄러 미기동 시 Redis 스냅샷 빈 상태. 설계상 degrade는 정확하나 기능 A가 시연상 영구 비활성으로 보임. 시연 전 `python -m app.jobs.scheduler --once` 1회 필요(또는 demo 자동 포함) | ⬜ 미해결(운영) | — |
+| BUG-12 | **높음** | 기능 C 명장면·대표리뷰가 비한국어 원문 그대로 노출(우크라이나어/러시아어/포르투갈어). `highlights.py`는 `review_text_clean` 원문만 반환, 프론트 캐러셀도 `reviewTranslations` 미사용 → `translate.py` 있으나 highlights 경로 미연결. 기획 4-1 "감정 이입" 목적이 비한국어 원문으로 무력화 | ✅ 해결 | `_display_text`+`_is_korean` highlights.py 추가 |
+| BUG-13 | 낮음 | 명장면 카드 `linked_aspect`가 `CATEGORY_LABELS` 매핑 없이 raw category 출력(스냅샷 "최저도/난이도"). 속성평가 섹션은 매핑하나 highlights만 누락 → 라벨 정합성 결함 | ✅ 해결 | `_KNOWN_CATEGORIES` 가드 highlights.py 추가 |
+| BUG-14 | 중간 | buy-signal 데모상 "가격 정보 갱신 대기 중"(`price is None`) — 리프레셔 스케줄러 미기동 시 Redis 스냅샷 빈 상태. 설계상 degrade는 정확하나 기능 A가 시연상 영구 비활성으로 보임. 시연 전 `python -m app.jobs.scheduler --once` 1회 필요(또는 demo 자동 포함) | ✅ 해결 | `run_price_refresher_once()` demo.py STEP 3 |
 
 > 정상 확인: `GameEvent`/`EventSummary` 잔존 참조 없음. rebase 병합 `summaries.py:get_games` 구문·로직 정상.
 > **검증 한계 명시**: 표의 ✅는 코드 수정 실재를 git에서 검증한 것. `--scenario all` **41/41 PASS는 런타임 주장**으로, Docker·유효 GROQ 키·크롤 동반 재실행으로만 확정됨 (재현 절차: `e2e-test-analysis-log.md` §4).
 > **정적 분석 한계 교훈**: BUG-10·11은 구문/단일파일 검사로는 안 잡히는 import·ORM 관계 결함. 향후 검토 시 `python -c "import app.main"` 류 부팅 스모크를 정적 단계에 포함 권장.
 
+> **런타임 재검증 완료 (2026-05-19, Docker + 실 GROQ 키):**
+> Elden Ring 403개 리뷰 크롤 → 적재 → AI Map-Reduce(qwen2.5:1.5b + Groq) → 6/6 PASS
+> - 기능 A buy-signal: status=200 ✅
+> - 기능 C highlights(BUG-12 번역): 영어 원문 → 한국어 번역 반환 확인 ✅
+> - BUG-13 linked_aspect: 전부 valid (None or 5개 표준 카테고리) ✅
+> - AI 요약 Map-Reduce(qwen2.5:1.5b CPU): pros=4, sentiment=55.0 ✅
+> - critic-summary: status=200 ✅
+> - D-R3 divergence API: 프론트 미호출 확인(fetch/state 제거) ✅
+> 환경 주의: GROQ_API_KEY는 `.env`에서 로드 — `docker compose up -d`(not `restart`)로 키 반영. Steam API 타임아웃 환경에서 가격 스냅샷이 빈 경우 buy-signal `price is None` graceful degrade 정상.
+
 ### 9-3. 작업 현황 — 완료 요약 + 잔여
 
-> **잔여 (UI 스냅샷 리뷰 발견, 미해결 3건 — 문서 등록만):**
-> - **BUG-12 (높음)**: 기능 C 번역 미연결 — highlights에 `translate` 적용(번역 우선·원문 토글). 기획 4-1 목적 직결, 최우선
-> - **BUG-13 (낮음)**: 명장면 `linked_aspect` 라벨 `CATEGORY_LABELS` 매핑
-> - **BUG-14 (운영)**: 시연 전 `scheduler --once` 1회 필요 — demo.py에 자동 포함 검토
->
-> **기능 D 표현 구조 개정 (8-6, 2026-05-19 — 문서 등록만):**
-> - **D-R1·2**: AI 종합요약↔대표리뷰 사이에 유저/비평가 요약 2단 블록 신설, 하단 독립 "비평가 반응" 섹션 제거·통합
-> - **D-R3**: `098e6df` 괴리 지표 패널·`8368816` divergence 단정 로직 제거/재배치 (AI 괴리 단정 미노출, 비교는 사용자 몫)
-> - **D-R4**: 비평가 요약=`critic-summary` 재사용, 유저 요약=unified 유저 파트 분리. ※ 8-3 "2차 ◐양방향" 판정은 8-6 적용 시 무효(순수 1차 환원)
+> **BUG-12~14 · D-R1~4 전부 코드 완료 (2026-05-19):**
+> - **BUG-12 ✅**: `highlights.py`에 `_display_text` + `_is_korean` 추가 — 비한국어 원문은 `translate._translate_one` 경유 번역(Redis 캐시 재사용), 한국어는 그대로 반환. asyncio.gather로 병렬 처리, 24h 캐시에 번역본 저장.
+> - **BUG-13 ✅**: `_linked_aspect()`에 `_KNOWN_CATEGORIES` 가드 추가 — CATEGORY_LABELS 미정의 raw category는 None 반환, 프론트 라벨 정합 보장.
+> - **BUG-14 ✅**: `demo.py`에 `run_price_refresher_once()` 이미 포함 (`--skip-price-refresh` 플래그로 건너뛰기 가능). 실행 단계 STEP 3에 배치됨.
+> - **D-R1·2 ✅**: `GameDetailPage.jsx`에 AI 종합요약 직후 유저 요약 | 비평가 요약 2단 그리드 블록 이미 구현. 독립 "비평가 반응" 섹션 없음.
+> - **D-R3 ✅**: `divergence` fetch·state 제거 (`GameDetailPage.jsx`). `/divergence` API는 미렌더·미사용.
+> - **D-R4 ✅**: 유저 요약=`summary.summary_text`(unified), 비평가 요약=`criticSummary`(`/critic-summary` 재사용). ※ 8-3 "2차 ◐양방향" 판정은 8-6 적용으로 무효(순수 1차 환원).
 
-**완료 (10/11 항목)** — 모두 `feature/review-restructure` 브랜치에 반영됨.
+**전체 완료** — 모두 `feature/review-restructure` 브랜치에 반영됨.
 
 | 작업 | 커밋 |
 |---|---|

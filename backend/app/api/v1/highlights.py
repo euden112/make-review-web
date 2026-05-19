@@ -1,3 +1,4 @@
+import asyncio
 import re
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -7,10 +8,14 @@ from sqlalchemy import and_
 from app.core.database import get_db
 from app.core.redis_client import get_json_cache, set_json_cache
 from app.models.domain import ExternalReview
+from app.api.v1.translate import _translate_one
 
 router = APIRouter()
 
 _CACHE_TTL = 24 * 3600  # 재수집 시에만 변경 → 24시간
+
+# BUG-13: highlights 응답의 linked_aspect는 이 집합 내 값만 반환 (CATEGORY_LABELS 정합)
+_KNOWN_CATEGORIES = {"graphics", "controls", "optimization", "content", "price_value"}
 
 # 한·영 감정 강도 키워드 (BUG-6: 영어 리뷰 저평가 보정, IGNORECASE)
 _EMOTION_RE = re.compile(
@@ -45,8 +50,22 @@ def _linked_aspect(review: ExternalReview) -> str | None:
         return None
     for cat in cats:
         if isinstance(cat, dict) and cat.get("sentiment") == "positive":
-            return cat.get("category")
+            category = cat.get("category")
+            # BUG-13: CATEGORY_LABELS 미정의 카테고리는 raw 문자열 대신 None 반환
+            return category if category in _KNOWN_CATEGORIES else None
     return None
+
+
+def _is_korean(text: str) -> bool:
+    korean = len(re.findall(r'[가-힣]', text))
+    return korean / max(len(text), 1) >= 0.15
+
+
+async def _display_text(text: str) -> str:
+    """비한국어 텍스트는 번역 (BUG-12). translate._translate_one이 Redis 캐시."""
+    if not text or _is_korean(text):
+        return text
+    return await _translate_one(text)
 
 
 @router.get("/{game_id}/highlights")
@@ -84,16 +103,20 @@ async def get_highlights(
     scored = [(r, s) for r, s in scored if s > 0]
     scored.sort(key=lambda x: x[1], reverse=True)
 
+    top = scored[:limit]
+    # BUG-12: 비한국어 원문은 번역 후 노출 (translate._translate_one 캐시 활용)
+    texts = await asyncio.gather(*[_display_text(r.review_text_clean or "") for r, _ in top])
+
     response = {
         "highlights": [
             {
                 "review_id": r.id,
-                "text": r.review_text_clean,
+                "text": translated,
                 "playtime_hours": float(r.playtime_hours) if r.playtime_hours else None,
                 "helpful_count": r.helpful_count,
                 "linked_aspect": _linked_aspect(r),
             }
-            for r, _ in scored[:limit]
+            for (r, _), translated in zip(top, texts)
         ]
     }
     await set_json_cache(cache_key, response, _CACHE_TTL)

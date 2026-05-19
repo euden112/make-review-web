@@ -213,6 +213,22 @@ def wait_backend(timeout: int = 150):
     abort(f"백엔드가 {timeout}초 내에 응답하지 않습니다.\n       docker compose logs backend")
 
 
+def run_price_refresher_once():
+    """기능 A buy-signal용 가격 스냅샷을 Redis에 채운다 (BUG-14)."""
+    info("가격 스냅샷 갱신 중 (Steam appdetails → Redis)...")
+    result = subprocess.run(
+        ["docker", "exec", "capstone_backend",
+         "python", "-m", "app.jobs.price_refresher", "--once"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=120,
+    )
+    if result.returncode == 0:
+        ok("가격 스냅샷 갱신 완료 — buy-signal Redis 준비됨")
+    else:
+        warn(f"가격 리프레셔 오류 (buy-signal이 '대기 중'으로 표시될 수 있음):\n"
+             f"{(result.stderr or result.stdout)[-300:]}")
+
+
 def pull_ollama_model(model: str):
     info(f"모델 확인: {model}")
     result = subprocess.run(
@@ -874,6 +890,8 @@ def main():
                         help="TS-2 할인 케이스용 할인 게임 Steam appid 주입")
     parser.add_argument("--stale-price", action="store_true",
                         help="TS-A4/TS-6: price_as_of 강제 stale 시뮬레이션")
+    parser.add_argument("--skip-price-refresh", action="store_true",
+                        help="가격 스냅샷 갱신 건너뜀 (Redis에 이미 데이터가 있는 경우)")
     args = parser.parse_args()
 
     target_games: list[str] = args.games or DEMO_GAMES
@@ -907,6 +925,12 @@ def main():
     # ── STEP 3: Ollama 모델 확인 ──────────────────────────────────────────────
     step(3, "Ollama 로컬 모델 준비")
     pull_ollama_model(model)
+
+    # ── 가격 스냅샷 갱신 (BUG-14 해소) ──────────────────────────────────────────
+    if args.skip_price_refresh:
+        info("--skip-price-refresh: 가격 갱신 건너뜀")
+    else:
+        run_price_refresher_once()
 
     # ── STEP 4: 크롤링 전 현황 ────────────────────────────────────────────────
     step(4, "크롤링 전 DB 현황")

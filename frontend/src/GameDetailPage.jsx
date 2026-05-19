@@ -260,6 +260,50 @@ function groupRepresentativeReviews(reviews) {
   return grouped
 }
 
+function HighlightCard({ highlight: h, translation, translating }) {
+  const [showOriginal, setShowOriginal] = useState(false)
+  const displayText = showOriginal ? h.text : (translation || h.text)
+  const hasTranslation = !!translation && translation !== h.text
+
+  return (
+    <div
+      className="flex-none w-72 bg-gray-50 dark:bg-[#2a2a3e] rounded-xl p-5 border border-gray-200 dark:border-[#3a3a5e] flex flex-col gap-3"
+      style={{ scrollSnapAlign: 'start' }}>
+      <p className="text-sm leading-relaxed text-gray-800 dark:text-[#e0e0e0] italic line-clamp-5">
+        "{displayText}"
+      </p>
+      <div className="flex items-center gap-3 mt-auto pt-2 border-t border-gray-200 dark:border-[#3a3a5e]">
+        {h.playtime_hours != null && (
+          <span className="text-xs text-gray-500 dark:text-gray-400">
+            {Math.round(h.playtime_hours)}h 플레이
+          </span>
+        )}
+        {h.helpful_count > 0 && (
+          <span className="text-xs text-gray-500 dark:text-gray-400">
+            공감 {h.helpful_count}
+          </span>
+        )}
+        {translating && !translation && (
+          <span className="text-[11px] text-gray-400 dark:text-gray-500 animate-pulse">번역 중...</span>
+        )}
+        {hasTranslation && (
+          <button
+            onClick={() => setShowOriginal(p => !p)}
+            className="text-[11px] text-blue-500 dark:text-blue-400 hover:underline bg-transparent border-none cursor-pointer"
+          >
+            {showOriginal ? '번역 보기' : '원문 보기'}
+          </button>
+        )}
+        {h.linked_aspect && (
+          <span className="ml-auto text-xs px-2 py-0.5 rounded-full bg-blue-50 dark:bg-[#1a2a4a] text-blue-600 dark:text-blue-300 border border-blue-200 dark:border-blue-700">
+            {CATEGORY_LABELS[h.linked_aspect] || h.linked_aspect}
+          </span>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function GameDetailPage({ isDark, toggleDark }) {
   const { id } = useParams()
   const navigate = useNavigate()
@@ -270,8 +314,8 @@ function GameDetailPage({ isDark, toggleDark }) {
   const [criticSummary, setCriticSummary] = useState(null)
   const [buySignal, setBuySignal] = useState(null)
   const [highlights, setHighlights] = useState(null)
-  const [divergence, setDivergence] = useState(null)
   const [reviewTranslations, setReviewTranslations] = useState(null)
+  const [highlightTranslations, setHighlightTranslations] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
@@ -287,14 +331,13 @@ function GameDetailPage({ isDark, toggleDark }) {
       setError(null)
 
       try {
-        const [gamesRes, summaryRes, playtimeRes, criticRes, buySignalRes, highlightsRes, divergenceRes] = await Promise.all([
+        const [gamesRes, summaryRes, playtimeRes, criticRes, buySignalRes, highlightsRes] = await Promise.all([
           fetch(`${API_BASE}/api/v1/games/`),
           fetch(`${API_BASE}/api/v1/games/${id}/summary`),
           fetch(`${API_BASE}/api/v1/games/${id}/playtime-analysis`),
           fetch(`${API_BASE}/api/v1/games/${id}/critic-summary`),
           fetch(`${API_BASE}/api/v1/games/${id}/buy-signal`).catch(() => null),
           fetch(`${API_BASE}/api/v1/games/${id}/highlights?limit=5`).catch(() => null),
-          fetch(`${API_BASE}/api/v1/games/${id}/divergence`).catch(() => null),
         ])
 
         if (gamesRes.ok) {
@@ -324,10 +367,6 @@ function GameDetailPage({ isDark, toggleDark }) {
 
         if (highlightsRes?.ok) {
           setHighlights(await highlightsRes.json())
-        }
-
-        if (divergenceRes?.ok) {
-          setDivergence(await divergenceRes.json())
         }
       } catch {
         setError('서버에 연결할 수 없습니다.')
@@ -362,6 +401,22 @@ function GameDetailPage({ isDark, toggleDark }) {
       })
       .catch(() => setReviewTranslations({ steam: [], metacritic: [] }))
   }, [summary])
+
+  useEffect(() => {
+    if (!highlights?.highlights?.length) return
+
+    const texts = highlights.highlights.map(h => h.text).filter(Boolean)
+    if (!texts.length) return
+
+    fetch(`${API_BASE}/api/v1/translate/batch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ texts: texts.slice(0, 20) }),
+    })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => setHighlightTranslations(data?.translations ?? []))
+      .catch(() => setHighlightTranslations([]))
+  }, [highlights])
 
   const translating = !!summary?.representative_reviews?.length && reviewTranslations === null
 
@@ -465,55 +520,6 @@ function GameDetailPage({ isDark, toggleDark }) {
           </div>
         )}
 
-        {/* ── 기능 D: 유저/평론 괴리 지표 (8-4 동적·비대칭 노출) ── */}
-        {!loading && divergence?.has_divergence_data && (
-          <div className={`rounded-xl p-7 border shadow-sm ${
-            divergence.divergence_type === 'user_favors'
-              ? 'bg-green-50 dark:bg-[#0d2a1a] border-green-200 dark:border-green-800'
-              : divergence.divergence_type === 'critic_favors'
-                ? 'bg-amber-50 dark:bg-[#2a210d] border-amber-200 dark:border-amber-800'
-                : 'bg-white dark:bg-[#1e1e2e] border-gray-200 dark:border-[#2a2a3e]'
-          }`}>
-            <div className="flex items-center gap-2 mb-3">
-              <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0]">유저 vs 평론</h2>
-              {divergence.divergence_type === 'user_favors' && (
-                <span className="text-xs px-2 py-0.5 rounded-full font-black"
-                  style={{ background: 'rgba(34,197,94,0.15)', color: '#22c55e', border: '1px solid rgba(34,197,94,0.35)' }}>
-                  숨은 호평작
-                </span>
-              )}
-              {divergence.divergence_type === 'critic_favors' && (
-                <span className="text-xs px-2 py-0.5 rounded-full font-black"
-                  style={{ background: 'rgba(245,158,11,0.15)', color: '#f59e0b', border: '1px solid rgba(245,158,11,0.35)' }}>
-                  구매 주의
-                </span>
-              )}
-            </div>
-
-            <p className="text-sm font-semibold text-gray-800 dark:text-[#e0e0e0] mb-4">
-              {divergence.one_liner}
-            </p>
-
-            {/* 2트랙 강조: 괴리 임계 초과 시에만 (8-4 #2) */}
-            {divergence.show_dual_track && (
-              <div className="grid grid-cols-2 gap-4">
-                <div className="bg-white/60 dark:bg-[#1e1e2e]/60 rounded-lg p-4 border border-gray-200 dark:border-[#3a3a5e]">
-                  <p className="text-xs font-bold text-gray-500 dark:text-gray-400 mb-1">유저 평가</p>
-                  <p className="text-2xl font-black text-gray-900 dark:text-[#e0e0e0]">
-                    {Math.round(divergence.user_score)}<span className="text-sm text-gray-400">/100</span>
-                  </p>
-                </div>
-                <div className="bg-white/60 dark:bg-[#1e1e2e]/60 rounded-lg p-4 border border-gray-200 dark:border-[#3a3a5e]">
-                  <p className="text-xs font-bold text-gray-500 dark:text-gray-400 mb-1">평론가 평가</p>
-                  <p className="text-2xl font-black text-gray-900 dark:text-[#e0e0e0]">
-                    {Math.round(divergence.critic_score)}<span className="text-sm text-gray-400">/100</span>
-                  </p>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
         {!loading && summary && (
           <>
             {/* 전체 요약 */}
@@ -532,6 +538,38 @@ function GameDetailPage({ isDark, toggleDark }) {
                 </div>
               )}
             </div>
+
+            {/* ── 기능 D (8-6): 유저 요약 | 비평가 요약 2단 블록 ── */}
+            {(summary?.summary_text || criticSummary?.summary) && (
+              <div className="grid grid-cols-2 gap-6">
+                <div className="bg-white dark:bg-[#1e1e2e] rounded-xl p-7 border border-gray-200 dark:border-[#2a2a3e] shadow-sm">
+                  <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0] mb-3">유저 리뷰 요약</h2>
+                  <p className="text-sm leading-relaxed text-gray-700 dark:text-[#cccccc]">
+                    {summary?.summary_text?.replace(/\*\*/g, '')}
+                  </p>
+                </div>
+                <div className="bg-white dark:bg-[#1e1e2e] rounded-xl p-7 border border-gray-200 dark:border-[#2a2a3e] shadow-sm">
+                  <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0] mb-3">비평가 리뷰 요약</h2>
+                  {criticSummary?.summary ? (
+                    <>
+                      <div className="flex items-center gap-2 mb-3">
+                        <SentimentBadge value={criticSummary.sentiment_overall} />
+                        {criticSummary.sentiment_score != null && (
+                          <span className="text-xs text-gray-500 dark:text-gray-400">
+                            점수: {criticSummary.sentiment_score.toFixed(0)}%
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-sm leading-relaxed text-gray-700 dark:text-[#cccccc]">
+                        {criticSummary.summary}
+                      </p>
+                    </>
+                  ) : (
+                    <p className="text-sm text-gray-400 dark:text-gray-500">비평가 리뷰 데이터가 없습니다.</p>
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* 플랫폼별 대표 리뷰 */}
             <div className="bg-white dark:bg-[#1e1e2e] rounded-xl p-7 border border-gray-200 dark:border-[#2a2a3e] shadow-sm">
@@ -670,76 +708,6 @@ function GameDetailPage({ isDark, toggleDark }) {
           </div>
         )}
 
-        {/* ── Sprint 4: 비평가 반응 ── */}
-        {!loading && (
-          <div className="bg-white dark:bg-[#1e1e2e] rounded-xl p-7 border border-gray-200 dark:border-[#2a2a3e] shadow-sm">
-            <div className="flex items-center justify-between mb-1">
-              <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0]">비평가 반응</h2>
-              {criticSummary && (
-                <span className="text-xs text-gray-400 dark:text-gray-500">출시 당시 전문가 반응</span>
-              )}
-            </div>
-
-            {!criticSummary ? (
-              <p className="text-sm text-gray-400 dark:text-gray-500">비평가 리뷰 데이터가 없습니다.</p>
-            ) : (
-              <div className="flex flex-col gap-4 mt-3">
-                <div className="flex items-center gap-3">
-                  <SentimentBadge value={criticSummary.sentiment_overall} />
-                  {criticSummary.sentiment_score !== null && (
-                    <span className="text-sm text-gray-500 dark:text-gray-400">
-                      점수: {criticSummary.sentiment_score.toFixed(0)}%
-                    </span>
-                  )}
-                </div>
-
-                {criticSummary.summary && (
-                  <p className="text-sm leading-relaxed text-gray-700 dark:text-[#cccccc]">
-                    {criticSummary.summary}
-                  </p>
-                )}
-
-                <div className="grid grid-cols-2 gap-4">
-                  {criticSummary.pros?.length > 0 && (
-                    <div>
-                      <p className="text-xs font-bold text-green-600 dark:text-green-400 mb-1">장점</p>
-                      <ul className="flex flex-col gap-1">
-                        {criticSummary.pros.map((p, i) => (
-                          <li key={i} className="text-xs text-gray-600 dark:text-[#aaaaaa] flex gap-1">
-                            <span className="text-green-500 shrink-0">•</span> {p}
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                  {criticSummary.cons?.length > 0 && (
-                    <div>
-                      <p className="text-xs font-bold text-red-500 dark:text-red-400 mb-1">단점</p>
-                      <ul className="flex flex-col gap-1">
-                        {criticSummary.cons.map((c, i) => (
-                          <li key={i} className="text-xs text-gray-600 dark:text-[#aaaaaa] flex gap-1">
-                            <span className="text-red-400 shrink-0">•</span> {c}
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                </div>
-
-                {criticSummary.keywords?.length > 0 && (
-                  <div className="flex flex-wrap gap-2">
-                    {criticSummary.keywords.map((kw, i) => (
-                      <span key={i} className="text-xs px-2 py-0.5 rounded-full bg-purple-50 dark:bg-purple-900/20 text-purple-600 dark:text-purple-300 border border-purple-200 dark:border-purple-700">
-                        {kw}
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        )}
-
         {/* ── 구매 타이밍 시그널 ── */}
         {!loading && buySignal && (
           <div className={`rounded-xl p-7 border shadow-sm ${
@@ -814,30 +782,12 @@ function GameDetailPage({ isDark, toggleDark }) {
             </p>
             <div className="flex gap-4 overflow-x-auto pb-2" style={{ scrollSnapType: 'x mandatory' }}>
               {highlights.highlights.map((h, i) => (
-                <div key={h.review_id ?? i}
-                  className="flex-none w-72 bg-gray-50 dark:bg-[#2a2a3e] rounded-xl p-5 border border-gray-200 dark:border-[#3a3a5e] flex flex-col gap-3"
-                  style={{ scrollSnapAlign: 'start' }}>
-                  <p className="text-sm leading-relaxed text-gray-800 dark:text-[#e0e0e0] italic line-clamp-5">
-                    "{h.text}"
-                  </p>
-                  <div className="flex items-center gap-3 mt-auto pt-2 border-t border-gray-200 dark:border-[#3a3a5e]">
-                    {h.playtime_hours != null && (
-                      <span className="text-xs text-gray-500 dark:text-gray-400">
-                        {Math.round(h.playtime_hours)}h 플레이
-                      </span>
-                    )}
-                    {h.helpful_count > 0 && (
-                      <span className="text-xs text-gray-500 dark:text-gray-400">
-                        공감 {h.helpful_count}
-                      </span>
-                    )}
-                    {h.linked_aspect && (
-                      <span className="ml-auto text-xs px-2 py-0.5 rounded-full bg-blue-50 dark:bg-[#1a2a4a] text-blue-600 dark:text-blue-300 border border-blue-200 dark:border-blue-700">
-                        {h.linked_aspect}
-                      </span>
-                    )}
-                  </div>
-                </div>
+                <HighlightCard
+                  key={h.review_id ?? i}
+                  highlight={h}
+                  translation={highlightTranslations?.[i]}
+                  translating={highlights?.highlights?.length > 0 && highlightTranslations === null}
+                />
               ))}
             </div>
           </div>
