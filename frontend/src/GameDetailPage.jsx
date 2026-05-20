@@ -312,6 +312,7 @@ function GameDetailPage({ isDark, toggleDark }) {
   const [summary, setSummary] = useState(null)
   const [playtimeAnalysis, setPlaytimeAnalysis] = useState(null)
   const [criticSummary, setCriticSummary] = useState(null)
+  const [userSummary, setUserSummary] = useState(null)
   const [buySignal, setBuySignal] = useState(null)
   const [highlights, setHighlights] = useState(null)
   const [reviewTranslations, setReviewTranslations] = useState(null)
@@ -331,11 +332,12 @@ function GameDetailPage({ isDark, toggleDark }) {
       setError(null)
 
       try {
-        const [gamesRes, summaryRes, playtimeRes, criticRes, buySignalRes, highlightsRes] = await Promise.all([
+        const [gamesRes, summaryRes, playtimeRes, criticRes, userRes, buySignalRes, highlightsRes] = await Promise.all([
           fetch(`${API_BASE}/api/v1/games/`),
           fetch(`${API_BASE}/api/v1/games/${id}/summary`),
           fetch(`${API_BASE}/api/v1/games/${id}/playtime-analysis`),
           fetch(`${API_BASE}/api/v1/games/${id}/critic-summary`),
+          fetch(`${API_BASE}/api/v1/games/${id}/user-summary`).catch(() => null),
           fetch(`${API_BASE}/api/v1/games/${id}/buy-signal`).catch(() => null),
           fetch(`${API_BASE}/api/v1/games/${id}/highlights?limit=5`).catch(() => null),
         ])
@@ -358,6 +360,10 @@ function GameDetailPage({ isDark, toggleDark }) {
 
         if (criticRes.ok) {
           setCriticSummary(await criticRes.json())
+        }
+
+        if (userRes?.ok) {
+          setUserSummary(await userRes.json())
         }
 
 
@@ -499,9 +505,9 @@ function GameDetailPage({ isDark, toggleDark }) {
             </div>
           )}
 
-          {summary && (
+          {summary && (summary.one_liner || summary.summary_text) && (
             <p className="text-sm leading-relaxed max-w-xl" style={{ color: '#e6edf8' }}>
-              {summary.summary_text?.split('\n')[0]?.replace(/\*\*/g, '')}
+              {summary.one_liner ?? summary.summary_text?.split('\n')[0]?.replace(/\*\*/g, '')}
             </p>
           )}
         </div>
@@ -522,31 +528,42 @@ function GameDetailPage({ isDark, toggleDark }) {
 
         {!loading && summary && (
           <>
-            {/* 전체 요약 */}
-            <div className="bg-white dark:bg-[#1e1e2e] rounded-xl p-7 border border-gray-200 dark:border-[#2a2a3e] shadow-sm">
-              <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0] mb-3">AI 종합 요약</h2>
-              <p className="text-sm leading-relaxed text-gray-700 dark:text-[#cccccc]">
-                {summary.summary_text?.replace(/\*\*/g, '')}
-              </p>
-              {summary.keywords && summary.keywords.length > 0 && (
-                <div className="flex flex-wrap gap-2 mt-4">
+            {/* 키워드 (태그) 별도 섹션 — AI 종합 요약은 유저 리뷰 요약과 중복이라 제거 */}
+            {summary.keywords && summary.keywords.length > 0 && (
+              <div className="bg-white dark:bg-[#1e1e2e] rounded-xl p-7 border border-gray-200 dark:border-[#2a2a3e] shadow-sm">
+                <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0] mb-3">키워드</h2>
+                <div className="flex flex-wrap gap-2">
                   {summary.keywords.map((kw, i) => (
                     <span key={i} className="text-xs px-2 py-1 rounded-full bg-blue-50 dark:bg-[#1a2a4a] text-blue-600 dark:text-blue-300 border border-blue-200 dark:border-blue-700">
                       {kw}
                     </span>
                   ))}
                 </div>
-              )}
-            </div>
+              </div>
+            )}
 
-            {/* ── 기능 D (8-6): 유저 요약 | 비평가 요약 2단 블록 ── */}
-            {(summary?.summary_text || criticSummary?.summary) && (
+            {/* ── B안: user/critic 분리 2단 블록 (unified 본문 폐지) ── */}
+            {(userSummary?.summary || criticSummary?.summary) && (
               <div className="grid grid-cols-2 gap-6">
                 <div className="bg-white dark:bg-[#1e1e2e] rounded-xl p-7 border border-gray-200 dark:border-[#2a2a3e] shadow-sm">
                   <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0] mb-3">유저 리뷰 요약</h2>
-                  <p className="text-sm leading-relaxed text-gray-700 dark:text-[#cccccc]">
-                    {summary?.summary_text?.replace(/\*\*/g, '')}
-                  </p>
+                  {userSummary?.summary ? (
+                    <>
+                      <div className="flex items-center gap-2 mb-3">
+                        <SentimentBadge value={userSummary.sentiment_overall} />
+                        {userSummary.sentiment_score != null && (
+                          <span className="text-xs text-gray-500 dark:text-gray-400">
+                            점수: {userSummary.sentiment_score.toFixed(0)}%
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-sm leading-relaxed text-gray-700 dark:text-[#cccccc]">
+                        {userSummary.summary}
+                      </p>
+                    </>
+                  ) : (
+                    <p className="text-sm text-gray-400 dark:text-gray-500">유저 리뷰 데이터가 없습니다.</p>
+                  )}
                 </div>
                 <div className="bg-white dark:bg-[#1e1e2e] rounded-xl p-7 border border-gray-200 dark:border-[#2a2a3e] shadow-sm">
                   <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0] mb-3">비평가 리뷰 요약</h2>

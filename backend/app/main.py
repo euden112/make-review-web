@@ -41,7 +41,7 @@ app.include_router(reviews.router, prefix="/api/v1/reviews", tags=["Reviews Data
 # 추가: 메인 앱에 summaries API 연결
 app.include_router(summaries_router, prefix="/api/v1/games", tags=["Summaries"])
 app.include_router(analysis_router, prefix="/api/v1/games", tags=["Analysis"])
-app.include_router(translate_router, prefix="/api/v1", tags=["Translate"])
+app.include_router(translate_router, prefix="/api/v1/translate", tags=["Translate"])
 app.include_router(highlights_router, prefix="/api/v1/games", tags=["Highlights"])
 app.include_router(buy_signal_router, prefix="/api/v1/games", tags=["Buy Signal"])
 app.include_router(divergence_router, prefix="/api/v1/games", tags=["Divergence"])

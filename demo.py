@@ -381,7 +381,7 @@ def verify_pipeline_e2e(results: dict[str, dict]):
     for slug, data in results.items():
         nm = GAME_DISPLAY_NAMES.get(slug, slug)
         st = (data.get("summary_text") or "").strip()
-        one_liner = st.splitlines()[0].strip() if st else ""
+        one_liner = data.get("one_liner") or (st.splitlines()[0].strip() if st else "")
         assert_ok(bool(one_liner), f"TS-1 [{nm}] one_liner 비어있지 않음")
         assert_ok(bool(data.get("pros")), f"TS-1 [{nm}] pros 비어있지 않음")
         assert_ok(bool(data.get("cons")), f"TS-1 [{nm}] cons 비어있지 않음")

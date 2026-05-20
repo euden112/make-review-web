@@ -168,7 +168,7 @@ def _group_map_outputs_by_tags(
     id_to_type   = {row.id: row.reviewer_type   for row in tagged_rows}
 
     groups: dict[str, list[str]] = {
-        "all": [], "early": [], "mid": [], "late": [], "critic": []
+        "all": [], "early": [], "mid": [], "late": [], "critic": [], "user": []
     }
 
     for result in map_results:
@@ -189,6 +189,9 @@ def _group_map_outputs_by_tags(
 
         if "critic" in types_in_chunk:
             groups["critic"].append(summary_text)
+        # user 그룹은 critic이 아닌 리뷰가 하나라도 포함된 청크 = 비-critic 타입 존재
+        if any(t != "critic" for t in types_in_chunk):
+            groups["user"].append(summary_text)
 
     return groups
 

@@ -178,6 +178,10 @@ def _serialize_summary(
         "review_language": summary.review_language,
         "language_code": summary.review_language if summary.review_language is not None else "unified",
         "version": summary.summary_version,
+        "one_liner": summary.one_liner or (
+            (summary.summary_text or "").splitlines()[0].strip().strip("*").strip()
+            if summary.summary_text else None
+        ),
         "summary_text": summary.summary_text,
         "pros": summary.pros_json,
         "cons": summary.cons_json,

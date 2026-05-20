@@ -191,6 +191,7 @@ class GameReviewSummary(Base):
     job = relationship("ReviewSummaryJob", lazy="select")
     summary_version = Column(Integer, nullable=False)
     summary_text = Column(Text, nullable=False)
+    one_liner = Column(Text, nullable=True)
     representative_reviews_json = Column(JSONB)
     sentiment_overall = Column(String(16))
     sentiment_score = Column(Numeric(5, 2))
@@ -286,4 +287,27 @@ class CriticSummary(Base):
     updated_at      = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
     __table_args__ = (
         UniqueConstraint('game_id', name='uq_critic_summary_game'),
+    )
+
+
+class UserSummary(Base):
+    """유저 리뷰 AI 요약 저장 (B안: unified body 폐지 후 신설)
+
+    user 청크(비-critic) 기반으로만 생성되어 평론가 톤·논조와 독립.
+    마이그레이션: 13_migration_user_summary_split.sql
+    """
+    __tablename__ = "user_summaries"
+    id              = Column(BigInteger, primary_key=True, index=True)
+    game_id         = Column(BigInteger, ForeignKey("games.id"), nullable=False)
+    summary         = Column(Text)
+    sentiment       = Column(String(16))
+    score           = Column(Numeric(5, 2))
+    pros            = Column(JSONB)
+    cons            = Column(JSONB)
+    keywords        = Column(JSONB)
+    review_count    = Column(Integer)
+    created_at      = Column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at      = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+    __table_args__ = (
+        UniqueConstraint('game_id', name='uq_user_summary_game'),
     )

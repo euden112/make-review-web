@@ -20,6 +20,8 @@ services:
       - ./database/09_migration_sprint4_fixes.sql:/docker-entrypoint-initdb.d/09_migration_sprint4_fixes.sql
       - ./database/10_migration_sprint4_failure_stats.sql:/docker-entrypoint-initdb.d/10_migration_sprint4_failure_stats.sql
       - ./database/10_migration_sprint6_fixes.sql:/docker-entrypoint-initdb.d/11_migration_sprint6_fixes.sql
+      - ./database/12_migration_one_liner_separation.sql:/docker-entrypoint-initdb.d/12_migration_one_liner_separation.sql
+      - ./database/13_migration_user_summary_split.sql:/docker-entrypoint-initdb.d/13_migration_user_summary_split.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s

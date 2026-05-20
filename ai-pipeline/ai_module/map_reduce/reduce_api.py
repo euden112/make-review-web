@@ -51,6 +51,8 @@ class FinalSummary:
     playtime_late: BucketSummary | None = None
     # Sprint 4: 비평가 요약
     critic: BucketSummary | None = None
+    # B안: user 전용 요약 (unified body 폐지 후 "유저 리뷰 요약" 섹션의 데이터원)
+    user: BucketSummary | None = None
     # 메타
     input_tokens: int = 0
     output_tokens: int = 0
@@ -99,6 +101,8 @@ Required top-level keys:
   (Each bucket: 2–3 sentences in Korean. null ONLY if input array is empty.)
 - critic: { summary, sentiment_overall, sentiment_score, pros, cons, keywords } | null
   (critic: based ONLY on critic reviews; do NOT compare with user opinion; label as "출시 당시 전문가 평가". null ONLY if critic input array is empty.)
+- user: { summary, sentiment_overall, sentiment_score, pros, cons, keywords } | null
+  (user: based ONLY on user-side map groups (i.e. all/early/mid/late, excluding critic); label as "유저 평가". summary 2–4 sentences in Korean focusing on user player experience. null ONLY if user input is empty.)
 
 Rules:
 - unified is based on the "all" group.
@@ -296,10 +300,11 @@ def _build_user_prompt(
         "mid": 500,
         "late": 500,
         "critic": 600,
+        "user": 700,
     }
     max_map = max_items_map or {}
 
-    for group_key in ("all", "early", "mid", "late", "critic"):
+    for group_key in ("all", "early", "mid", "late", "critic", "user"):
         items = grouped_summaries.get(group_key, [])
         max_for_group = int(max_map.get(group_key, max(1, min(len(items), 24))))
         pick_len = chunk_len_map.get(group_key, default_chunk_len)
@@ -332,13 +337,14 @@ async def run_reduce_stage(
 
     all_summaries = grouped_summaries.get("all", [])
     logger.info(
-        "reduce stage started: language=%s all=%d early=%d mid=%d late=%d critic=%d",
+        "reduce stage started: language=%s all=%d early=%d mid=%d late=%d critic=%d user=%d",
         language_code,
         len(all_summaries),
         len(grouped_summaries.get("early", [])),
         len(grouped_summaries.get("mid", [])),
         len(grouped_summaries.get("late", [])),
         len(grouped_summaries.get("critic", [])),
+        len(grouped_summaries.get("user", [])),
     )
 
     if not all_summaries:
@@ -360,6 +366,7 @@ async def run_reduce_stage(
         "mid": min(8, len(grouped_summaries.get("mid", []))),
         "late": min(6, len(grouped_summaries.get("late", []))),
         "critic": min(6, len(grouped_summaries.get("critic", []))),
+        "user": min(20, len(grouped_summaries.get("user", []))),
     }
     chunk_length_map = {
         "all": 900,
@@ -367,13 +374,14 @@ async def run_reduce_stage(
         "mid": 500,
         "late": 500,
         "critic": 600,
+        "user": 900,
     }
 
     # 중복 제거: 각 그룹 내에서만 중복 제거 (그룹 간 공유 금지)
     # 같은 청크 텍스트가 all/early/mid/late에 모두 포함되는 구조이므로
     # global_seen을 공유하면 버킷 그룹이 전부 비워짐
     deduped: dict[str, list[str]] = {}
-    for key in ("all", "early", "mid", "late", "critic"):
+    for key in ("all", "early", "mid", "late", "critic", "user"):
         items = grouped_summaries.get(key, []) or []
         seen: set[str] = set()
         deduped_items: list[str] = []
@@ -386,17 +394,19 @@ async def run_reduce_stage(
         deduped[key] = deduped_items
 
     logger.info(
-        "reduce input dedup: all=%d early=%d mid=%d late=%d critic=%d -> deduped: all=%d early=%d mid=%d late=%d critic=%d",
+        "reduce input dedup: all=%d early=%d mid=%d late=%d critic=%d user=%d -> deduped: all=%d early=%d mid=%d late=%d critic=%d user=%d",
         len(grouped_summaries.get("all", [])),
         len(grouped_summaries.get("early", [])),
         len(grouped_summaries.get("mid", [])),
         len(grouped_summaries.get("late", [])),
         len(grouped_summaries.get("critic", [])),
+        len(grouped_summaries.get("user", [])),
         len(deduped.get("all", [])),
         len(deduped.get("early", [])),
         len(deduped.get("mid", [])),
         len(deduped.get("late", [])),
         len(deduped.get("critic", [])),
+        len(deduped.get("user", [])),
     )
 
     user_prompt = _build_user_prompt(
@@ -452,6 +462,7 @@ async def run_reduce_stage(
 
         playtime = parsed.get("playtime", {}) or {}
         critic_data = parsed.get("critic")
+        user_data = parsed.get("user")
 
         logger.info("reduce stage completed successfully")
 
@@ -468,6 +479,7 @@ async def run_reduce_stage(
             playtime_mid=_parse_bucket(playtime.get("mid")),
             playtime_late=_parse_bucket(playtime.get("late")),
             critic=_parse_bucket(critic_data),
+            user=_parse_bucket(user_data),
             input_tokens=token_in,
             output_tokens=token_out,
         )
