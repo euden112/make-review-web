@@ -11,16 +11,16 @@ logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT_TEMPLATE = """당신은 게임 추천 전문가 챗봇입니다. 사용자가 좋아하거나 싫어하는 게임을 알려주면, 우리 데이터베이스에 있는 게임 목록에서 최적의 게임을 추천해줍니다.
 
-**현재 데이터베이스에 있는 게임 목록:**
+**현재 데이터베이스에 있는 게임 목록 (이 목록에 없는 게임은 절대 추천하지 마세요):**
 {game_catalog}
 
-**규칙:**
-- 반드시 위 게임 목록 중에서만 추천하세요.
+**규칙 (반드시 준수):**
+- 위 게임 목록에 있는 게임만 추천하세요. 목록에 없는 게임은 절대 언급하지 마세요.
 - 좋아하는 게임과 비슷한 장르/태그의 게임을 추천하세요.
 - 싫어하는 게임은 추천에서 제외하고, 그 게임과 유사한 특성도 피하세요.
 - 추천할 때는 왜 그 게임이 잘 맞는지 구체적으로 설명하세요.
 - 한국어로 답변하세요.
-- 게임 목록에 추천할 게임이 없으면 솔직하게 말하세요."""
+- 게임 목록이 비어있거나 추천할 게임이 없으면 솔직하게 말하세요."""
 
 
 async def build_game_catalog(db: AsyncSession) -> str:
@@ -55,27 +55,42 @@ async def build_game_catalog(db: AsyncSession) -> str:
     return "\n".join(lines) if lines else "게임 데이터가 없습니다."
 
 
+MAX_HISTORY_MESSAGES = 20
+
+
 async def get_recommendation(
     messages: list[dict],
     db: AsyncSession,
 ) -> str:
     ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-    model = os.getenv("LOCAL_MAP_MODEL", "gemma3:4b")
+    model = os.getenv("OLLAMA_CHAT_MODEL") or os.getenv("LOCAL_MAP_MODEL", "gemma3:4b")
 
     game_catalog = await build_game_catalog(db)
     system_prompt = SYSTEM_PROMPT_TEMPLATE.format(game_catalog=game_catalog)
 
+    trimmed = messages[-MAX_HISTORY_MESSAGES:]
+
     payload = {
         "model": model,
-        "messages": [{"role": "system", "content": system_prompt}] + messages,
+        "messages": [{"role": "system", "content": system_prompt}] + trimmed,
         "stream": False,
     }
 
     async with httpx.AsyncClient(timeout=120.0) as client:
-        response = await client.post(
-            f"{ollama_base_url}/api/chat",
-            json=payload,
-        )
-        response.raise_for_status()
+        try:
+            response = await client.post(
+                f"{ollama_base_url}/api/chat",
+                json=payload,
+            )
+            response.raise_for_status()
+        except httpx.TimeoutException as e:
+            raise TimeoutError("AI 모델 응답 시간이 초과됐습니다.") from e
+        except httpx.HTTPStatusError as e:
+            raise ConnectionError(f"AI 모델 서버 오류: {e.response.status_code}") from e
+
         data = response.json()
-        return data["message"]["content"]
+        content = data.get("message", {}).get("content")
+        if not content:
+            logger.error("Ollama 응답에 message.content 없음. 원본: %s", data)
+            raise ValueError(f"Ollama 응답 형식 오류: {data}")
+        return content

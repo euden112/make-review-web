@@ -1,8 +1,9 @@
 import { useState, useRef, useEffect } from 'react'
 
-const API_BASE = 'http://localhost:8000'
+const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8000'
 
 const WELCOME_MESSAGE = {
+  id: 'welcome',
   role: 'assistant',
   content: '안녕하세요! 게임 추천 챗봇입니다 🎮\n\n좋아하는 게임과 싫어하는 게임을 알려주시면 데이터베이스에 있는 게임 중에서 딱 맞는 게임을 추천해 드릴게요!\n\n예시: "저는 다크소울을 좋아하고 리듬게임은 싫어해요"',
 }
@@ -24,7 +25,7 @@ export default function ChatBot({ isDark }) {
     const text = input.trim()
     if (!text || loading) return
 
-    const userMessage = { role: 'user', content: text }
+    const userMessage = { id: crypto.randomUUID(), role: 'user', content: text }
     const nextMessages = [...messages, userMessage]
     setMessages(nextMessages)
     setInput('')
@@ -42,15 +43,21 @@ export default function ChatBot({ isDark }) {
       })
 
       if (!res.ok) {
-        throw new Error(`서버 오류: ${res.status}`)
+        let errorMsg = '추천 요청에 실패했습니다.'
+        try {
+          const errData = await res.json()
+          if (errData?.detail) errorMsg = errData.detail
+        } catch (_) {}
+        if (res.status === 504) errorMsg = 'AI 응답 시간이 초과됐습니다. 잠시 후 다시 시도해주세요.'
+        throw new Error(errorMsg)
       }
 
       const data = await res.json()
-      setMessages((prev) => [...prev, { role: 'assistant', content: data.reply }])
+      setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: 'assistant', content: data.reply }])
     } catch (err) {
       setMessages((prev) => [
         ...prev,
-        { role: 'assistant', content: `오류가 발생했습니다: ${err.message}` },
+        { id: crypto.randomUUID(), role: 'assistant', content: err.message || '오류가 발생했습니다. 다시 시도해주세요.' },
       ])
     } finally {
       setLoading(false)
@@ -110,9 +117,9 @@ export default function ChatBot({ isDark }) {
 
           {/* 메시지 영역 */}
           <div className={`flex-1 overflow-y-auto p-3 space-y-3 ${msgBg}`}>
-            {messages.map((msg, i) => (
+            {messages.map((msg) => (
               <div
-                key={i}
+                key={msg.id}
                 className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
               >
                 <div

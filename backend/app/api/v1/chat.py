@@ -39,6 +39,12 @@ async def recommend_games(
             db=db,
         )
         return ChatResponse(reply=reply)
+    except TimeoutError:
+        logger.warning("Ollama 응답 타임아웃")
+        raise HTTPException(status_code=504, detail="AI 모델 응답 시간이 초과됐습니다. 잠시 후 다시 시도해주세요.")
+    except ConnectionError as e:
+        logger.exception("Ollama HTTP 오류: %s", e)
+        raise HTTPException(status_code=502, detail="AI 모델 서버 오류가 발생했습니다.")
     except Exception as e:
         logger.exception("chat recommendation failed: %s", e)
-        raise HTTPException(status_code=500, detail=f"추천 생성 중 오류가 발생했습니다: {str(e)}")
+        raise HTTPException(status_code=500, detail="추천 생성 중 오류가 발생했습니다.")
