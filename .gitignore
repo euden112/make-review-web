@@ -1,5 +1,6 @@
 # Claude Code 로컬 설정
 .claude/
+CLAUDE.md
 
 # 환경변수 / 시크릿
 .env
