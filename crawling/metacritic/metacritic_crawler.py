@@ -1,80 +1,38 @@
 """
 Metacritic Game Review Crawler
-- 영어(en) 리뷰만 수집 (영어 전용 플랫폼, langdetect 미사용)
-- 3단계 필터링 파이프라인 내장:
-  1단계: 규칙 기반 (길이/반복/스팸)
-  2단계: 언어 코드 하드코딩 ("en" 고정)
-  3단계: 카테고리 분류 (게임 관련 리뷰만 통과 + 카테고리/감성 태깅)
+- crawling/game_list.json 에서 게임 목록 읽기 (metacritic_slug 필드 사용)
+- 전문가(critic) 리뷰 + 유저(user) 리뷰 수집
+- 영어 전용 플랫폼 → language="en" 고정
+- sentence_transformers 없음 — 영어 키워드 매칭으로 카테고리 분류
+- 게임당 파일 저장, 재시작 시 기존 파일 스킵
 """
 
-import argparse
 import asyncio
 import json
 import re
-from pathlib import Path
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
-from sentence_transformers import SentenceTransformer, util
 
 # ============================================================
 # 설정
 # ============================================================
-GAME_TITLES = [
-    "grand-theft-auto-v",
-    "elden-ring",
-    "playerunknowns-battlegrounds",
-    "clair-obscur-expedition-33",
-    "crimson-desert",
-]
-PLATFORM             = "pc"
+
 MAX_CRITIC_REVIEWS   = 100
 MAX_USER_REVIEWS     = 50
+MAX_BODY_LENGTH      = 1000
+MIN_BODY_LENGTH      = 20
+MIN_WORDS            = 5
+REPEAT_LIMIT         = 5
+MAX_URLS             = 2
 HEADLESS             = True
 MAX_CONCURRENT_GAMES = 2
 
-# 전처리 설정
-MIN_BODY_LENGTH = 20
-MAX_BODY_LENGTH = 8000
-
-# 필터 설정
-MIN_LENGTH    = 15
-MAX_LENGTH    = 8000
-MIN_WORDS     = 5
-REPEAT_LIMIT  = 5
-UNIQUE_RATIO  = 0.4
-MAX_URLS      = 2
-
-# 카테고리 분류 임계값
-CATEGORY_THRESHOLD = 0.30
-
-# 감성 판단 부정 키워드
-NEGATIVE_KEYWORDS = {
-    "not", "bad", "terrible", "awful", "poor", "broken",
-    "hate", "disappointing", "worst", "horrible", "garbage",
-    "useless", "trash", "never", "fail", "failed", "fails",
-    "worse", "boring", "waste", "refund", "unplayable",
-}
-
-# 게임 리뷰 카테고리
-GAME_CATEGORIES = {
-    "그래픽": ["graphics", "visual", "art style", "beautiful", "stunning", "ugly", "resolution", "textures"],
-    "조작감": ["controls", "gameplay feel", "responsive", "clunky", "input lag", "movement", "mechanics"],
-    "스토리/세계관": ["story", "narrative", "plot", "lore", "world building", "setting", "atmosphere", "characters", "writing", "immersive"],
-    "최적화": ["optimization", "fps", "performance", "lag", "stuttering", "loading", "frame rate"],
-    "난이도": ["difficulty", "hard", "easy", "challenging", "punishing", "souls-like", "frustrating"],
-    "콘텐츠 양": ["content", "playtime", "hours", "replay", "endgame", "dlc", "update", "postgame"],
-    "사운드/음악": ["soundtrack", "ost", "music", "sound effects", "voice acting", "audio", "bgm"],
-    "가성비": ["worth", "price", "value", "expensive", "cheap", "refund", "sale", "overpriced"],
-    "멀티플레이": ["multiplayer", "coop", "online", "pvp", "matchmaking", "server", "co-op"],
-    "밸런스": ["balance", "overpowered", "underpowered", "nerf", "buff", "meta", "fair", "broken"],
-    "버그/안정성": ["bug", "crash", "glitch", "broken", "stable", "patch", "fix", "error"],
-    "접근성": ["tutorial", "beginner", "ui", "ux", "accessible", "confusing", "intuitive", "learning curve"],
-}
-
-BASE_URL = "https://www.metacritic.com"
-HEADERS = {
+PLATFORM = "pc"
+BASE_URL  = "https://www.metacritic.com"
+HEADERS   = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -82,8 +40,64 @@ HEADERS = {
     )
 }
 
+GAME_LIST_PATH = Path(__file__).resolve().parent.parent / "game_list.json"
+
+# 영어 카테고리 키워드 (Korean category names 유지 — AI pipeline과 공유)
+GAME_CATEGORIES: dict[str, list[str]] = {
+    "그래픽": [
+        "graphics", "visual", "visuals", "art style", "beautiful", "stunning",
+        "ugly", "resolution", "texture", "rendering", "art direction",
+    ],
+    "조작감": [
+        "controls", "control", "gameplay feel", "responsive", "responsiveness",
+        "clunky", "input lag", "movement", "mechanics", "handling",
+        "intuitive", "awkward",
+    ],
+    "최적화": [
+        "optimization", "fps", "performance", "lag", "stutter", "stuttering",
+        "loading", "framerate", "frame rate", "crash", "high-end", "low-end",
+        "spec", "requirements",
+    ],
+    "콘텐츠 양": [
+        "content", "playtime", "hours", "replayability", "replay value",
+        "endgame", "end-game", "dlc", "update", "post-game", "volume",
+    ],
+    "가성비": [
+        "worth", "price", "value", "expensive", "cheap", "refund", "sale",
+        "overpriced", "money", "cost", "budget",
+    ],
+    "스토리": [
+        "story", "narrative", "plot", "lore", "world building", "worldbuilding",
+        "setting", "atmosphere", "character", "writing", "immersive",
+        "protagonist", "dialogue",
+    ],
+    "사운드": [
+        "soundtrack", "ost", "music", "sound effects", "sfx", "voice acting",
+        "audio", "bgm", "ambience", "sound design",
+    ],
+    "난이도": [
+        "difficulty", "hard", "easy", "challenging", "punishing", "souls-like",
+        "soulslike", "frustrating", "boss", "beginner", "unforgiving",
+    ],
+    "멀티플레이": [
+        "multiplayer", "co-op", "coop", "online", "pvp", "matchmaking",
+        "server", "cooperative", "party", "versus",
+    ],
+    "버그": [
+        "bug", "crash", "glitch", "broken", "patch", "fix", "error",
+        "unstable", "freeze", "issue",
+    ],
+}
+
+NEGATIVE_KEYWORDS = {
+    "not", "bad", "terrible", "awful", "poor", "broken",
+    "hate", "disappointing", "worst", "horrible", "garbage",
+    "useless", "trash", "boring", "waste", "refund", "unplayable",
+    "mediocre", "bland", "frustrating", "annoying", "repetitive",
+}
+
 # ============================================================
-# 필터 결과 데이터 클래스
+# 데이터 클래스
 # ============================================================
 
 @dataclass
@@ -91,150 +105,126 @@ class FilterResult:
     passed: bool
     stage: str
     reason: str
-    lang: str = ""
     categories: list[dict] = field(default_factory=list)
 
 # ============================================================
-# 임베딩 모델 (싱글톤) + 키워드 임베딩 사전 계산
+# 게임 목록 로드
 # ============================================================
 
-_embed_model = None
-_keyword_embeddings: dict | None = None
+def load_game_list() -> list[dict]:
+    """
+    game_list.json 에서 metacritic_slug가 채워진 항목만 반환.
+    Steam 크롤러 실행 후 metacritic_slug를 수동으로 채워야 한다.
+    """
+    if not GAME_LIST_PATH.exists():
+        print(f"[ERROR] game_list.json 없음: {GAME_LIST_PATH}")
+        print("  → 먼저 steam_crawler.py 를 실행하여 game_list.json 을 생성하세요.")
+        return []
 
-def get_embed_model() -> SentenceTransformer:
-    global _embed_model
-    if _embed_model is None:
-        print("  [모델 로드] SentenceTransformer (paraphrase-multilingual-MiniLM-L12-v2)...")
-        _embed_model = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
-    return _embed_model
+    with open(GAME_LIST_PATH, encoding="utf-8") as f:
+        entries = json.load(f)
 
-def get_keyword_embeddings() -> dict:
-    global _keyword_embeddings
-    if _keyword_embeddings is None:
-        model = get_embed_model()
-        _keyword_embeddings = {
-            category: model.encode(keywords, convert_to_tensor=True)
-            for category, keywords in GAME_CATEGORIES.items()
-        }
-    return _keyword_embeddings
+    ready   = [e for e in entries if e.get("metacritic_slug")]
+    missing = [e for e in entries if not e.get("metacritic_slug")]
 
-# ============================================================
-# 1단계: 규칙 기반 필터
-# ============================================================
-
-def rule_based_filter(text: str) -> FilterResult:
-    text = text.strip()
-    if len(text) < MIN_LENGTH:
-        return FilterResult(False, "rule", "too_short")
-    if len(text) > MAX_LENGTH:
-        return FilterResult(False, "rule", "too_long")
-
-    words = text.split()
-    if len(words) < MIN_WORDS:
-        return FilterResult(False, "rule", "too_few_words")
-    if re.search(rf'(.)\1{{{REPEAT_LIMIT},}}', text):
-        return FilterResult(False, "rule", "repeated_chars")
-    if len(text) <= 400:
-        if len(words) >= 6 and len(set(words)) / len(words) < UNIQUE_RATIO:
-            return FilterResult(False, "rule", "word_repetition")
-    if len(re.findall(r'https?://', text)) >= MAX_URLS:
-        return FilterResult(False, "rule", "spam_url")
-
-    return FilterResult(True, "rule", "pass")
+    print(f"[게임 목록] 총 {len(entries)}개 중 {len(ready)}개 metacritic_slug 설정됨")
+    if missing:
+        print(f"  → metacritic_slug 미설정 {len(missing)}개 스킵")
+    return ready
 
 # ============================================================
-# 3단계: 카테고리 분류 (문장 단위 감성 포함)
-# ============================================================
-
-def _sentence_sentiment(sentence: str) -> str:
-    words = set(re.findall(r'\w+', sentence.lower()))
-    return "negative" if words & NEGATIVE_KEYWORDS else "positive"
-
-def _split_sentences(text: str) -> list[str]:
-    parts = re.split(r'(?<=[.!?])\s+', text)
-    return [s.strip() for s in parts if len(s.strip()) >= 10]
-
-def category_filter(text: str) -> FilterResult:
-    model = get_embed_model()
-    keyword_embeddings = get_keyword_embeddings()
-
-    sentences = _split_sentences(text) or [text]
-
-    matched: dict[str, str] = {}  # category -> sentiment (첫 매칭 우선)
-    for sentence in sentences:
-        sent_emb = model.encode(sentence, convert_to_tensor=True)
-        for category, keyword_embs in keyword_embeddings.items():
-            if category in matched:
-                continue
-            sims = util.cos_sim(sent_emb, keyword_embs)[0]
-            if sims.max().item() >= CATEGORY_THRESHOLD:
-                matched[category] = _sentence_sentiment(sentence)
-
-    if not matched:
-        return FilterResult(False, "category", "no_category_matched")
-
-    categories = [{"category": c, "sentiment": s} for c, s in matched.items()]
-    return FilterResult(True, "category", "pass", lang="en", categories=categories)
-
-# ============================================================
-# 전체 필터 파이프라인 (Metacritic: 영어 전용, 언어 감지 단계 없음)
-# ============================================================
-
-def run_filter_pipeline(text: str) -> FilterResult:
-    result = rule_based_filter(text)
-    if not result.passed:
-        return result
-
-    return category_filter(text)
-
-# ============================================================
-# 전처리 함수
+# 전처리
 # ============================================================
 
 def preprocess_body(text: str) -> str | None:
     text = re.sub(r"[\r\n\t]+", " ", text)
     text = re.sub(
-        r"[\U00010000-\U0010ffff"
-        r"\U0001F600-\U0001F64F"
-        r"\U0001F300-\U0001F5FF"
-        r"\U0001F680-\U0001F6FF"
-        r"\U0001F1E0-\U0001F1FF]+",
+        r"[\U00010000-\U0010ffff\U0001F600-\U0001F64F"
+        r"\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF\U0001F1E0-\U0001F1FF]+",
         "", text, flags=re.UNICODE,
     )
     text = re.sub(r"([^\w\s])\1{2,}", r"\1", text)
     text = re.sub(r" {2,}", " ", text).strip()
-
     if len(text) < MIN_BODY_LENGTH:
         return None
-    if len(text) > MAX_BODY_LENGTH:
-        text = text[:MAX_BODY_LENGTH].rsplit(" ", 1)[0] + "..."
-
     return text
 
+def truncate_by_sentence(text: str, max_len: int = MAX_BODY_LENGTH) -> str:
+    if len(text) <= max_len:
+        return text
+    cut = text[:max_len]
+    m = re.search(r"[.!?][^.!?]*$", cut)
+    if m:
+        cut = cut[:m.start() + 1]
+    return cut.strip()
+
 # ============================================================
-# URL 조립 / 작성자 정리
+# 필터 파이프라인
 # ============================================================
 
-def build_url(game: str, platform: str, review_type: str) -> str:
+def rule_based_filter(text: str) -> FilterResult:
+    words = text.split()
+    if len(text) < MIN_BODY_LENGTH:
+        return FilterResult(False, "rule", "too_short")
+    if len(words) < MIN_WORDS:
+        return FilterResult(False, "rule", "too_few_words")
+    if re.search(rf"(.)\1{{{REPEAT_LIMIT},}}", text):
+        return FilterResult(False, "rule", "repeated_chars")
+    if len(text) <= 400 and len(words) >= 6:
+        if len(set(words)) / len(words) < 0.4:
+            return FilterResult(False, "rule", "word_repetition")
+    if len(re.findall(r"https?://", text)) >= MAX_URLS:
+        return FilterResult(False, "rule", "spam_url")
+    return FilterResult(True, "rule", "pass")
+
+def _detect_sentiment(sentence: str) -> str:
+    words = set(re.findall(r"\w+", sentence.lower()))
+    return "negative" if words & NEGATIVE_KEYWORDS else "positive"
+
+def category_tag(text: str) -> list[dict]:
+    sentences = re.split(r"(?<=[.!?])\s+", text) or [text]
+    matched: dict[str, str] = {}
+    for cat, keywords in GAME_CATEGORIES.items():
+        for sentence in sentences:
+            if cat in matched:
+                break
+            sl = sentence.lower()
+            for kw in keywords:
+                if kw in sl:
+                    matched[cat] = _detect_sentiment(sentence)
+                    break
+    return [{"category": c, "sentiment": s} for c, s in matched.items()]
+
+def run_filter_pipeline(text: str) -> FilterResult:
+    r = rule_based_filter(text)
+    if not r.passed:
+        return r
+    cats = category_tag(text)
+    return FilterResult(True, "pass", "pass", categories=cats)
+
+# ============================================================
+# URL / 작성자 정리
+# ============================================================
+
+def build_url(slug: str, review_type: str) -> str:
     return (
-        f"{BASE_URL}/game/{game}/{review_type}"
-        f"?platform={platform}&sort-by=Recently+Added"
+        f"{BASE_URL}/game/{slug}/{review_type}"
+        f"?platform={PLATFORM}&sort-by=Recently+Added"
     )
 
 def clean_author(raw: str) -> str:
     return re.sub(r"^\d+\s*", "", raw).strip()
 
 # ============================================================
-# 단일 카드 파싱
+# 단일 리뷰 카드 파싱
 # ============================================================
 
-async def parse_card(page, card) -> dict | None:
+async def parse_card(page, card, review_type_label: str) -> dict | None:
     try:
         author_el = await card.query_selector(".review-card__header")
         author = ""
         if author_el:
-            raw = (await author_el.inner_text()).strip()
-            author = clean_author(raw)
+            author = clean_author((await author_el.inner_text()).strip())
 
         score_el = await card.query_selector(".c-siteReviewScore span")
         score = (await score_el.inner_text()).strip() if score_el else ""
@@ -266,6 +256,8 @@ async def parse_card(page, card) -> dict | None:
         if body is None:
             return None
 
+        body = truncate_by_sentence(body)
+
         result = run_filter_pipeline(body)
         if not result.passed:
             return None
@@ -275,8 +267,10 @@ async def parse_card(page, card) -> dict | None:
             "score"            : score,
             "body"             : body,
             "date"             : date,
+            "type"             : review_type_label,
             "language"         : "en",
-            "review_categories": result.categories,  # [{"category": "그래픽", "sentiment": "positive"}, ...]
+            "helpful_count"    : 0,
+            "review_categories": result.categories,
         }
 
     except Exception:
@@ -287,38 +281,39 @@ async def parse_card(page, card) -> dict | None:
 # ============================================================
 
 async def scrape_reviews_by_scroll(
-    context, game: str, platform: str,
-    review_type: str, rtype_label: str, max_count: int,
+    context,
+    slug: str,
+    review_type: str,
+    type_label: str,
+    max_count: int,
 ) -> list[dict]:
-    url = build_url(game, platform, review_type)
+    url = build_url(slug, review_type)
     page = await context.new_page()
     reviews: list[dict] = []
-    collected_bodies: set[str] = set()
+    seen_bodies: set[str] = set()
 
     try:
         await page.goto(url, wait_until="domcontentloaded", timeout=30000)
         await page.wait_for_timeout(2000)
-        print(f"  [{game}] {rtype_label} 수집 시작")
+        print(f"  [{slug}] {type_label} 수집 시작")
 
-        prev_count = 0
+        prev_count   = 0
         no_new_count = 0
 
         while len(reviews) < max_count:
             cards = await page.query_selector_all("div.review-card__content")
-            current_count = len(cards)
 
             for card in cards[prev_count:]:
                 if len(reviews) >= max_count:
                     break
-                result = await parse_card(page, card)
-                if result:
-                    body_key = result["body"][:80]
-                    if body_key not in collected_bodies:
-                        collected_bodies.add(body_key)
-                        result["type"] = rtype_label
-                        reviews.append(result)
+                parsed = await parse_card(page, card, type_label)
+                if parsed:
+                    key = parsed["body"][:80]
+                    if key not in seen_bodies:
+                        seen_bodies.add(key)
+                        reviews.append(parsed)
 
-            prev_count = current_count
+            prev_count = len(cards)
             if len(reviews) >= max_count:
                 break
 
@@ -327,66 +322,79 @@ async def scrape_reviews_by_scroll(
             await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
             await asyncio.sleep(3)
 
-            new_cards_after = await page.query_selector_all("div.review-card__content")
-            if len(new_cards_after) == current_count:
+            new_cards = await page.query_selector_all("div.review-card__content")
+            if len(new_cards) == prev_count:
                 await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
                 await asyncio.sleep(5)
-                new_cards_after = await page.query_selector_all("div.review-card__content")
+                new_cards = await page.query_selector_all("div.review-card__content")
 
-            if len(new_cards_after) == current_count:
+            if len(new_cards) == prev_count:
                 no_new_count += 1
                 if no_new_count >= 5:
-                    print(f"  [{game}] {rtype_label} 더 이상 새 리뷰 없음 → 종료")
+                    print(f"  [{slug}] {type_label} 더 이상 새 리뷰 없음 → 종료")
                     break
             else:
                 no_new_count = 0
 
     except PlaywrightTimeoutError:
-        print(f"  [{game}] {rtype_label} timeout")
+        print(f"  [{slug}] {type_label} timeout")
     except Exception as e:
-        print(f"  [{game}] {rtype_label} error: {e}")
+        print(f"  [{slug}] {type_label} error: {e}")
     finally:
         await page.close()
 
+    print(f"  [{slug}] {type_label} 수집 완료: {len(reviews)}개")
     return reviews[:max_count]
 
 # ============================================================
-# 전문가 + 유저 리뷰 합치기
+# 게임 단위 수집
 # ============================================================
 
-async def collect_reviews(game, platform, max_critic, max_user, context):
+async def collect_game(entry: dict, context) -> dict | None:
+    slug = entry["metacritic_slug"]
+
     critic_reviews = await scrape_reviews_by_scroll(
-        context, game, platform, "critic-reviews", "critic", max_critic
+        context, slug, "critic-reviews", "critic", MAX_CRITIC_REVIEWS
     )
     user_reviews = await scrape_reviews_by_scroll(
-        context, game, platform, "user-reviews", "user", max_user
+        context, slug, "user-reviews", "user", MAX_USER_REVIEWS
     )
-    return game, critic_reviews + user_reviews
+    all_reviews = critic_reviews + user_reviews
+
+    return {
+        slug: {
+            "meta": {
+                "game"        : slug,
+                "platform"    : PLATFORM,
+                "crawled_at"  : datetime.now().isoformat(),
+                "total"       : len(all_reviews),
+                "critic_count": len(critic_reviews),
+                "user_count"  : len(user_reviews),
+            },
+            "reviews": all_reviews,
+        }
+    }
 
 # ============================================================
 # 메인
 # ============================================================
 
 async def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--games", nargs="+", metavar="SLUG", help="크롤링할 게임 슬러그 (기본: 전체)")
-    args = parser.parse_args()
+    entries = load_game_list()
+    if not entries:
+        return
 
-    game_titles = [g for g in GAME_TITLES if not args.games or g in args.games]
-
-    timestamp = datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')
     base_dir = Path(__file__).resolve().parent
-    output_file = base_dir / f"metacritic_reviews_raw_{timestamp}.json"
-    print("=" * 55)
-    print(f"  게임 목록  : {', '.join(game_titles)}")
-    print(f"  플랫폼     : {PLATFORM}")
-    print(f"  언어 정책  : 영어(en)만 수집")
-    print(f"  전문가     : 게임당 최대 {MAX_CRITIC_REVIEWS}개")
-    print(f"  유저       : 게임당 최대 {MAX_USER_REVIEWS}개")
-    print(f"  저장파일   : {output_file}")
-    print("=" * 55)
+    base_dir.mkdir(parents=True, exist_ok=True)
 
-    all_output: dict = {}
+    print("\n" + "=" * 60)
+    print(f"  처리 대상   : {len(entries)}개")
+    print(f"  전문가 최대 : {MAX_CRITIC_REVIEWS}개")
+    print(f"  유저 최대   : {MAX_USER_REVIEWS}개")
+    print(f"  저장 위치   : {base_dir}/{{slug}}.json")
+    print("=" * 60 + "\n")
+
+    success, skipped_count, failed = [], [], []
     semaphore = asyncio.Semaphore(MAX_CONCURRENT_GAMES)
 
     async with async_playwright() as pw:
@@ -396,47 +404,45 @@ async def main():
             viewport={"width": 1920, "height": 1080},
         )
 
-        async def run_game(game: str):
-            async with semaphore:
-                return await collect_reviews(
-                    game=game,
-                    platform=PLATFORM,
-                    max_critic=MAX_CRITIC_REVIEWS,
-                    max_user=MAX_USER_REVIEWS,
-                    context=context,
-                )
+        for i, entry in enumerate(entries, 1):
+            slug     = entry["metacritic_slug"]
+            name     = entry.get("name", slug)
+            out_path = base_dir / f"{slug}.json"
 
-        results = await asyncio.gather(*[run_game(g) for g in game_titles])
+            print(f"[{i:3d}/{len(entries)}] {name} ({slug})")
+
+            if out_path.exists():
+                print(f"  → 이미 존재, 스킵: {out_path.name}")
+                skipped_count.append(slug)
+                continue
+
+            try:
+                async with semaphore:
+                    result = await collect_game(entry, context)
+                if result is None:
+                    raise RuntimeError("collect_game returned None")
+
+                with open(out_path, "w", encoding="utf-8") as f:
+                    json.dump(result, f, ensure_ascii=False, indent=2)
+
+                data    = result[slug]
+                m       = data["meta"]
+                print(f"  → 저장 완료: {out_path.name} (전문가 {m['critic_count']}개 / 유저 {m['user_count']}개)\n")
+                success.append(slug)
+            except Exception as e:
+                print(f"  → [ERROR] {slug} 실패: {e}\n")
+                failed.append(slug)
+
         await browser.close()
 
-    for game, reviews in results:
-        all_output[game] = {
-            "meta": {
-                "game"           : game,
-                "platform"       : PLATFORM,
-                "platform_code"  : "metacritic",
-                "schema_version" : "1.0",
-                "collected_at"   : datetime.utcnow().strftime('%Y%m%dT%H%M%SZ'),
-                "record_count"   : len(reviews),
-                "lang_policy"    : "en_only",
-                "crawled_at"     : datetime.now().isoformat(),
-                "total"          : len(reviews),
-                "critic_count"   : sum(1 for r in reviews if r["type"] == "critic"),
-                "user_count"     : sum(1 for r in reviews if r["type"] == "user"),
-            },
-            "reviews": reviews,
-        }
-
-    with open(output_file, "w", encoding="utf-8") as f:
-        json.dump(all_output, f, ensure_ascii=False, indent=2)
-
-    print("\n" + "=" * 55)
-    print("수집 완료")
-    for game, data in all_output.items():
-        m = data["meta"]
-        print(f"  {game}: 전문가 {m['critic_count']}개 / 유저 {m['user_count']}개")
-    print(f"\n  {output_file} 저장 완료")
-    print("=" * 55)
+    print("\n" + "=" * 60)
+    print("크롤링 완료 요약")
+    print(f"  성공  : {len(success)}개")
+    print(f"  스킵  : {len(skipped_count)}개 (기존 파일 존재)")
+    print(f"  실패  : {len(failed)}개")
+    if failed:
+        print(f"  실패 목록: {', '.join(failed)}")
+    print("=" * 60)
 
 
 if __name__ == "__main__":

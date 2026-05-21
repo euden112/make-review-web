@@ -153,16 +153,16 @@ async def receive_steam_data(payload: Dict[str, SteamPayload], db: AsyncSession 
 
     for slug, game_data in payload.items():
         # 1. Game Upsert
-        canonical_title = slug.replace("-", " ").title()
+        canonical_title = game_data.meta.name_ko or slug.replace("-", " ").title()
         stmt = insert(Game).values(
-            canonical_title=canonical_title, 
-            normalized_title=slug, 
+            canonical_title=canonical_title,
+            normalized_title=slug,
             updated_at=datetime.utcnow()
         )
         stmt = stmt.on_conflict_do_update(
             index_elements=['normalized_title'],
             set_=dict(
-                canonical_title=stmt.excluded.canonical_title, 
+                canonical_title=stmt.excluded.canonical_title,
                 updated_at=datetime.utcnow()
             )
         ).returning(Game.id)
