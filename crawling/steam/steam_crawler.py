@@ -344,18 +344,10 @@ def collect_game(slug: str, app_id: str, name: str) -> dict:
     all_reviews: list[dict] = []
     seen: set[str] = set()
 
-    helpful_budget = MAX_REVIEWS_PER_GAME * 2 // 3
-    recent_budget  = MAX_REVIEWS_PER_GAME - helpful_budget
+    print(f"    [{slug}] 최신 리뷰 최대 {MAX_REVIEWS_PER_GAME}개 수집")
 
-    print(f"    [{slug}] Pool1(헬프풀)={helpful_budget} Pool2(최신)={recent_budget}")
-
-    pool1_raw, _ = fetch_raw_reviews(app_id, max_count=helpful_budget, filter_type="all", review_type="all")
-    time.sleep(1.0)
-    all_reviews.extend(parse_and_dedup(pool1_raw, seen, "Pool1(헬프풀 전체)", slug))
-
-    pool2_raw, _ = fetch_raw_reviews(app_id, max_count=recent_budget, filter_type="recent", review_type="all")
-    time.sleep(1.0)
-    all_reviews.extend(parse_and_dedup(pool2_raw, seen, "Pool2(최신 전체)", slug))
+    raw, _ = fetch_raw_reviews(app_id, max_count=MAX_REVIEWS_PER_GAME, filter_type="recent", review_type="all")
+    all_reviews.extend(parse_and_dedup(raw, seen, "최신 전체", slug))
 
     print(f"  [{slug}] 완료 → {len(all_reviews)}개 저장")
 
