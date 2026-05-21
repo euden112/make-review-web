@@ -22,8 +22,7 @@ from playwright.async_api import async_playwright, TimeoutError as PlaywrightTim
 # 설정
 # ============================================================
 
-MAX_CRITIC_REVIEWS   = 100
-MAX_USER_REVIEWS     = 50
+MAX_CRITIC_REVIEWS   = 200
 MAX_BODY_LENGTH      = 1000
 MIN_BODY_LENGTH      = 20
 MIN_WORDS            = 5
@@ -366,10 +365,6 @@ async def collect_game(entry: dict, context) -> dict | None:
     critic_reviews = await scrape_reviews_by_scroll(
         context, slug, "critic-reviews", "critic", MAX_CRITIC_REVIEWS
     )
-    user_reviews = await scrape_reviews_by_scroll(
-        context, slug, "user-reviews", "user", MAX_USER_REVIEWS
-    )
-    all_reviews = critic_reviews + user_reviews
 
     return {
         slug: {
@@ -377,11 +372,10 @@ async def collect_game(entry: dict, context) -> dict | None:
                 "game"        : slug,
                 "platform"    : PLATFORM,
                 "crawled_at"  : datetime.now().isoformat(),
-                "total"       : len(all_reviews),
+                "total"       : len(critic_reviews),
                 "critic_count": len(critic_reviews),
-                "user_count"  : len(user_reviews),
             },
-            "reviews": all_reviews,
+            "reviews": critic_reviews,
         }
     }
 
@@ -399,8 +393,7 @@ async def main():
 
     print("\n" + "=" * 60)
     print(f"  처리 대상   : {len(entries)}개")
-    print(f"  전문가 최대 : {MAX_CRITIC_REVIEWS}개")
-    print(f"  유저 최대   : {MAX_USER_REVIEWS}개")
+    print(f"  전문가 최대 : {MAX_CRITIC_REVIEWS}개 (영어 필터 후 저장)")
     print(f"  저장 위치   : {base_dir}/{{slug}}.json")
     print("=" * 60 + "\n")
 
@@ -437,7 +430,7 @@ async def main():
 
                 data    = result[slug]
                 m       = data["meta"]
-                print(f"  → 저장 완료: {out_path.name} (전문가 {m['critic_count']}개 / 유저 {m['user_count']}개)\n")
+                print(f"  → 저장 완료: {out_path.name} (전문가 {m['critic_count']}개)\n")
                 success.append(slug)
             except Exception as e:
                 print(f"  → [ERROR] {slug} 실패: {e}\n")
