@@ -344,59 +344,29 @@ def collect_game(slug: str, app_id: str, name: str) -> dict:
     all_reviews: list[dict] = []
     seen: set[str] = set()
 
-    # query_summary: 전체 언어 기준으로 긍정/부정 비율 파악 (Korean-only 0인 경우 대비)
-    _, summary = fetch_raw_reviews(app_id, max_count=1, filter_type="all", review_type="all", language="all")
-    _, ko_summary = fetch_raw_reviews(app_id, max_count=1, filter_type="all", review_type="all", language="koreana")
-
-    total_positive = ko_summary.get("total_positive", 0)
-    total_negative = ko_summary.get("total_negative", 0)
-    total_reviews  = total_positive + total_negative
-
-    # 비율 계산은 전체 리뷰 기준 (Korean 0개여도 정확한 비율 유지)
-    global_pos = summary.get("total_positive", 0)
-    global_neg = summary.get("total_negative", 0)
-    global_total = global_pos + global_neg
-
     helpful_budget = MAX_REVIEWS_PER_GAME * 2 // 3
     recent_budget  = MAX_REVIEWS_PER_GAME - helpful_budget
 
-    pos_ratio  = global_pos / global_total if global_total > 0 else 0.5
-    pool1_count = int(helpful_budget * pos_ratio)
-    pool2_count = helpful_budget - pool1_count
+    print(f"    [{slug}] Pool1(헬프풀)={helpful_budget} Pool2(최신)={recent_budget}")
 
-    print(
-        f"    [{slug}] 전체 {global_total}개 (한국어 {total_reviews}개) "
-        f"| 긍정비율={pos_ratio:.0%} "
-        f"| Pool1={pool1_count} Pool2={pool2_count} Pool3={recent_budget}"
-    )
-
-    pool1_raw, _ = fetch_raw_reviews(app_id, max_count=pool1_count, filter_type="all", review_type="positive")
+    pool1_raw, _ = fetch_raw_reviews(app_id, max_count=helpful_budget, filter_type="all", review_type="all")
     time.sleep(1.0)
-    all_reviews.extend(parse_and_dedup(pool1_raw, seen, "Pool1(헬프풀 긍정)", slug))
+    all_reviews.extend(parse_and_dedup(pool1_raw, seen, "Pool1(헬프풀 전체)", slug))
 
-    pool2_raw, _ = fetch_raw_reviews(app_id, max_count=pool2_count, filter_type="all", review_type="negative")
+    pool2_raw, _ = fetch_raw_reviews(app_id, max_count=recent_budget, filter_type="recent", review_type="all")
     time.sleep(1.0)
-    all_reviews.extend(parse_and_dedup(pool2_raw, seen, "Pool2(헬프풀 부정)", slug))
+    all_reviews.extend(parse_and_dedup(pool2_raw, seen, "Pool2(최신 전체)", slug))
 
-    pool3_raw, _ = fetch_raw_reviews(app_id, max_count=recent_budget, filter_type="recent", review_type="all")
-    time.sleep(1.0)
-    all_reviews.extend(parse_and_dedup(pool3_raw, seen, "Pool3(최신 전체)", slug))
-
-    print(
-        f"  [{slug}] 완료 → {len(all_reviews)}개 저장 "
-        f"| 한국어 리뷰: {total_positive}긍정 / {total_negative}부정"
-    )
+    print(f"  [{slug}] 완료 → {len(all_reviews)}개 저장")
 
     return {
         slug: {
             "meta": {
-                "game_id"       : app_id,
-                "name_ko"       : name,
-                "cover_image"   : images["cover_image"],
-                "hero_image"    : images["hero_image"],
-                "total_positive": total_positive,
-                "total_negative": total_negative,
-                "crawled_at"    : datetime.now().isoformat(),
+                "game_id"   : app_id,
+                "name_ko"   : name,
+                "cover_image": images["cover_image"],
+                "hero_image" : images["hero_image"],
+                "crawled_at" : datetime.now().isoformat(),
             },
             "reviews": all_reviews,
         }
