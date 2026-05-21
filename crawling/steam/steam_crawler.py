@@ -1,7 +1,7 @@
 """
 Steam Game Review Crawler
 - crawling/game_list.json 에서 게임 목록 읽기 (steam_app_id 필드 사용)
-- language=koreanese: 한국어 리뷰만 수집
+- language=koreana: 한국어 리뷰만 수집
 - 3-pool 전략: Pool1(헬프풀 긍정) + Pool2(헬프풀 부정) + Pool3(최신 전체)
 - 게임당 200개 리뷰, 파일 단위 저장 (재시작 시 기존 파일 스킵)
 - sentence_transformers 없음 — 한국어 키워드 매칭으로 카테고리 분류
@@ -140,7 +140,7 @@ def fetch_raw_reviews(
     max_count: int,
     filter_type: str = "recent",
     review_type: str = "all",
-    language: str = "koreanese",
+    language: str = "koreana",
 ) -> tuple[list[dict], dict]:
     url     = f"{REVIEW_API_BASE}/{app_id}"
     reviews: list[dict] = []
@@ -315,7 +315,7 @@ def parse_review(raw: dict) -> dict | None:
         "playtime_hours"   : round(author.get("playtime_at_review", 0) / 60, 1),
         "helpful_count"    : int(raw.get("votes_up", 0) or 0),
         "date_posted"      : date,
-        "language"         : raw.get("language", "koreanese"),
+        "language"         : raw.get("language", "koreana"),
         "review_categories": result.categories,
     }
 
@@ -443,7 +443,7 @@ def main():
     print("\n" + "=" * 60)
     print(f"  총 게임 수    : {len(entries)}")
     print(f"  게임당 최대   : {MAX_REVIEWS_PER_GAME}개")
-    print(f"  언어          : koreanese (한국어)")
+    print(f"  언어          : koreana (한국어)")
     print(f"  저장 위치     : {base_dir}/{{slug}}.json")
     print("=" * 60 + "\n")
 
