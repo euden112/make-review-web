@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from langdetect import detect, LangDetectException
+
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 
 # ============================================================
@@ -195,10 +197,18 @@ def category_tag(text: str) -> list[dict]:
                     break
     return [{"category": c, "sentiment": s} for c, s in matched.items()]
 
+def is_english(text: str) -> bool:
+    try:
+        return detect(text) == "en"
+    except LangDetectException:
+        return True  # 너무 짧거나 감지 불가 시 통과
+
 def run_filter_pipeline(text: str) -> FilterResult:
     r = rule_based_filter(text)
     if not r.passed:
         return r
+    if not is_english(text):
+        return FilterResult(False, "lang_filter", "not_english")
     cats = category_tag(text)
     return FilterResult(True, "pass", "pass", categories=cats)
 
