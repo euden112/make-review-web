@@ -10,6 +10,8 @@
   python demo.py --skip-docker      # Docker 기동 건너뜀 (이미 실행 중인 경우)
   python demo.py --game elden-ring  # 특정 게임만 요약 (여러 번 사용 가능)
   python demo.py --skip-crawlers    # 크롤러 검증 건너뜀
+  python demo.py --reset-volumes    # 첫 E2E 검증 전 docker compose down -v 실행
+  python demo.py --verify-frontend  # Playwright로 상세 화면 개선 결과 확인
 """
 
 from __future__ import annotations
@@ -43,6 +45,7 @@ RESET = "\033[0m"
 ROOT = Path(__file__).resolve().parent
 CRAWLING_DIR = ROOT / "crawling"
 BACKEND_URL = "http://localhost:8000"
+DEFAULT_LOCAL_MAP_MODEL = "qwen2.5:1.5b"
 
 # 데모 기본 대상 게임
 DEMO_GAMES = ["grand-theft-auto-v", "elden-ring"]
@@ -195,6 +198,21 @@ def start_docker():
     ok("서비스 기동 완료  (postgres / redis / ollama / backend)")
 
 
+def reset_docker_volumes():
+    cmd = _docker_compose_cmd() + ["down", "-v"]
+    result = subprocess.run(
+        cmd,
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if result.returncode != 0:
+        abort(f"docker compose down -v 실패:\n{result.stderr[-600:]}")
+    ok("Docker 컨테이너/볼륨 초기화 완료 (down -v)")
+
+
 def wait_backend(timeout: int = 150):
     print(f"   백엔드 준비 대기 중 (최대 {timeout}초) ", end="", flush=True)
     deadline = time.time() + timeout
@@ -216,12 +234,16 @@ def wait_backend(timeout: int = 150):
 def run_price_refresher_once():
     """기능 A buy-signal용 가격 스냅샷을 Redis에 채운다 (BUG-14)."""
     info("가격 스냅샷 갱신 중 (Steam appdetails → Redis)...")
-    result = subprocess.run(
-        ["docker", "exec", "capstone_backend",
-         "python", "-m", "app.jobs.price_refresher", "--once"],
-        capture_output=True, text=True, encoding="utf-8", errors="replace",
-        timeout=120,
-    )
+    try:
+        result = subprocess.run(
+            ["docker", "exec", "capstone_backend",
+             "python", "-m", "app.jobs.price_refresher", "--once"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=120,
+        )
+    except subprocess.TimeoutExpired:
+        warn("가격 리프레셔 타임아웃: buy-signal은 기존 Redis/DB 상태로 검증합니다.")
+        return
     if result.returncode == 0:
         ok("가격 스냅샷 갱신 완료 — buy-signal Redis 준비됨")
     else:
@@ -242,6 +264,21 @@ def pull_ollama_model(model: str):
 
 
 # ─── DB 리뷰 현황 조회 ────────────────────────────────────────────────────────
+def resolve_backend_local_model(default: str = DEFAULT_LOCAL_MAP_MODEL) -> str:
+    result = subprocess.run(
+        ["docker", "exec", "capstone_backend", "printenv", "LOCAL_MAP_MODEL"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    model = (result.stdout or "").strip()
+    if result.returncode == 0 and model:
+        return model
+    warn(f"backend LOCAL_MAP_MODEL 확인 실패 -> 기본값 사용: {default}")
+    return default
+
+
 def show_review_counts(label: str = "현재 DB 리뷰 현황"):
     r = subprocess.run(
         [
@@ -330,8 +367,10 @@ def run_metacritic_crawler(games: list[str]):
     print(f"   {D}{_divider('·', 56)}{RESET}")
     if r.returncode == 0:
         ok("Metacritic 크롤링 완료")
+        return True
     else:
         warn("Metacritic 크롤러가 오류와 함께 종료됨")
+        return False
 
 
 def send_to_api(platform: str):
@@ -349,8 +388,46 @@ def send_to_api(platform: str):
             info(line.strip())
     if r.returncode == 0:
         ok(f"{platform} 전송 완료")
+        return True
     else:
-        warn(f"{platform} 전송 실패:\n{r.stderr[-300:]}")
+        detail = (r.stderr or r.stdout or "")[-300:]
+        warn(f"{platform} 전송 실패:\n{detail}")
+        return False
+
+
+def _platform_review_counts(platform_code: str, games: list[str]) -> dict[str, int]:
+    if not games:
+        return {}
+    slugs = ",".join("'" + g.replace("'", "''") + "'" for g in games)
+    output = _pg(f"""
+        SELECT g.normalized_title,
+               COUNT(r.id) FILTER (WHERE p.code = '{platform_code}')
+        FROM games g
+        LEFT JOIN external_reviews r ON r.game_id = g.id
+        LEFT JOIN platforms p ON p.id = r.platform_id
+        WHERE g.normalized_title IN ({slugs})
+        GROUP BY g.normalized_title
+        ORDER BY g.normalized_title;
+    """)
+    counts = {g: 0 for g in games}
+    for line in output.splitlines():
+        name, _, count = line.partition("|")
+        if name and count.strip().isdigit():
+            counts[name.strip()] = int(count.strip())
+    return counts
+
+
+def verify_metacritic_ingestion(games: list[str], assertions: bool = False) -> bool:
+    counts = _platform_review_counts("metacritic", games)
+    total = sum(counts.values())
+    detail = ", ".join(f"{g}={counts.get(g, 0)}" for g in games)
+    if assertions:
+        return assert_ok(total > 0, "Metacritic DB 리뷰 적재 1건 이상", detail)
+    if total > 0:
+        ok(f"Metacritic DB 리뷰 적재 확인 ({detail})")
+        return True
+    warn(f"Metacritic DB 리뷰가 0건입니다 ({detail})")
+    return False
 
 
 # ─── 게임 ID 조회 ─────────────────────────────────────────────────────────────
@@ -403,7 +480,7 @@ def verify_pipeline_e2e(results: dict[str, dict]):
 
 def verify_purchase_features(targets: dict[str, int], *,
                              assertions: bool = False, args=None):
-    """기능 A·C 엔드포인트 검증.
+    """기능 A 및 추천 대상 엔드포인트 검증.
 
     assertions=False(기본): 기존 데모 표시(하위호환).
     assertions=True: TS-2/TS-3 어서션화.
@@ -470,50 +547,48 @@ def verify_purchase_features(targets: dict[str, int], *,
                       f"A-5 [{name}] 연속 3회 모두 200 (캐시 read-only)",
                       f"codes={codes}")
 
-        # 기능 C — 감성 하이라이트
+        # 기능 C 대체 — 리뷰 기반 추천 대상
         try:
-            r = httpx.get(f"{BACKEND_URL}/api/v1/games/{gid}/highlights?limit=3", timeout=30)
+            r = httpx.get(f"{BACKEND_URL}/api/v1/games/{gid}/recommendation-targets?limit=4", timeout=30)
             if r.status_code == 200:
-                hs = r.json().get("highlights", [])
+                points = r.json().get("recommendations", [])
                 if not assertions:
-                    ok(f"highlights: {len(hs)}개 명장면 선별")
-                    for h in hs[:2]:
-                        text = (h.get("text") or "").replace("\n", " ")[:60]
-                        info(f"  · 공감 {h.get('helpful_count', 0)}  \"{text}…\"")
+                    ok(f"recommendation-targets: {len(points)}개 추천 대상")
+                    for p in points[:3]:
+                        info(f"  · {p.get('label')}  근거 {p.get('evidence_count', 0)}건")
                 else:
-                    # C-4: linked_aspect 정합 (있으면 문자열)
-                    aspects_ok = all(
-                        (h.get("linked_aspect") is None
-                         or isinstance(h.get("linked_aspect"), str))
-                        for h in hs
+                    spoiler_terms = (
+                        "엔딩", "최종 보스", "마지막 보스", "반전", "사망", "배신", "정체",
+                        "ending", "final boss", "last boss", "plot twist", "betrayal",
                     )
-                    assert_ok(aspects_ok, f"C-4 [{name}] linked_aspect 타입 정합")
-                    # C-2: 정렬 결정성 — 2회 호출 동일
-                    import time as _t
-                    t0 = _t.time()
-                    r2 = httpx.get(
-                        f"{BACKEND_URL}/api/v1/games/{gid}/highlights?limit=3",
-                        timeout=30)
-                    dt2 = _t.time() - t0
-                    ids1 = [h.get("review_id") for h in hs]
-                    ids2 = [h.get("review_id") for h in r2.json().get("highlights", [])]
-                    assert_ok(ids1 == ids2,
-                              f"C-2 [{name}] 정렬 결정성 (2회 동일)")
-                    # C-5: 캐시 — 2회차 빠름(또는 동일 캐시 응답)
-                    assert_ok(dt2 < 5.0,
-                              f"C-5 [{name}] 2회차 캐시 응답 (<5s)",
-                              f"{dt2:.2f}s")
+                    assert_ok(len(points) > 0,
+                              f"C-1 [{name}] recommendation-targets 1개 이상")
+                    schema_ok = all(
+                        p.get("label") and p.get("category") and p.get("summary")
+                        and isinstance(p.get("evidence_count"), int)
+                        for p in points
+                    )
+                    assert_ok(schema_ok, f"C-2 [{name}] recommendation-targets 스키마 정합")
+                    no_quotes = all('"' not in (p.get("summary") or "") for p in points)
+                    assert_ok(no_quotes, f"C-3 [{name}] 원문 직접 인용 없음")
+                    joined = " ".join(
+                        f"{p.get('label', '')} {p.get('summary', '')}".lower()
+                        for p in points
+                    )
+                    spoiler_free = not any(term.lower() in joined for term in spoiler_terms)
+                    assert_ok(spoiler_free,
+                              f"C-4 [{name}] 주요 스포일러 키워드 없음")
             else:
                 if assertions:
-                    assert_ok(False, f"C [{name}] highlights HTTP 200",
+                    assert_ok(False, f"C [{name}] recommendation-targets HTTP 200",
                               f"got {r.status_code}")
                 else:
-                    warn(f"highlights HTTP {r.status_code}")
+                    warn(f"recommendation-targets HTTP {r.status_code}")
         except Exception as e:
             if assertions:
-                assert_ok(False, f"C [{name}] highlights 호출", str(e)[:80])
+                assert_ok(False, f"C [{name}] recommendation-targets 호출", str(e)[:80])
             else:
-                warn(f"highlights 오류: {e}")
+                warn(f"recommendation-targets 오류: {e}")
 
     # A-4: 신선도 게이팅 — --stale-price 시 stale 스냅샷 주입 후 degrade 확인
     if assertions and args is not None and getattr(args, "stale_price", False):
@@ -615,22 +690,90 @@ def verify_regression():
               f"imports={sorted(imported_mods & issue_track_crawlers)} "
               f"verify_crawlers={'verify_crawlers' in func_defs}")
     assert_ok("verify_purchase_features" in func_defs,
-              "R-2 demo buy-signal/highlights 검증 존재")
+              "R-2 demo buy-signal/recommendation-targets 검증 존재")
 
     # R-3: GameEvent/EventSummary 잔존 참조 0 (backend 소스)
-    r = subprocess.run(
-        ["grep", "-rIl", "-E", r"GameEvent|EventSummary",
-         str(ROOT / "backend" / "app")],
-        capture_output=True, text=True,
-    )
-    assert_ok(not (r.stdout or "").strip(),
+    matches: list[str] = []
+    for path in (ROOT / "backend" / "app").rglob("*.py"):
+        try:
+            src = path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        if "GameEvent" in src or "EventSummary" in src:
+            matches.append(str(path.relative_to(ROOT)))
+    assert_ok(not matches,
               "R-3 GameEvent/EventSummary 참조 0",
-              (r.stdout or "").strip()[:120])
+              ";".join(matches)[:120])
 
     # R-4: events.cpython-*.pyc 크러프트 부재
     pyc = list((ROOT / "backend").rglob("events.cpython-*.pyc"))
     assert_ok(not pyc, "R-4 events.pyc 크러프트 부재",
               ";".join(str(p) for p in pyc)[:120])
+
+    # R-5: 상세 화면은 감성 하이라이트 대신 recommendation-targets를 호출
+    detail_src = (ROOT / "frontend" / "src" / "GameDetailPage.jsx").read_text(encoding="utf-8")
+    assert_ok("/highlights" not in detail_src and "HighlightCard" not in detail_src,
+              "R-5 상세 화면 highlights 호출/렌더 제거")
+    assert_ok("/recommendation-targets" in detail_src and "RecommendationTargetsSection" in detail_src,
+              "R-5 상세 화면 recommendation-targets 호출/렌더 존재")
+
+
+def _ensure_playwright_runtime():
+    try:
+        import playwright.sync_api  # noqa: F401
+    except ImportError:
+        info("Playwright 패키지 설치 중...")
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--quiet", "playwright"],
+            check=True,
+        )
+    info("Playwright Chromium 확인 중...")
+    subprocess.run(
+        [sys.executable, "-m", "playwright", "install", "chromium"],
+        check=False,
+        capture_output=True,
+    )
+
+
+def verify_frontend_detail(targets: dict[str, int], frontend_url: str):
+    """Playwright로 상세 페이지 개선 결과를 실제 렌더에서 확인."""
+    print(f"\n   {B}[ TS-6 프론트 상세 화면 렌더 검증 ]{RESET}")
+    _ensure_playwright_runtime()
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page(viewport={"width": 1440, "height": 1800})
+        try:
+            for slug, gid in targets.items():
+                nm = GAME_DISPLAY_NAMES.get(slug, slug)
+                url = f"{frontend_url.rstrip('/')}/games/{gid}"
+                try:
+                    page.goto(url, wait_until="networkidle", timeout=60_000)
+                    body = page.locator("body")
+                    body.wait_for(timeout=30_000)
+                    text = body.inner_text(timeout=30_000)
+
+                    assert_ok("유저 리뷰 요약" in text,
+                              f"F-1 [{nm}] 유저 리뷰 요약 렌더")
+                    assert_ok("비평가 리뷰 요약" in text or "비평가 리뷰 데이터가 없습니다." in text,
+                              f"F-1 [{nm}] 비평가 리뷰 영역 렌더")
+                    assert_ok("플랫폼별 대표 리뷰" in text,
+                              f"F-2 [{nm}] 대표 리뷰 섹션 렌더")
+                    assert_ok("이런 사람에게 추천" in text,
+                              f"F-3 [{nm}] 추천 대상 섹션 렌더")
+                    assert_ok("이 게임의 명장면" not in text,
+                              f"F-4 [{nm}] 감성 하이라이트 섹션 미노출")
+                    assert_ok("전체 보기" in text or "대표 리뷰가 없습니다." in text,
+                              f"F-5 [{nm}] 긴 대표 리뷰 접기/펼치기 또는 빈 상태")
+
+                    screenshot = ROOT / "frontend" / f"detail-{slug}-verified.png"
+                    page.screenshot(path=str(screenshot), full_page=True)
+                    info(f"스크린샷 저장: {screenshot.relative_to(ROOT)}")
+                except Exception as e:
+                    assert_ok(False, f"F [{nm}] 프론트 상세 페이지 검증", str(e)[:120])
+        finally:
+            browser.close()
 
 
 def print_test_summary() -> bool:
@@ -709,6 +852,7 @@ def _sentiment_badge(overall: str | None, score: float | None) -> str:
 def display_summary(slug: str, data: dict):
     display_name = GAME_DISPLAY_NAMES.get(slug, slug)
     summary_text: str  = data.get("summary_text") or ""
+    explicit_one_liner = data.get("one_liner") or ""
     aspects: dict      = data.get("aspect_sentiment") or {}
     pros: list         = data.get("pros") or []
     cons: list         = data.get("cons") or []
@@ -725,7 +869,7 @@ def display_summary(slug: str, data: dict):
 
     # 한 줄 요약
     lines = summary_text.splitlines()
-    one_liner = lines[0].strip("*").strip() if lines else "(요약 없음)"
+    one_liner = explicit_one_liner or (lines[0].strip("*").strip() if lines else "(요약 없음)")
     print(f"\n  {B}{C}{one_liner}{RESET}")
 
     # 감성 종합
@@ -874,6 +1018,8 @@ def main():
     parser.add_argument("--skip-crawl",      action="store_true", help="크롤링 건너뜀")
     parser.add_argument("--skip-metacritic", action="store_true", help="Metacritic 크롤링 건너뜀")
     parser.add_argument("--skip-docker",     action="store_true", help="Docker 기동 건너뜀")
+    parser.add_argument("--reset-volumes",   action="store_true",
+                        help="Docker 기동 전 docker compose down -v로 DB/Redis/Ollama 볼륨 초기화")
     parser.add_argument("--game", dest="games", action="append", metavar="SLUG",
                         help="요약할 게임 슬러그 (기본: grand-theft-auto-v + elden-ring)")
     parser.add_argument("--timeout", type=int, default=600, metavar="SEC",
@@ -881,7 +1027,7 @@ def main():
     parser.add_argument("--force", action="store_true",
                         help="커서를 무시하고 전체 리뷰 강제 재처리 (오류 후 재실행 시 사용)")
     parser.add_argument("--skip-crawlers", action="store_true",
-                        help="기능 A·C(buy-signal·highlights) 검증 건너뜀")
+                        help="기능 A·C(buy-signal·recommendation-targets) 검증 건너뜀")
     parser.add_argument("--test", action="store_true",
                         help="테스트 모드: 시나리오 어서션 실행, 실패 시 exit code≠0")
     parser.add_argument("--scenario", choices=["e2e", "A", "C", "D", "regression", "all"],
@@ -892,6 +1038,10 @@ def main():
                         help="TS-A4/TS-6: price_as_of 강제 stale 시뮬레이션")
     parser.add_argument("--skip-price-refresh", action="store_true",
                         help="가격 스냅샷 갱신 건너뜀 (Redis에 이미 데이터가 있는 경우)")
+    parser.add_argument("--verify-frontend", action="store_true",
+                        help="Playwright로 프론트 상세 화면 개선 결과 검증")
+    parser.add_argument("--frontend-url", default="http://localhost:5173",
+                        help="프론트엔드 URL (기본: http://localhost:5173)")
     args = parser.parse_args()
 
     target_games: list[str] = args.games or DEMO_GAMES
@@ -909,7 +1059,7 @@ def main():
             "       .env 파일에 GROQ_API_KEY=your_key_here 를 추가하세요."
         )
     ok("GROQ_API_KEY 확인")
-    model = os.environ.get("LOCAL_MAP_MODEL", "qwen2.5:1.5b")
+    model = os.environ.get("LOCAL_MAP_MODEL", DEFAULT_LOCAL_MAP_MODEL)
     groq_model = os.environ.get("GROQ_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
     ok(f"LOCAL_MAP_MODEL = {model}  (Map 단계 로컬 추론)")
     ok(f"Reduce 모델    = Groq API  ({groq_model})")
@@ -919,8 +1069,14 @@ def main():
     if args.skip_docker:
         warn("--skip-docker: 기동 건너뜀")
     else:
+        if args.reset_volumes:
+            reset_docker_volumes()
         start_docker()
     wait_backend()
+    backend_model = resolve_backend_local_model()
+    if backend_model != model:
+        warn(f"LOCAL_MAP_MODEL 불일치: .env/host={model}, backend={backend_model} -> backend 기준 사용")
+        model = backend_model
 
     # ── STEP 3: Ollama 모델 확인 ──────────────────────────────────────────────
     step(3, "Ollama 로컬 모델 준비")
@@ -947,12 +1103,17 @@ def main():
         if args.skip_metacritic:
             warn("--skip-metacritic: Metacritic 건너뜀")
         else:
-            run_metacritic_crawler(target_games)
-            send_to_api("metacritic")
+            if not run_metacritic_crawler(target_games):
+                abort("Metacritic 크롤링 실패 또는 0건 수집으로 중단합니다.")
+            if not send_to_api("metacritic"):
+                abort("Metacritic 전송 실패로 중단합니다.")
+            verify_metacritic_ingestion(target_games, assertions=args.test)
 
     # ── STEP 6: 크롤링 후 현황 ────────────────────────────────────────────────
     step(6, "크롤링 완료 — DB 리뷰 현황")
     show_review_counts("적재 완료 후 리뷰 수")
+    if not args.skip_metacritic and not (args.test and args.scenario == "regression"):
+        verify_metacritic_ingestion(target_games, assertions=args.test)
 
     # ── STEP 7: 게임 ID 조회 ──────────────────────────────────────────────────
     step(7, "DB 게임 목록 확인")
@@ -1030,15 +1191,20 @@ def main():
             verify_divergence(targets)
         if sc in ("regression", "all"):
             verify_regression()
+        if args.verify_frontend:
+            verify_frontend_detail(targets, args.frontend_url)
         all_pass = print_test_summary()
         sys.exit(0 if all_pass else 1)
 
-    step(10, "기능 A·C 검증  (구매 타이밍 시그널 · 감성 하이라이트)")
+    step(10, "기능 A·C 검증  (구매 타이밍 시그널 · 추천 대상)")
     if args.skip_crawlers:
         warn("--skip-crawlers: 기능 A·C 검증 건너뜀")
     else:
-        info("buy-signal · highlights 엔드포인트 호출 검증 중...")
+        info("buy-signal · recommendation-targets 엔드포인트 호출 검증 중...")
         verify_purchase_features(targets)
+
+    if args.verify_frontend:
+        verify_frontend_detail(targets, args.frontend_url)
 
     # ── 비교 출력 ──────────────────────────────────────────────────────────────
     if results:
@@ -1056,7 +1222,7 @@ def main():
     print(f"  {B}데모 완료{RESET}  {status}")
     print(f"  {D}Swagger UI : http://localhost:8000/docs{RESET}")
     print(f"  {D}DB 어드민  : http://localhost:8080{RESET}")
-    print(f"  {D}하이라이트 : http://localhost:8000/api/v1/games/{{id}}/highlights{RESET}")
+    print(f"  {D}추천 대상: http://localhost:8000/api/v1/games/{{id}}/recommendation-targets{RESET}")
     print(f"  {D}구매 시그널: http://localhost:8000/api/v1/games/{{id}}/buy-signal{RESET}")
     print(f"{B}{C}{'═' * 64}{RESET}\n")
 

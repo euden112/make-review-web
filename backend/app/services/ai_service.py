@@ -440,7 +440,7 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
             # B안: unified 본문 폐지 — summary_text는 None으로 저장.
             # 본문은 user_summaries.summary / critic_summaries.summary로 분리.
             representative_reviews = _select_platform_representative_reviews(
-                new_reviews,
+                summary_reviews,
                 steam_pid,
                 meta_pid,
                 limit_per_platform=3,
@@ -494,9 +494,19 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
             # 15. 임베딩 유사도
             if _HAS_SEMANTIC_SIMILARITY:
                 selected_texts = [r.review_text_clean for r in summary_reviews[:50] if r.review_text_clean]
+                synthesized_summary = "\n".join(
+                    part for part in [
+                        ai_result.one_liner,
+                        "\n".join(ai_result.pros or []),
+                        "\n".join(ai_result.cons or []),
+                        ai_result.user.summary if ai_result.user else "",
+                        ai_result.critic.summary if ai_result.critic else "",
+                    ]
+                    if part
+                )
                 loop = asyncio.get_running_loop()
                 similarity = await loop.run_in_executor(
-                    None, compute_semantic_similarity, selected_texts, ai_result.full_text,
+                    None, compute_semantic_similarity, selected_texts, synthesized_summary,
                 )
                 new_summary.semantic_similarity_score = similarity
 

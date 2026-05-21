@@ -55,10 +55,7 @@
 ```
 buy_signal(game) =
     할인 중 (discount_percent > 0)
-    AND (
-        여론 긍정 회복 (histogram direction == positive_recovery)
-        OR 현재 부정 비율이 역대 최저 구간 (neg_ratio ≈ 최소값)
-    )
+    AND 여론 긍정 회복 (histogram direction == positive_recovery)
 → 신호 강도: 할인율 + 여론 개선폭으로 산출
 ```
 

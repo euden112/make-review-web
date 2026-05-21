@@ -165,6 +165,7 @@ function PlaytimeBucketCard({ bucket, data }) {
 
 function ReviewCard({ review, translation, translating }) {
   const [showOriginal, setShowOriginal] = useState(false)
+  const [expanded, setExpanded] = useState(false)
 
   const quote = typeof review === 'string' ? review : review?.quote || review?.summary || ''
   const reason = typeof review === 'string' ? '' : review?.reason || ''
@@ -173,6 +174,7 @@ function ReviewCard({ review, translation, translating }) {
 
   const displayText = showOriginal ? quote : (translation || quote)
   const hasTranslation = !!translation && translation !== quote
+  const isLong = displayText.length > 420
 
   return (
     <div className="rounded-lg border border-gray-200 dark:border-[#3a3a5e] bg-gray-50 dark:bg-[#2a2a3e] p-4">
@@ -203,9 +205,18 @@ function ReviewCard({ review, translation, translating }) {
       </div>
 
       {quote && (
-        <p className="text-sm leading-relaxed text-gray-700 dark:text-[#cccccc]">
+        <p className={`text-sm leading-relaxed text-gray-700 dark:text-[#cccccc] ${!expanded && isLong ? 'line-clamp-6' : ''}`}>
           {displayText}
         </p>
+      )}
+
+      {isLong && (
+        <button
+          onClick={() => setExpanded(p => !p)}
+          className="mt-2 text-[11px] text-blue-500 dark:text-blue-400 hover:underline bg-transparent border-none cursor-pointer"
+        >
+          {expanded ? '접기' : '전체 보기'}
+        </button>
       )}
 
       {!showOriginal && translation && translation !== quote && (
@@ -217,6 +228,85 @@ function ReviewCard({ review, translation, translating }) {
           {reason}
         </p>
       )}
+    </div>
+  )
+}
+
+function PointList({ title, items, color }) {
+  if (!items?.length) return null
+  return (
+    <div className="mt-4">
+      <p className="text-xs font-bold text-gray-500 dark:text-gray-400 mb-2">{title}</p>
+      <ul className="flex flex-col gap-1.5">
+        {items.slice(0, 4).map((item, idx) => (
+          <li key={idx} className="text-xs leading-relaxed text-gray-600 dark:text-[#aaaaaa] flex gap-1.5">
+            <span className="shrink-0" style={{ color }}>{color === '#22c55e' ? '+' : '-'}</span>
+            {item}
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+function SummaryCard({ title, data, emptyMessage }) {
+  return (
+    <div className="bg-white dark:bg-[#1e1e2e] rounded-xl p-7 border border-gray-200 dark:border-[#2a2a3e] shadow-sm">
+      <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0] mb-3">{title}</h2>
+      {data?.summary ? (
+        <>
+          <div className="flex items-center gap-2 mb-3">
+            <SentimentBadge value={data.sentiment_overall} />
+            {data.sentiment_score != null && (
+              <span className="text-xs text-gray-500 dark:text-gray-400">
+                점수: {data.sentiment_score.toFixed(0)}%
+              </span>
+            )}
+          </div>
+          <p className="text-sm leading-relaxed text-gray-700 dark:text-[#cccccc]">
+            {data.summary}
+          </p>
+          <PointList title="주요 호평" items={data.pros} color="#22c55e" />
+          <PointList title="주의할 점" items={data.cons} color="#ef4444" />
+        </>
+      ) : (
+        <p className="text-sm text-gray-400 dark:text-gray-500">{emptyMessage}</p>
+      )}
+    </div>
+  )
+}
+
+function RecommendationTargetsSection({ recommendations }) {
+  if (!recommendations?.length) return null
+
+  return (
+    <div className="bg-white dark:bg-[#1e1e2e] rounded-xl p-7 border border-gray-200 dark:border-[#2a2a3e] shadow-sm">
+      <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0] mb-1">이런 사람에게 추천</h2>
+      <p className="text-xs text-gray-400 dark:text-gray-500 mb-4">
+        리뷰에서 반복된 긍정 근거를 바탕으로 정리한 추천 대상
+      </p>
+      <div className="grid grid-cols-2 gap-3">
+        {recommendations.map((item, idx) => (
+          <div key={`${item.category}-${idx}`} className="rounded-lg bg-gray-50 dark:bg-[#2a2a3e] border border-gray-200 dark:border-[#3a3a5e] p-4">
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <h3 className="text-sm font-bold text-gray-800 dark:text-[#e0e0e0]">{item.label}</h3>
+              {item.category && (
+                <span className="text-[11px] px-2 py-0.5 rounded-full bg-blue-50 dark:bg-[#1a2a4a] text-blue-600 dark:text-blue-300 border border-blue-200 dark:border-blue-700">
+                  {CATEGORY_LABELS[item.category] || item.category}
+                </span>
+              )}
+            </div>
+            <p className="text-xs leading-relaxed text-gray-600 dark:text-[#aaaaaa]">
+              {item.summary}
+            </p>
+            {item.evidence_count > 0 && (
+              <p className="text-[11px] text-gray-400 dark:text-gray-500 mt-3">
+                긍정 근거 {item.evidence_count}건
+              </p>
+            )}
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
@@ -260,48 +350,56 @@ function groupRepresentativeReviews(reviews) {
   return grouped
 }
 
-function HighlightCard({ highlight: h, translation, translating }) {
-  const [showOriginal, setShowOriginal] = useState(false)
-  const displayText = showOriginal ? h.text : (translation || h.text)
-  const hasTranslation = !!translation && translation !== h.text
+function formatWon(value) {
+  if (value == null || Number(value) <= 0) return '정보 없음'
+  return `₩${Number(value).toLocaleString()}`
+}
 
-  return (
-    <div
-      className="flex-none w-72 bg-gray-50 dark:bg-[#2a2a3e] rounded-xl p-5 border border-gray-200 dark:border-[#3a3a5e] flex flex-col gap-3"
-      style={{ scrollSnapAlign: 'start' }}>
-      <p className="text-sm leading-relaxed text-gray-800 dark:text-[#e0e0e0] italic line-clamp-5">
-        "{displayText}"
-      </p>
-      <div className="flex items-center gap-3 mt-auto pt-2 border-t border-gray-200 dark:border-[#3a3a5e]">
-        {h.playtime_hours != null && (
-          <span className="text-xs text-gray-500 dark:text-gray-400">
-            {Math.round(h.playtime_hours)}h 플레이
-          </span>
-        )}
-        {h.helpful_count > 0 && (
-          <span className="text-xs text-gray-500 dark:text-gray-400">
-            공감 {h.helpful_count}
-          </span>
-        )}
-        {translating && !translation && (
-          <span className="text-[11px] text-gray-400 dark:text-gray-500 animate-pulse">번역 중...</span>
-        )}
-        {hasTranslation && (
-          <button
-            onClick={() => setShowOriginal(p => !p)}
-            className="text-[11px] text-blue-500 dark:text-blue-400 hover:underline bg-transparent border-none cursor-pointer"
-          >
-            {showOriginal ? '번역 보기' : '원문 보기'}
-          </button>
-        )}
-        {h.linked_aspect && (
-          <span className="ml-auto text-xs px-2 py-0.5 rounded-full bg-blue-50 dark:bg-[#1a2a4a] text-blue-600 dark:text-blue-300 border border-blue-200 dark:border-blue-700">
-            {CATEGORY_LABELS[h.linked_aspect] || h.linked_aspect}
-          </span>
-        )}
-      </div>
-    </div>
-  )
+function formatDisplayItemValue(item) {
+  if (!item) return ''
+  if (item.text) return item.text
+  if (item.unit === 'KRW') return formatWon(item.value)
+  if (item.unit === 'percent') return item.value > 0 ? `${item.value}% 할인 중` : '현재 할인 없음'
+  if (item.unit === 'ratio' && item.value != null) return `${(item.value * 100).toFixed(0)}%`
+  return item.value ?? ''
+}
+
+function buySignalDisplayItems(signal) {
+  if (!signal) return []
+  if (Array.isArray(signal.display_items) && signal.display_items.length > 0) {
+    return signal.display_items
+  }
+
+  const items = [
+    {
+      type: 'current_price',
+      label: '현재 가격',
+      value: signal.final_price ?? signal.original_price,
+      unit: 'KRW',
+      always_show: true,
+    },
+    {
+      type: 'discount',
+      label: '할인 정보',
+      value: signal.discount_percent ?? 0,
+      unit: 'percent',
+      always_show: true,
+    },
+  ]
+  if (signal.show_positive_ratio && signal.positive_ratio != null) {
+    items.push({
+      type: 'positive_ratio',
+      label: '긍정 비율',
+      value: signal.positive_ratio,
+      delta: signal.positive_delta,
+      unit: 'ratio',
+      text: signal.positive_delta != null
+        ? `최근 긍정 비율 ${(signal.positive_ratio * 100).toFixed(0)}% (+${(signal.positive_delta * 100).toFixed(0)}%p)`
+        : `최근 긍정 비율 ${(signal.positive_ratio * 100).toFixed(0)}%`,
+      always_show: false,
+    })
+  }
+  return items
 }
 
 function GameDetailPage({ isDark, toggleDark }) {
@@ -314,9 +412,8 @@ function GameDetailPage({ isDark, toggleDark }) {
   const [criticSummary, setCriticSummary] = useState(null)
   const [userSummary, setUserSummary] = useState(null)
   const [buySignal, setBuySignal] = useState(null)
-  const [highlights, setHighlights] = useState(null)
+  const [recommendationTargets, setRecommendationTargets] = useState(null)
   const [reviewTranslations, setReviewTranslations] = useState(null)
-  const [highlightTranslations, setHighlightTranslations] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
@@ -332,14 +429,14 @@ function GameDetailPage({ isDark, toggleDark }) {
       setError(null)
 
       try {
-        const [gamesRes, summaryRes, playtimeRes, criticRes, userRes, buySignalRes, highlightsRes] = await Promise.all([
+        const [gamesRes, summaryRes, playtimeRes, criticRes, userRes, buySignalRes, recommendationRes] = await Promise.all([
           fetch(`${API_BASE}/api/v1/games/`),
           fetch(`${API_BASE}/api/v1/games/${id}/summary`),
           fetch(`${API_BASE}/api/v1/games/${id}/playtime-analysis`),
           fetch(`${API_BASE}/api/v1/games/${id}/critic-summary`),
           fetch(`${API_BASE}/api/v1/games/${id}/user-summary`).catch(() => null),
           fetch(`${API_BASE}/api/v1/games/${id}/buy-signal`).catch(() => null),
-          fetch(`${API_BASE}/api/v1/games/${id}/highlights?limit=5`).catch(() => null),
+          fetch(`${API_BASE}/api/v1/games/${id}/recommendation-targets?limit=4`).catch(() => null),
         ])
 
         if (gamesRes.ok) {
@@ -371,8 +468,8 @@ function GameDetailPage({ isDark, toggleDark }) {
           setBuySignal(await buySignalRes.json())
         }
 
-        if (highlightsRes?.ok) {
-          setHighlights(await highlightsRes.json())
+        if (recommendationRes?.ok) {
+          setRecommendationTargets(await recommendationRes.json())
         }
       } catch {
         setError('서버에 연결할 수 없습니다.')
@@ -407,22 +504,6 @@ function GameDetailPage({ isDark, toggleDark }) {
       })
       .catch(() => setReviewTranslations({ steam: [], metacritic: [] }))
   }, [summary])
-
-  useEffect(() => {
-    if (!highlights?.highlights?.length) return
-
-    const texts = highlights.highlights.map(h => h.text).filter(Boolean)
-    if (!texts.length) return
-
-    fetch(`${API_BASE}/api/v1/translate/batch`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ texts: texts.slice(0, 20) }),
-    })
-      .then(r => r.ok ? r.json() : null)
-      .then(data => setHighlightTranslations(data?.translations ?? []))
-      .catch(() => setHighlightTranslations([]))
-  }, [highlights])
 
   const translating = !!summary?.representative_reviews?.length && reviewTranslations === null
 
@@ -545,46 +626,16 @@ function GameDetailPage({ isDark, toggleDark }) {
             {/* ── B안: user/critic 분리 2단 블록 (unified 본문 폐지) ── */}
             {(userSummary?.summary || criticSummary?.summary) && (
               <div className="grid grid-cols-2 gap-6">
-                <div className="bg-white dark:bg-[#1e1e2e] rounded-xl p-7 border border-gray-200 dark:border-[#2a2a3e] shadow-sm">
-                  <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0] mb-3">유저 리뷰 요약</h2>
-                  {userSummary?.summary ? (
-                    <>
-                      <div className="flex items-center gap-2 mb-3">
-                        <SentimentBadge value={userSummary.sentiment_overall} />
-                        {userSummary.sentiment_score != null && (
-                          <span className="text-xs text-gray-500 dark:text-gray-400">
-                            점수: {userSummary.sentiment_score.toFixed(0)}%
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-sm leading-relaxed text-gray-700 dark:text-[#cccccc]">
-                        {userSummary.summary}
-                      </p>
-                    </>
-                  ) : (
-                    <p className="text-sm text-gray-400 dark:text-gray-500">유저 리뷰 데이터가 없습니다.</p>
-                  )}
-                </div>
-                <div className="bg-white dark:bg-[#1e1e2e] rounded-xl p-7 border border-gray-200 dark:border-[#2a2a3e] shadow-sm">
-                  <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0] mb-3">비평가 리뷰 요약</h2>
-                  {criticSummary?.summary ? (
-                    <>
-                      <div className="flex items-center gap-2 mb-3">
-                        <SentimentBadge value={criticSummary.sentiment_overall} />
-                        {criticSummary.sentiment_score != null && (
-                          <span className="text-xs text-gray-500 dark:text-gray-400">
-                            점수: {criticSummary.sentiment_score.toFixed(0)}%
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-sm leading-relaxed text-gray-700 dark:text-[#cccccc]">
-                        {criticSummary.summary}
-                      </p>
-                    </>
-                  ) : (
-                    <p className="text-sm text-gray-400 dark:text-gray-500">비평가 리뷰 데이터가 없습니다.</p>
-                  )}
-                </div>
+                <SummaryCard
+                  title="유저 리뷰 요약"
+                  data={userSummary}
+                  emptyMessage="유저 리뷰 데이터가 없습니다."
+                />
+                <SummaryCard
+                  title="비평가 리뷰 요약"
+                  data={criticSummary}
+                  emptyMessage="비평가 리뷰 데이터가 없습니다."
+                />
               </div>
             )}
 
@@ -750,27 +801,33 @@ function GameDetailPage({ isDark, toggleDark }) {
               )}
             </div>
 
-            {buySignal.original_price != null && buySignal.original_price > 0 && (
-              <div className="flex items-baseline gap-2 mb-3">
-                <span className="text-2xl font-black text-green-600 dark:text-green-400">
-                  ₩{(buySignal.final_price ?? buySignal.original_price).toLocaleString()}
-                </span>
-                {buySignal.discount_percent > 0 && (
-                  <span className="text-sm text-gray-400 line-through">
-                    ₩{buySignal.original_price.toLocaleString()}
-                  </span>
-                )}
-              </div>
-            )}
-
-            <ul className="flex flex-col gap-1">
-              {buySignal.reasons?.map((reason, i) => (
-                <li key={i} className="text-sm text-gray-700 dark:text-[#cccccc] flex items-center gap-2">
-                  <span className={buySignal.is_good_timing ? 'text-green-500' : 'text-gray-400'}>•</span>
-                  {reason}
-                </li>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              {buySignalDisplayItems(buySignal).map((item) => (
+                <div
+                  key={item.type}
+                  className="rounded-lg bg-white/70 dark:bg-[#2a2a3e] border border-gray-200 dark:border-[#3a3a5e] px-4 py-3"
+                >
+                  <p className="text-[11px] font-bold text-gray-400 dark:text-gray-500 mb-1">
+                    {item.label}
+                  </p>
+                  <p className={`text-sm font-black ${
+                    item.type === 'positive_ratio' || (item.type === 'discount' && item.value > 0)
+                      ? 'text-green-600 dark:text-green-400'
+                      : 'text-gray-900 dark:text-[#e0e0e0]'
+                  }`}>
+                    {formatDisplayItemValue(item)}
+                  </p>
+                  {item.type === 'current_price'
+                    && buySignal.original_price != null
+                    && buySignal.discount_percent > 0
+                    && buySignal.original_price !== (buySignal.final_price ?? buySignal.original_price) && (
+                    <p className="text-[11px] text-gray-400 line-through mt-1">
+                      {formatWon(buySignal.original_price)}
+                    </p>
+                  )}
+                </div>
               ))}
-            </ul>
+            </div>
 
             {/* BUG-3: 세일 카운트다운 미제공 → 스냅샷 시각 + 스토어 확인 헤지 */}
             <div className="mt-4 pt-3 border-t border-gray-200 dark:border-[#2a2a3e] flex flex-wrap items-center justify-between gap-2">
@@ -790,24 +847,10 @@ function GameDetailPage({ isDark, toggleDark }) {
           </div>
         )}
 
-        {/* ── 이 게임의 명장면 ── */}
-        {!loading && highlights?.highlights?.length > 0 && (
-          <div className="bg-white dark:bg-[#1e1e2e] rounded-xl p-7 border border-gray-200 dark:border-[#2a2a3e] shadow-sm">
-            <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0] mb-1">이 게임의 명장면</h2>
-            <p className="text-xs text-gray-400 dark:text-gray-500 mb-4">
-              가장 많은 공감을 받은 감동 리뷰 — 플레이어가 실제로 느낀 순간
-            </p>
-            <div className="flex gap-4 overflow-x-auto pb-2" style={{ scrollSnapType: 'x mandatory' }}>
-              {highlights.highlights.map((h, i) => (
-                <HighlightCard
-                  key={h.review_id ?? i}
-                  highlight={h}
-                  translation={highlightTranslations?.[i]}
-                  translating={highlights?.highlights?.length > 0 && highlightTranslations === null}
-                />
-              ))}
-            </div>
-          </div>
+        {!loading && (
+          <RecommendationTargetsSection
+            recommendations={recommendationTargets?.recommendations}
+          />
         )}
       </div>
     </div>

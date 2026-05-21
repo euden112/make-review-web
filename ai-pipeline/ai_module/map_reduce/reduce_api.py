@@ -39,7 +39,7 @@ class FinalSummary:
     # unified 요약
     one_liner: str
     aspect_scores: dict[str, Any]
-    full_text: str
+    full_text: str = ""
     sentiment_overall: str | None = None
     sentiment_score: float | None = None
     pros: list[str] = field(default_factory=list)
@@ -90,8 +90,7 @@ Required top-level keys:
     sentiment_score: number in range 0..100,
     pros: [string] at least 3 items,
     cons: [string] at least 2 items,
-    keywords: [string] 5–8 items,
-    full_text: 4–6 sentences in Korean. Start with a SPECIFIC observation (e.g. a particular strength, complaint, or detail) — NOT a general verdict that restates one_liner. Cover strengths with examples, weaknesses, and target audience.
+    keywords: [string] 5–8 items
   }
 - playtime: {
     early: { summary, sentiment_overall, sentiment_score, pros, cons, keywords } | null,
@@ -100,9 +99,9 @@ Required top-level keys:
   }
   (Each bucket: 2–3 sentences in Korean. null ONLY if input array is empty.)
 - critic: { summary, sentiment_overall, sentiment_score, pros, cons, keywords } | null
-  (critic: based ONLY on critic reviews; do NOT compare with user opinion; label as "출시 당시 전문가 평가". null ONLY if critic input array is empty.)
+  (critic: based ONLY on critic reviews; do NOT compare with user opinion; label as "출시 당시 전문가 평가". summary 4–6 sentences in Korean with concrete praise, criticism, and evaluation criteria. null ONLY if critic input array is empty.)
 - user: { summary, sentiment_overall, sentiment_score, pros, cons, keywords } | null
-  (user: based ONLY on user-side map groups (i.e. all/early/mid/late, excluding critic); label as "유저 평가". summary 2–4 sentences in Korean focusing on user player experience. null ONLY if user input is empty.)
+  (user: based ONLY on user-side map groups (i.e. all/early/mid/late, excluding critic); label as "유저 평가". summary 5–7 sentences in Korean covering concrete strengths, repeated complaints, recommended players, and caution cases. null ONLY if user input is empty.)
 
 Rules:
 - unified is based on the "all" group.
@@ -114,7 +113,6 @@ Rules:
 - sentiment_overall and sentiment_score MUST be consistent: positive → score >= 60, negative → score <= 45, mixed → 40 <= score <= 65.
 
 Rules about repetition:
-- full_text MUST NOT begin with the same subject or conclusion as one_liner. Open with a concrete detail.
 - Do NOT repeat the same sentence or phrase verbatim across different sections (unified, playtime buckets, critic).
 - Ensure sentences are unique; when similar points are necessary across sections, paraphrase concisely.
 """.strip()
@@ -172,7 +170,6 @@ def _is_valid_unified(unified: dict) -> bool:
     """unified 요약의 핵심 필드 유효성 + sentiment 일관성 검증."""
     if not (
         str(unified.get("one_liner", "")).strip()
-        and str(unified.get("full_text", "")).strip()
         and len(_to_string_list(unified.get("pros", []))) >= 2
         and len(_to_string_list(unified.get("cons", []))) >= 1
         and _normalize_sentiment_overall(unified.get("sentiment_overall")) is not None
@@ -234,7 +231,7 @@ def _build_user_prompt(
     sections: list[str] = [f"language={language_code}"]
 
     if representative_quotes:
-        block = "[representative_quotes] (use to ground pros/cons and full_text in actual review language)\n"
+        block = "[representative_quotes] (use to ground one_liner, pros, cons, user summary, and critic summary in actual review language)\n"
         for i, q in enumerate(representative_quotes, 1):
             block += f"[Q{i}] {q}\n"
         sections.append(block.rstrip())
@@ -352,7 +349,6 @@ async def run_reduce_stage(
         return FinalSummary(
             one_liner="요약 생성 중 오류가 발생했습니다.",
             aspect_scores={},
-            full_text="ErrorCode=parse_error; retryable=false; detail=no map summaries provided",
             error_code="parse_error",
             is_retryable=False,
         )

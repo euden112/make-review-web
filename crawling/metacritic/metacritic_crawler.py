@@ -224,31 +224,52 @@ def build_url(game: str, platform: str, review_type: str) -> str:
 def clean_author(raw: str) -> str:
     return re.sub(r"^\d+\s*", "", raw).strip()
 
+async def _first_text(root, selectors: list[str]) -> str:
+    for selector in selectors:
+        el = await root.query_selector(selector)
+        if el:
+            text = (await el.inner_text()).strip()
+            if text:
+                return text
+    return ""
+
 # ============================================================
 # 단일 카드 파싱
 # ============================================================
 
 async def parse_card(page, card) -> dict | None:
     try:
-        author_el = await card.query_selector(".review-card__header")
-        author = ""
-        if author_el:
-            raw = (await author_el.inner_text()).strip()
-            author = clean_author(raw)
+        author = clean_author(await _first_text(card, [
+            '[data-testid="review-card-header"]',
+            ".review-card__header",
+        ]))
 
-        score_el = await card.query_selector(".c-siteReviewScore span")
-        score = (await score_el.inner_text()).strip() if score_el else ""
+        score = await _first_text(card, [
+            ".c-siteReviewScore span",
+            '[data-testid*="score"] span',
+            '[data-testid*="score"]',
+        ])
 
-        date_el = await card.query_selector(".review-card__date")
-        date = (await date_el.inner_text()).strip() if date_el else ""
+        date = await _first_text(card, [
+            '[data-testid="review-card-date"]',
+            ".review-card__date",
+        ])
 
-        read_more_btn = await card.query_selector("button.review-card__read-more")
+        body = await _first_text(card, [
+            '[data-testid="review-card-quote-block"]',
+            ".review-card__quote",
+        ])
+
+        read_more_btn = await card.query_selector(
+            'button.review-card__read-more, button:has-text("Read More")'
+        )
         if read_more_btn:
             try:
                 await read_more_btn.click(timeout=3000)
                 await page.wait_for_selector(".review-read-more-modal__quote", timeout=5000)
                 body_el = await page.query_selector(".review-read-more-modal__quote")
-                body = (await body_el.inner_text()).strip() if body_el else ""
+                modal_body = (await body_el.inner_text()).strip() if body_el else ""
+                body = modal_body or body
                 close_btn = await page.query_selector(
                     ".global-modal__close-button-wrapper, button[aria-label='Close']"
                 )
@@ -256,11 +277,7 @@ async def parse_card(page, card) -> dict | None:
                     await close_btn.click(timeout=2000)
                     await asyncio.sleep(0.3)
             except Exception:
-                body_el = await card.query_selector(".review-card__quote")
-                body = (await body_el.inner_text()).strip() if body_el else ""
-        else:
-            body_el = await card.query_selector(".review-card__quote")
-            body = (await body_el.inner_text()).strip() if body_el else ""
+                pass
 
         body = preprocess_body(body)
         if body is None:
@@ -304,7 +321,9 @@ async def scrape_reviews_by_scroll(
         no_new_count = 0
 
         while len(reviews) < max_count:
-            cards = await page.query_selector_all("div.review-card__content")
+            cards = await page.query_selector_all(
+                '[data-testid="review-card"], div.review-card__content'
+            )
             current_count = len(cards)
 
             for card in cards[prev_count:]:
@@ -327,11 +346,15 @@ async def scrape_reviews_by_scroll(
             await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
             await asyncio.sleep(3)
 
-            new_cards_after = await page.query_selector_all("div.review-card__content")
+            new_cards_after = await page.query_selector_all(
+                '[data-testid="review-card"], div.review-card__content'
+            )
             if len(new_cards_after) == current_count:
                 await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
                 await asyncio.sleep(5)
-                new_cards_after = await page.query_selector_all("div.review-card__content")
+                new_cards_after = await page.query_selector_all(
+                    '[data-testid="review-card"], div.review-card__content'
+                )
 
             if len(new_cards_after) == current_count:
                 no_new_count += 1
@@ -426,6 +449,11 @@ async def main():
             },
             "reviews": reviews,
         }
+
+    total_records = sum(data["meta"]["record_count"] for data in all_output.values())
+    if total_records == 0:
+        print("\n[metacritic] 수집 실패: 전체 리뷰가 0건입니다.")
+        raise SystemExit(1)
 
     with open(output_file, "w", encoding="utf-8") as f:
         json.dump(all_output, f, ensure_ascii=False, indent=2)

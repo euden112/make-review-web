@@ -2,7 +2,7 @@
 구매 타이밍 시그널 API (read-only) — 기획서 3-4·3-5b·9-3 BUG-3
 
 판정 로직:
-  is_good_timing = 할인 중 AND (긍정 회복 OR 역대 최저 부정 비율)
+  is_good_timing = 할인 중 AND 긍정 비율 유의미 상승
                    AND 가격 스냅샷이 신선함 (신선도 게이팅)
 
 핵심 원칙: 본 엔드포인트는 Steam을 직접 호출하지 않는다.
