@@ -23,8 +23,6 @@ from datetime import datetime
 MAX_REVIEWS_PER_GAME = 200
 MAX_BODY_LENGTH      = 1000
 MIN_BODY_LENGTH      = 20
-MIN_WORDS            = 5
-REPEAT_LIMIT         = 5
 MAX_URLS             = 2
 
 REVIEW_API_BASE = "https://store.steampowered.com/appreviews"
@@ -197,7 +195,6 @@ def fetch_raw_reviews(
 
 def preprocess_body(text: str) -> str | None:
     text = re.sub(r"[\r\n\t]+", " ", text)
-    # 이모지 제거
     text = re.sub(
         r"[\U00010000-\U0010ffff\U0001F600-\U0001F64F"
         r"\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF\U0001F1E0-\U0001F1FF]+",
@@ -207,33 +204,17 @@ def preprocess_body(text: str) -> str | None:
     text = re.sub(r" {2,}", " ", text).strip()
     if len(text) < MIN_BODY_LENGTH:
         return None
+    if len(text) > MAX_BODY_LENGTH:
+        cut = text[:MAX_BODY_LENGTH]
+        m = re.search(r"[.!?~][^.!?~]*$", cut)
+        text = cut[:m.start() + 1].strip() if m else cut.strip()
     return text
-
-def truncate_by_sentence(text: str, max_len: int = MAX_BODY_LENGTH) -> str:
-    if len(text) <= max_len:
-        return text
-    # 문장 경계(. ! ? ~) 기준으로 max_len 이내 최대 보존
-    cut = text[:max_len]
-    m = re.search(r"[.!?~][^.!?~]*$", cut)
-    if m:
-        cut = cut[:m.start() + 1]
-    return cut.strip()
 
 # ============================================================
 # 필터 파이프라인
 # ============================================================
 
 def rule_based_filter(text: str) -> FilterResult:
-    words = text.split()
-    if len(text) < MIN_BODY_LENGTH:
-        return FilterResult(False, "rule", "too_short")
-    if len(words) < MIN_WORDS:
-        return FilterResult(False, "rule", "too_few_words")
-    if re.search(rf"(.)\1{{{REPEAT_LIMIT},}}", text):
-        return FilterResult(False, "rule", "repeated_chars")
-    if len(text) <= 400 and len(words) >= 6:
-        if len(set(words)) / len(words) < 0.4:
-            return FilterResult(False, "rule", "word_repetition")
     if len(re.findall(r"https?://", text)) >= MAX_URLS:
         return FilterResult(False, "rule", "spam_url")
     return FilterResult(True, "rule", "pass")
@@ -244,11 +225,6 @@ def korean_spam_filter(text: str) -> FilterResult:
     total_chars = len(text.replace(" ", ""))
     if total_chars > 0 and jamo_chars / total_chars > 0.5:
         return FilterResult(False, "korean_spam", "jamo_only")
-
-    # 한국어 단어 최소 기준 (가-힣 범위 문자 5개 이상)
-    korean_chars = len(re.findall(r"[가-힣]", text))
-    if korean_chars < 5:
-        return FilterResult(False, "korean_spam", "not_korean")
 
     return FilterResult(True, "korean_spam", "pass")
 
@@ -298,8 +274,6 @@ def parse_review(raw: dict) -> dict | None:
     body = preprocess_body(raw.get("review", ""))
     if body is None:
         return None
-
-    body = truncate_by_sentence(body)
 
     result = run_filter_pipeline(body)
     if not result.passed:
@@ -372,7 +346,7 @@ def collect_game(slug: str, app_id: str, name: str) -> dict:
 
     # query_summary: 전체 언어 기준으로 긍정/부정 비율 파악 (Korean-only 0인 경우 대비)
     _, summary = fetch_raw_reviews(app_id, max_count=1, filter_type="all", review_type="all", language="all")
-    _, ko_summary = fetch_raw_reviews(app_id, max_count=1, filter_type="all", review_type="all", language="koreanese")
+    _, ko_summary = fetch_raw_reviews(app_id, max_count=1, filter_type="all", review_type="all", language="koreana")
 
     total_positive = ko_summary.get("total_positive", 0)
     total_negative = ko_summary.get("total_negative", 0)

@@ -25,8 +25,6 @@ from playwright.async_api import async_playwright, TimeoutError as PlaywrightTim
 MAX_CRITIC_REVIEWS   = 200
 MAX_BODY_LENGTH      = 1000
 MIN_BODY_LENGTH      = 20
-MIN_WORDS            = 5
-REPEAT_LIMIT         = 5
 MAX_URLS             = 2
 HEADLESS             = True
 MAX_CONCURRENT_GAMES = 2
@@ -148,32 +146,17 @@ def preprocess_body(text: str) -> str | None:
     text = re.sub(r" {2,}", " ", text).strip()
     if len(text) < MIN_BODY_LENGTH:
         return None
+    if len(text) > MAX_BODY_LENGTH:
+        cut = text[:MAX_BODY_LENGTH]
+        m = re.search(r"[.!?][^.!?]*$", cut)
+        text = cut[:m.start() + 1].strip() if m else cut.strip()
     return text
-
-def truncate_by_sentence(text: str, max_len: int = MAX_BODY_LENGTH) -> str:
-    if len(text) <= max_len:
-        return text
-    cut = text[:max_len]
-    m = re.search(r"[.!?][^.!?]*$", cut)
-    if m:
-        cut = cut[:m.start() + 1]
-    return cut.strip()
 
 # ============================================================
 # 필터 파이프라인
 # ============================================================
 
 def rule_based_filter(text: str) -> FilterResult:
-    words = text.split()
-    if len(text) < MIN_BODY_LENGTH:
-        return FilterResult(False, "rule", "too_short")
-    if len(words) < MIN_WORDS:
-        return FilterResult(False, "rule", "too_few_words")
-    if re.search(rf"(.)\1{{{REPEAT_LIMIT},}}", text):
-        return FilterResult(False, "rule", "repeated_chars")
-    if len(text) <= 400 and len(words) >= 6:
-        if len(set(words)) / len(words) < 0.4:
-            return FilterResult(False, "rule", "word_repetition")
     if len(re.findall(r"https?://", text)) >= MAX_URLS:
         return FilterResult(False, "rule", "spam_url")
     return FilterResult(True, "rule", "pass")
@@ -264,8 +247,6 @@ async def parse_card(page, card, review_type_label: str) -> dict | None:
         body = preprocess_body(body)
         if body is None:
             return None
-
-        body = truncate_by_sentence(body)
 
         result = run_filter_pipeline(body)
         if not result.passed:
