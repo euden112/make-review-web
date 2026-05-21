@@ -24,7 +24,7 @@ from playwright.async_api import async_playwright, TimeoutError as PlaywrightTim
 
 MAX_CRITIC_REVIEWS   = 200
 MAX_BODY_LENGTH      = 1000
-MIN_BODY_LENGTH      = 20
+MIN_BODY_LENGTH      = 10
 MAX_URLS             = 2
 HEADLESS             = True
 MAX_CONCURRENT_GAMES = 2

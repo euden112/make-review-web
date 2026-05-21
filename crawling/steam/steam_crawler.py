@@ -22,7 +22,7 @@ from datetime import datetime
 
 MAX_REVIEWS_PER_GAME = 200
 MAX_BODY_LENGTH      = 1000
-MIN_BODY_LENGTH      = 20
+MIN_BODY_LENGTH      = 10
 MAX_URLS             = 2
 
 REVIEW_API_BASE = "https://store.steampowered.com/appreviews"
