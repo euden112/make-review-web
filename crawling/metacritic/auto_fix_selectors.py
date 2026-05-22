@@ -16,6 +16,7 @@ Metacritic 셀렉터 자동 탐지 및 크롤러 파일 자동 수정 도구
 
 import asyncio
 import argparse
+import re
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -48,15 +49,19 @@ CURRENT_SELECTORS: dict[str, str] = {
 
 # ── 탐지 함수 ─────────────────────────────────────────────────────────────────
 
+SAFE_CLS_JS = r"/^[a-zA-Z][a-zA-Z0-9_-]*$/.test(c)"
+
+
 async def detect_card(page) -> str | None:
-    """반복 등장하는 리뷰 카드 컨테이너 div 탐지."""
+    """반복 등장하는 리뷰 카드 컨테이너 div 탐지 (단순 클래스명만)."""
     candidates = await page.evaluate("""
         (() => {
+            const safe = c => /^[a-zA-Z][a-zA-Z0-9_-]*$/.test(c);
             const counts = {};
             document.querySelectorAll('div[class]').forEach(el => {
                 if ((el.innerText || '').trim().length < 80) return;
-                el.className.trim().split(/\\s+/).forEach(cls => {
-                    if (cls) counts[cls] = (counts[cls] || 0) + 1;
+                el.className.trim().split(/\\s+/).filter(safe).forEach(cls => {
+                    counts[cls] = (counts[cls] || 0) + 1;
                 });
             });
             return Object.entries(counts)
@@ -70,15 +75,16 @@ async def detect_card(page) -> str | None:
 
 
 async def detect_score(page, card_sel: str) -> str | None:
-    """카드 내 0-100 숫자 요소 탐지."""
+    """카드 내 0-100 숫자 요소 탐지 (단순 클래스명만)."""
     candidates = await page.evaluate(f"""
         (() => {{
+            const safe = c => /^[a-zA-Z][a-zA-Z0-9_-]*$/.test(c);
             const found = {{}};
             Array.from(document.querySelectorAll('{card_sel}')).slice(0, 15).forEach(card => {{
                 card.querySelectorAll('*').forEach(el => {{
                     const t = (el.innerText || '').trim();
                     if (/^\\d{{1,3}}$/.test(t) && parseInt(t) <= 100 && el.children.length === 0) {{
-                        const cls = Array.from(el.classList).join('.');
+                        const cls = Array.from(el.classList).filter(safe).join('.');
                         const tag = el.tagName.toLowerCase();
                         const sel = cls ? tag + '.' + cls : tag;
                         found[sel] = (found[sel] || 0) + 1;
@@ -95,15 +101,16 @@ async def detect_score(page, card_sel: str) -> str | None:
 
 
 async def detect_quote(page, card_sel: str) -> str | None:
-    """카드 내 본문 텍스트 요소 탐지 (100자 이상)."""
+    """카드 내 본문 텍스트 요소 탐지 (100자 이상, 단순 클래스명만)."""
     candidates = await page.evaluate(f"""
         (() => {{
+            const safe = c => /^[a-zA-Z][a-zA-Z0-9_-]*$/.test(c);
             const found = {{}};
             Array.from(document.querySelectorAll('{card_sel}')).slice(0, 15).forEach(card => {{
                 card.querySelectorAll('p, div, span').forEach(el => {{
                     const t = (el.innerText || '').trim();
                     if (t.length >= 100 && t.length <= 2000 && el.children.length <= 2) {{
-                        const cls = Array.from(el.classList).join('.');
+                        const cls = Array.from(el.classList).filter(safe).join('.');
                         const tag = el.tagName.toLowerCase();
                         const sel = cls ? tag + '.' + cls : tag;
                         found[sel] = (found[sel] || 0) + 1;
@@ -120,20 +127,21 @@ async def detect_quote(page, card_sel: str) -> str | None:
 
 
 async def detect_author(page, card_sel: str) -> str | None:
-    """카드당 1회 등장하는 짧은 비숫자 텍스트 요소 탐지 (작성자)."""
+    """카드당 1회 등장하는 짧은 비숫자 텍스트 요소 탐지 (단순 클래스명만)."""
     card_count = len(await page.query_selector_all(card_sel))
     if card_count == 0:
         return None
 
     candidates = await page.evaluate(f"""
         (() => {{
+            const safe = c => /^[a-zA-Z][a-zA-Z0-9_-]*$/.test(c);
             const found = {{}};
             Array.from(document.querySelectorAll('{card_sel}')).slice(0, 15).forEach(card => {{
                 card.querySelectorAll('*').forEach(el => {{
                     const t = (el.innerText || '').trim();
                     if (t.length >= 2 && t.length <= 60 && !/^[\\d\\s]+$/.test(t)
                         && el.children.length === 0) {{
-                        const cls = Array.from(el.classList).join('.');
+                        const cls = Array.from(el.classList).filter(safe).join('.');
                         if (cls) found['.' + cls] = (found['.' + cls] || 0) + 1;
                     }}
                 }});
@@ -146,22 +154,22 @@ async def detect_author(page, card_sel: str) -> str | None:
     """)
     if not candidates:
         return None
-    # 카드 수와 가장 가까운 count를 가진 후보 선택
     best = min(candidates, key=lambda r: abs(r["count"] - card_count))
     return best["selector"]
 
 
 async def detect_date(page, card_sel: str) -> str | None:
-    """날짜 패턴을 포함한 요소 탐지."""
+    """날짜 패턴을 포함한 요소 탐지 (단순 클래스명만)."""
     candidates = await page.evaluate(f"""
         (() => {{
+            const safe = c => /^[a-zA-Z][a-zA-Z0-9_-]*$/.test(c);
             const DATE_RE = /\\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|\\d{{4}})/i;
             const found = {{}};
             Array.from(document.querySelectorAll('{card_sel}')).slice(0, 15).forEach(card => {{
                 card.querySelectorAll('*').forEach(el => {{
                     const t = (el.innerText || '').trim();
                     if (DATE_RE.test(t) && t.length <= 30 && el.children.length === 0) {{
-                        const cls = Array.from(el.classList).join('.');
+                        const cls = Array.from(el.classList).filter(safe).join('.');
                         if (cls) found['.' + cls] = (found['.' + cls] || 0) + 1;
                     }}
                 }});
@@ -176,14 +184,15 @@ async def detect_date(page, card_sel: str) -> str | None:
 
 
 async def detect_read_more(page) -> str | None:
-    """'Read More' 텍스트를 가진 버튼 탐지."""
+    """'Read More' 텍스트를 가진 버튼 탐지 (단순 클래스명만)."""
     candidates = await page.evaluate("""
         (() => {
+            const safe = c => /^[a-zA-Z][a-zA-Z0-9_-]*$/.test(c);
             return Array.from(document.querySelectorAll('button, a[role="button"]'))
                 .filter(el => /read.?more/i.test(el.innerText || ''))
                 .slice(0, 3)
                 .map(el => {
-                    const cls = Array.from(el.classList).join('.');
+                    const cls = Array.from(el.classList).filter(safe).join('.');
                     const tag = el.tagName.toLowerCase();
                     return { selector: cls ? tag + '.' + cls : tag };
                 });
@@ -192,44 +201,49 @@ async def detect_read_more(page) -> str | None:
     return candidates[0]["selector"] if candidates else None
 
 
-async def detect_modal(page, read_more_sel: str) -> tuple[str | None, str | None]:
-    """Read More 클릭 후 모달 본문 + 닫기 버튼 셀렉터 탐지."""
-    btn = await page.query_selector(read_more_sel)
-    if not btn:
-        return None, None
+async def detect_modal(page, _read_more_sel: str) -> tuple[str | None, str | None]:
+    """Read More 버튼 클릭 후 모달 본문 + 닫기 버튼 셀렉터 탐지.
+
+    클래스 기반 셀렉터 대신 텍스트 기반으로 버튼을 찾아 클릭 (Tailwind 대응).
+    """
     try:
+        btn = page.get_by_role("button", name=re.compile(r"read.?more", re.IGNORECASE)).first
         await btn.click(timeout=3000)
         await page.wait_for_timeout(2000)
 
-        modal_quote = await page.evaluate("""
-            (() => {
+        safe_filter = "c => /^[a-zA-Z][a-zA-Z0-9_-]*$/.test(c)"
+
+        modal_quote = await page.evaluate(f"""
+            (() => {{
+                const safe = {safe_filter};
                 return Array.from(document.querySelectorAll('*'))
-                    .filter(el => {
+                    .filter(el => {{
                         const t = (el.innerText || '').trim();
                         return t.length > 150 && el.children.length <= 2;
-                    })
+                    }})
                     .sort((a, b) => b.innerText.length - a.innerText.length)
                     .slice(0, 3)
-                    .map(el => {
-                        const cls = Array.from(el.classList).join('.');
+                    .map(el => {{
+                        const cls = Array.from(el.classList).filter(safe).join('.');
                         const tag = el.tagName.toLowerCase();
-                        return { selector: cls ? tag + '.' + cls : tag };
-                    });
-            })()
+                        return {{ selector: cls ? tag + '.' + cls : tag }};
+                    }});
+            }})()
         """)
 
-        modal_close = await page.evaluate("""
-            (() => {
+        modal_close = await page.evaluate(f"""
+            (() => {{
+                const safe = {safe_filter};
                 const el = Array.from(document.querySelectorAll('button, [role="button"]'))
-                    .find(el => {
+                    .find(el => {{
                         const t = (el.innerText || '').trim();
                         const label = el.getAttribute('aria-label') || '';
                         return /close|×|✕/i.test(t) || /close/i.test(label);
-                    });
+                    }});
                 if (!el) return null;
-                const cls = Array.from(el.classList).join('.');
+                const cls = Array.from(el.classList).filter(safe).join('.');
                 return cls ? '.' + cls : 'button';
-            })()
+            }})()
         """)
 
         quote_sel = modal_quote[0]["selector"] if modal_quote else None
