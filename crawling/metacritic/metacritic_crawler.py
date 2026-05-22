@@ -289,6 +289,21 @@ async def parse_card(page, card, review_type_label: str) -> dict | None:
 # 스크롤 기반 리뷰 수집
 # ============================================================
 
+async def _filter_leaf_cards(cards: list) -> list:
+    """CARD_SEL이 중첩 매칭될 때 가장 안쪽(leaf) 카드만 남긴다.
+    부모 div와 자식 div가 동일 셀렉터에 걸리면 같은 body가 중복 수집되므로
+    다른 매칭 카드를 자식으로 포함한 요소는 제거한다."""
+    result = []
+    for card in cards:
+        has_child = await card.evaluate(
+            "(el, sel) => el.querySelector(sel) !== null",
+            CARD_SEL,
+        )
+        if not has_child:
+            result.append(card)
+    return result
+
+
 async def _try_load_more(page) -> bool:
     """페이지에서 더보기 버튼을 찾아 클릭. 클릭 성공 시 True."""
     try:
@@ -344,7 +359,8 @@ async def scrape_reviews_by_scroll(
         no_new_count  = 0
 
         while len(reviews) < max_count:
-            cards = await page.query_selector_all(CARD_SEL)
+            all_cards = await page.query_selector_all(CARD_SEL)
+            cards = await _filter_leaf_cards(all_cards)
             total_cards = len(cards)
 
             # 새로 로드된 카드만 처리
@@ -378,7 +394,8 @@ async def scrape_reviews_by_scroll(
             await _try_load_more(page)
 
             # 카드 수 변화 확인
-            new_cards = await page.query_selector_all(CARD_SEL)
+            new_all = await page.query_selector_all(CARD_SEL)
+            new_cards = await _filter_leaf_cards(new_all)
             if len(new_cards) == total_cards:
                 # 마우스 휠로 재시도 (일부 사이트는 wheel 이벤트만 인식)
                 await page.mouse.move(960, 540)
@@ -386,7 +403,8 @@ async def scrape_reviews_by_scroll(
                     await page.mouse.wheel(0, 800)
                     await asyncio.sleep(0.4)
                 await asyncio.sleep(3)
-                new_cards = await page.query_selector_all(CARD_SEL)
+                new_all = await page.query_selector_all(CARD_SEL)
+                new_cards = await _filter_leaf_cards(new_all)
 
             if len(new_cards) > total_cards:
                 print(f"    → 새 카드 {len(new_cards) - total_cards}개 로드")
