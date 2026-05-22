@@ -1,6 +1,6 @@
 # Crawling
 
-Steam(한국어 유저 리뷰) 및 Metacritic(영어 전문가·유저 리뷰)을 수집해 백엔드 API로 전송하는 크롤러
+Steam(한국어 유저 리뷰) 및 Metacritic(영어 전문가 비평 리뷰)을 수집해 백엔드 API로 전송하는 크롤러
 
 ---
 
@@ -42,12 +42,14 @@ python crawling/setup_game_list.py --update --auto-slug
 # Steam 한국어 리뷰 수집 (game_list.json의 steam_app_id 사용)
 python crawling/steam/steam_crawler.py
 
-# Metacritic 영어 리뷰 수집 (game_list.json의 metacritic_slug 사용)
+# Metacritic 영어 전문가 비평 수집 (game_list.json의 metacritic_slug 사용)
 python crawling/metacritic/metacritic_crawler.py
 ```
 
 수집된 파일은 `crawling/output/steam.json`, `crawling/output/metacritic.json` 에 게임별로 합산 저장됩니다.
 이미 수집된 게임(slug 키 존재)은 자동으로 스킵되어 이어서 실행할 수 있습니다.
+
+> **Metacritic**: 전문가(critic) 리뷰만 수집합니다. 유저 리뷰는 수집 대상이 아닙니다.
 
 ---
 
@@ -88,19 +90,43 @@ curl -X POST "http://localhost:8000/api/v1/games/{game_id}/summarize?force=true"
 
 ---
 
+## Metacritic 셀렉터 깨짐 대응
+
+Metacritic이 HTML 구조를 바꿔 리뷰가 제대로 수집되지 않을 경우, 아래 순서로 셀렉터를 자동 갱신합니다.
+
+```bash
+cd crawling/metacritic
+
+# 1. 현재 DOM 구조 분석 → metacritic_inspect_result.json 생성
+python inspector.py
+
+# 2. JSON을 읽어 최적 셀렉터 추출 → metacritic_crawler.py 자동 패치
+python auto_fix_selectors.py
+
+# 3. 크롤러 재실행
+python metacritic_crawler.py
+```
+
+`inspector.py`는 Chromium을 실제로 열어 DOM을 분석하므로, 실행 환경에 `playwright install chromium`이 완료되어 있어야 합니다.
+패치 전 크롤러 파일은 자동으로 타임스탬프 백업됩니다(`metacritic_crawler.backup_YYYYMMDD_HHMMSS.py`).
+
+---
+
 ## 파일 구조
 
 ```
 crawling/
 ├── README.md
-├── requirements.txt          # 크롤링 전용 의존성
-├── game_list.json            # 게임 목록 (git 관리, 팀 공유)
-├── setup_game_list.py        # 게임 목록 생성·갱신 스크립트
-├── send_to_api.py            # 수집 파일 → 백엔드 전송
+├── requirements.txt               # 크롤링 전용 의존성
+├── game_list.json                 # 게임 목록 (git 관리, 팀 공유)
+├── setup_game_list.py             # 게임 목록 생성·갱신 스크립트
+├── send_to_api.py                 # 수집 파일 → 백엔드 전송
 ├── steam/
-│   └── steam_crawler.py      # Steam 크롤러
+│   └── steam_crawler.py           # Steam 크롤러
 └── metacritic/
-    └── metacritic_crawler.py # Metacritic 크롤러
+    ├── metacritic_crawler.py      # Metacritic 전문가 리뷰 크롤러
+    ├── inspector.py               # DOM 구조 분석 → metacritic_inspect_result.json
+    └── auto_fix_selectors.py      # inspect 결과로 셀렉터 자동 패치
 ```
 
-> `crawling/steam/*.json`, `crawling/metacritic/*.json` 은 `.gitignore` 처리되어 있습니다.
+> `crawling/output/*.json`, `crawling/metacritic/metacritic_inspect_result.json`, `crawling/metacritic/*.backup_*.py` 은 `.gitignore` 처리되어 있습니다.

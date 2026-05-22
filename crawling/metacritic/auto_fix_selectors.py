@@ -1,376 +1,258 @@
 """
-Metacritic 셀렉터 자동 탐지 및 크롤러 파일 자동 수정 도구
+Metacritic 셀렉터 자동 패치 스크립트
+- metacritic_inspect_result.json 을 읽어서 최적 셀렉터를 추출
+- metacritic_crawler.py 의 셀렉터 상수 블록을 자동으로 교체
+- 실행: python auto_fix_selectors.py
 
-작동 방식:
-1. Playwright로 Metacritic 리뷰 페이지 접속
-2. 페이지 내용을 분석해 각 역할별 셀렉터 후보 탐지
-3. 실제 데이터 추출로 유효성 검증
-4. 크롤러 파일 백업 후 변경된 셀렉터만 자동 교체
-
-사용법:
-    python crawling/metacritic/auto_fix_selectors.py
-    python crawling/metacritic/auto_fix_selectors.py --slug elden-ring
-    python crawling/metacritic/auto_fix_selectors.py --yes          # 확인 없이 자동 수정
-    python crawling/metacritic/auto_fix_selectors.py --headless     # 헤드리스 모드
+선행 조건: metacritic_inspector.py 를 먼저 실행해서 JSON 생성 필요
 """
 
-import asyncio
-import argparse
+import json
 import re
 import shutil
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
-from playwright.async_api import async_playwright
+INSPECT_JSON = Path("metacritic_inspect_result.json")
+CRAWLER_FILE = Path("metacritic_crawler.py")
 
-CRAWLER_PATH = Path(__file__).resolve().parent / "metacritic_crawler.py"
-BASE_URL     = "https://www.metacritic.com"
-PLATFORM     = "pc"
-HEADERS      = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    )
-}
+# 크롤러 파일 내 셀렉터 블록의 시작/끝 마커
+BLOCK_START = "# ============================================================\n# 셀렉터 상수"
+BLOCK_END   = "\n# ============================================================\n# 단일 리뷰 카드"
 
-# 크롤러 상수(CARD_SEL, QUOTE_SEL …)에 현재 하드코딩된 셀렉터 값
-# auto_fix 는 이 값이 크롤러 파일 내에 문자열로 존재할 때 교체한다
-CURRENT_SELECTORS: dict[str, str] = {
-    "card":        "div.review-card__content",   # CARD_SEL
-    "quote":       ".review-card__quote",         # QUOTE_SEL
-    "score":       ".c-siteReviewScore span",     # SCORE_SEL
-    "author":      ".review-card__header",        # AUTHOR_SEL
-    "date":        ".review-card__date",          # DATE_SEL
-    "read_more":   "button.review-card__read-more",  # READ_MORE_SEL
-    "modal_quote": ".review-read-more-modal__quote", # MODAL_QUOTE_SEL
-    "modal_close": ".global-modal__close-button-wrapper", # MODAL_CLOSE_SEL
-}
+# ============================================================
+# 셀렉터 추출 함수들
+# ============================================================
 
-
-# ── 탐지 함수 ─────────────────────────────────────────────────────────────────
-
-SAFE_CLS_JS = r"/^[a-zA-Z][a-zA-Z0-9_-]*$/.test(c)"
-
-
-async def detect_card(page) -> str | None:
-    """반복 등장하는 리뷰 카드 컨테이너 div 탐지 (단순 클래스명만)."""
-    candidates = await page.evaluate("""
-        (() => {
-            const safe = c => /^[a-zA-Z][a-zA-Z0-9_-]*$/.test(c);
-            const counts = {};
-            document.querySelectorAll('div[class]').forEach(el => {
-                if ((el.innerText || '').trim().length < 80) return;
-                el.className.trim().split(/\\s+/).filter(safe).forEach(cls => {
-                    counts[cls] = (counts[cls] || 0) + 1;
-                });
-            });
-            return Object.entries(counts)
-                .filter(([, v]) => v >= 3)
-                .sort((a, b) => b[1] - a[1])
-                .slice(0, 5)
-                .map(([cls, cnt]) => ({ selector: 'div.' + cls, count: cnt }));
-        })()
-    """)
-    return candidates[0]["selector"] if candidates else None
-
-
-async def detect_score(page, card_sel: str) -> str | None:
-    """카드 내 0-100 숫자 요소 탐지 (단순 클래스명만)."""
-    candidates = await page.evaluate(f"""
-        (() => {{
-            const safe = c => /^[a-zA-Z][a-zA-Z0-9_-]*$/.test(c);
-            const found = {{}};
-            Array.from(document.querySelectorAll('{card_sel}')).slice(0, 15).forEach(card => {{
-                card.querySelectorAll('*').forEach(el => {{
-                    const t = (el.innerText || '').trim();
-                    if (/^\\d{{1,3}}$/.test(t) && parseInt(t) <= 100 && el.children.length === 0) {{
-                        const cls = Array.from(el.classList).filter(safe).join('.');
-                        const tag = el.tagName.toLowerCase();
-                        const sel = cls ? tag + '.' + cls : tag;
-                        found[sel] = (found[sel] || 0) + 1;
-                    }}
-                }});
-            }});
-            return Object.entries(found)
-                .sort((a, b) => b[1] - a[1])
-                .slice(0, 3)
-                .map(([sel, cnt]) => ({{ selector: sel, count: cnt }}));
-        }})()
-    """)
-    return candidates[0]["selector"] if candidates else None
-
-
-async def detect_quote(page, card_sel: str) -> str | None:
-    """카드 내 본문 텍스트 요소 탐지 (100자 이상, 단순 클래스명만)."""
-    candidates = await page.evaluate(f"""
-        (() => {{
-            const safe = c => /^[a-zA-Z][a-zA-Z0-9_-]*$/.test(c);
-            const found = {{}};
-            Array.from(document.querySelectorAll('{card_sel}')).slice(0, 15).forEach(card => {{
-                card.querySelectorAll('p, div, span').forEach(el => {{
-                    const t = (el.innerText || '').trim();
-                    if (t.length >= 100 && t.length <= 2000 && el.children.length <= 2) {{
-                        const cls = Array.from(el.classList).filter(safe).join('.');
-                        const tag = el.tagName.toLowerCase();
-                        const sel = cls ? tag + '.' + cls : tag;
-                        found[sel] = (found[sel] || 0) + 1;
-                    }}
-                }});
-            }});
-            return Object.entries(found)
-                .sort((a, b) => b[1] - a[1])
-                .slice(0, 3)
-                .map(([sel, cnt]) => ({{ selector: sel, count: cnt }}));
-        }})()
-    """)
-    return candidates[0]["selector"] if candidates else None
-
-
-async def detect_author(page, card_sel: str) -> str | None:
-    """카드당 1회 등장하는 짧은 비숫자 텍스트 요소 탐지 (단순 클래스명만)."""
-    card_count = len(await page.query_selector_all(card_sel))
-    if card_count == 0:
-        return None
-
-    candidates = await page.evaluate(f"""
-        (() => {{
-            const safe = c => /^[a-zA-Z][a-zA-Z0-9_-]*$/.test(c);
-            const found = {{}};
-            Array.from(document.querySelectorAll('{card_sel}')).slice(0, 15).forEach(card => {{
-                card.querySelectorAll('*').forEach(el => {{
-                    const t = (el.innerText || '').trim();
-                    if (t.length >= 2 && t.length <= 60 && !/^[\\d\\s]+$/.test(t)
-                        && el.children.length === 0) {{
-                        const cls = Array.from(el.classList).filter(safe).join('.');
-                        if (cls) found['.' + cls] = (found['.' + cls] || 0) + 1;
-                    }}
-                }});
-            }});
-            return Object.entries(found)
-                .sort((a, b) => b[1] - a[1])
-                .slice(0, 8)
-                .map(([sel, cnt]) => ({{ selector: sel, count: cnt }}));
-        }})()
-    """)
-    if not candidates:
-        return None
-    best = min(candidates, key=lambda r: abs(r["count"] - card_count))
-    return best["selector"]
-
-
-async def detect_date(page, card_sel: str) -> str | None:
-    """날짜 패턴을 포함한 요소 탐지 (단순 클래스명만)."""
-    candidates = await page.evaluate(f"""
-        (() => {{
-            const safe = c => /^[a-zA-Z][a-zA-Z0-9_-]*$/.test(c);
-            const DATE_RE = /\\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|\\d{{4}})/i;
-            const found = {{}};
-            Array.from(document.querySelectorAll('{card_sel}')).slice(0, 15).forEach(card => {{
-                card.querySelectorAll('*').forEach(el => {{
-                    const t = (el.innerText || '').trim();
-                    if (DATE_RE.test(t) && t.length <= 30 && el.children.length === 0) {{
-                        const cls = Array.from(el.classList).filter(safe).join('.');
-                        if (cls) found['.' + cls] = (found['.' + cls] || 0) + 1;
-                    }}
-                }});
-            }});
-            return Object.entries(found)
-                .sort((a, b) => b[1] - a[1])
-                .slice(0, 3)
-                .map(([sel, cnt]) => ({{ selector: sel, count: cnt }}));
-        }})()
-    """)
-    return candidates[0]["selector"] if candidates else None
-
-
-async def detect_read_more(page) -> str | None:
-    """'Read More' 텍스트를 가진 버튼 탐지 (단순 클래스명만)."""
-    candidates = await page.evaluate("""
-        (() => {
-            const safe = c => /^[a-zA-Z][a-zA-Z0-9_-]*$/.test(c);
-            return Array.from(document.querySelectorAll('button, a[role="button"]'))
-                .filter(el => /read.?more/i.test(el.innerText || ''))
-                .slice(0, 3)
-                .map(el => {
-                    const cls = Array.from(el.classList).filter(safe).join('.');
-                    const tag = el.tagName.toLowerCase();
-                    return { selector: cls ? tag + '.' + cls : tag };
-                });
-        })()
-    """)
-    return candidates[0]["selector"] if candidates else None
-
-
-async def detect_modal(page, _read_more_sel: str) -> tuple[str | None, str | None]:
-    """Read More 버튼 클릭 후 모달 본문 + 닫기 버튼 셀렉터 탐지.
-
-    클래스 기반 셀렉터 대신 텍스트 기반으로 버튼을 찾아 클릭 (Tailwind 대응).
+def extract_card_sel(data: dict) -> str:
     """
-    try:
-        btn = page.get_by_role("button", name=re.compile(r"read.?more", re.IGNORECASE)).first
-        await btn.click(timeout=3000)
-        await page.wait_for_timeout(2000)
+    score_analysis 의 parentClass + text_analysis 의 className 조합으로
+    div:has(점수):has(본문) 셀렉터 생성
+    """
+    score_classes = [
+        r["parentClass"] for r in data.get("score_analysis", [])
+        if r.get("parentClass")
+    ]
+    score_anchor = _extract_bem_class(score_classes, prefix="c-siteReviewScore")
 
-        safe_filter = "c => /^[a-zA-Z][a-zA-Z0-9_-]*$/.test(c)"
+    text_classes = [
+        r["className"] for r in data.get("text_analysis", [])
+        if r.get("className") and "ot-" not in r["className"]
+    ]
+    text_anchor = _extract_stable_class(text_classes, hint="line-clamp")
 
-        modal_quote = await page.evaluate(f"""
-            (() => {{
-                const safe = {safe_filter};
-                return Array.from(document.querySelectorAll('*'))
-                    .filter(el => {{
-                        const t = (el.innerText || '').trim();
-                        return t.length > 150 && el.children.length <= 2;
-                    }})
-                    .sort((a, b) => b.innerText.length - a.innerText.length)
-                    .slice(0, 3)
-                    .map(el => {{
-                        const cls = Array.from(el.classList).filter(safe).join('.');
-                        const tag = el.tagName.toLowerCase();
-                        return {{ selector: cls ? tag + '.' + cls : tag }};
-                    }});
-            }})()
-        """)
-
-        modal_close = await page.evaluate(f"""
-            (() => {{
-                const safe = {safe_filter};
-                const el = Array.from(document.querySelectorAll('button, [role="button"]'))
-                    .find(el => {{
-                        const t = (el.innerText || '').trim();
-                        const label = el.getAttribute('aria-label') || '';
-                        return /close|×|✕/i.test(t) || /close/i.test(label);
-                    }});
-                if (!el) return null;
-                const cls = Array.from(el.classList).filter(safe).join('.');
-                return cls ? '.' + cls : 'button';
-            }})()
-        """)
-
-        quote_sel = modal_quote[0]["selector"] if modal_quote else None
-        return quote_sel, modal_close
-
-    except Exception as e:
-        print(f"  [모달 탐지 실패] {e}")
-        return None, None
-
-
-# ── 크롤러 파일 업데이트 ─────────────────────────────────────────────────────
-
-def backup_crawler() -> Path:
-    ts     = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup = CRAWLER_PATH.with_suffix(f".backup_{ts}.py")
-    shutil.copy2(CRAWLER_PATH, backup)
-    return backup
-
-
-def update_crawler_file(changes: dict[str, tuple[str, str]]) -> int:
-    """changes = {role: (old_selector, new_selector)} — 크롤러 파일 내 문자열 교체."""
-    content = CRAWLER_PATH.read_text(encoding="utf-8")
-    count   = 0
-    for _role, (old, new) in changes.items():
-        if old == new:
-            continue
-        before   = content
-        content  = content.replace(f'"{old}"', f'"{new}"')
-        content  = content.replace(f"'{old}'", f"'{new}'")
-        if content != before:
-            count += 1
-    CRAWLER_PATH.write_text(content, encoding="utf-8")
-    return count
-
-
-# ── 메인 ──────────────────────────────────────────────────────────────────────
-
-def sep(title: str = ""):
-    line = "=" * 60
-    print(f"\n{line}\n  {title}\n{line}" if title else f"\n{'-' * 60}")
-
-
-async def run(slug: str, headless: bool, auto_update: bool):
-    url = f"{BASE_URL}/game/{slug}/critic-reviews/?platform={PLATFORM}&sort-by=Recently+Added"
-
-    async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=headless)
-        context = await browser.new_context(
-            extra_http_headers=HEADERS,
-            viewport={"width": 1920, "height": 1080},
-        )
-        page = await context.new_page()
-
-        print(f"[접속] {url}")
-        await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-        await page.wait_for_timeout(3000)
-        print(f"[완료] 페이지 로드 — {await page.title()}")
-
-        sep("셀렉터 탐지 중")
-
-        detected: dict[str, str | None] = {}
-        detected["card"]   = await detect_card(page)
-        card_sel           = detected["card"] or CURRENT_SELECTORS["card"]
-
-        detected["score"]  = await detect_score(page, card_sel)
-        detected["quote"]  = await detect_quote(page, card_sel)
-        detected["author"] = await detect_author(page, card_sel)
-        detected["date"]   = await detect_date(page, card_sel)
-        detected["read_more"] = await detect_read_more(page)
-
-        rm_sel = detected["read_more"] or CURRENT_SELECTORS["read_more"]
-        detected["modal_quote"], detected["modal_close"] = await detect_modal(page, rm_sel)
-
-        await browser.close()
-
-    # ── 결과 출력 ──
-    sep("탐지 결과")
-    changes: dict[str, tuple[str, str]] = {}
-    not_found: list[str] = []
-
-    for role, current in CURRENT_SELECTORS.items():
-        found   = detected.get(role)
-        changed = found and found != current
-
-        if changed:
-            status = "🔄 변경 감지"
-            changes[role] = (current, found)
-        elif found:
-            status = "✅ 유지"
-        else:
-            status = "❓ 미탐지"
-            not_found.append(role)
-
-        print(f"\n  {status}  [{role}]")
-        print(f"    현재: {current}")
-        if found and found != current:
-            print(f"    탐지: {found}")
-
-    # ── 업데이트 여부 결정 ──
-    sep()
-    if not changes:
-        print("변경 사항 없음 — 크롤러 파일 수정 불필요.")
+    if score_anchor and text_anchor:
+        return f"div:has(.{score_anchor}):has(.{text_anchor})"
+    elif score_anchor:
+        return f"div:has(.{score_anchor})"
     else:
-        print(f"변경 필요: {len(changes)}개 셀렉터")
+        return "div.w-full"
 
-        if not auto_update:
-            answer = input("\n크롤러 파일을 자동 수정할까요? (y/N): ").strip().lower()
-            if answer != "y":
-                print("업데이트 취소.")
-                return
 
-        backup = backup_crawler()
-        print(f"백업 생성: {backup.name}")
-        count = update_crawler_file(changes)
-        print(f"{count}개 셀렉터 교체 완료 → {CRAWLER_PATH.name}")
+def extract_score_sel(data: dict) -> str:
+    score_classes = [
+        r["parentClass"] for r in data.get("score_analysis", [])
+        if r.get("parentClass")
+    ]
+    anchor = _extract_bem_class(score_classes, prefix="c-siteReviewScore")
+    if anchor:
+        return f"div.{anchor} span"
+    return "span"
 
-    if not_found:
-        print(f"\n⚠️  미탐지 셀렉터: {', '.join(not_found)}")
-        print("   위 항목은 수동 확인이 필요합니다.")
+
+def extract_quote_sel(data: dict) -> str:
+    text_classes = [
+        r["className"] for r in data.get("text_analysis", [])
+        if r.get("className") and "ot-" not in r["className"]
+    ]
+    anchor = _extract_stable_class(text_classes, hint="line-clamp")
+    tags = [
+        r["tag"].lower() for r in data.get("text_analysis", [])
+        if r.get("className") and "ot-" not in r.get("className", "")
+    ]
+    tag = Counter(tags).most_common(1)[0][0] if tags else "div"
+    return f"{tag}.{anchor}" if anchor else "div.line-clamp-7"
+
+
+def extract_read_more_sel(data: dict) -> str:
+    rm = data.get("read_more_result", {})
+    if not rm.get("button_found"):
+        return "button.global-button--dark.mt-2"
+
+    btn_class = rm.get("button_class", "")
+    bem = [
+        c for c in btn_class.split()
+        if "-" in c and "[" not in c and ":" not in c and len(c) < 40
+    ]
+    if bem:
+        chosen = sorted(bem, key=len, reverse=True)[:2]
+        return "button." + ".".join(chosen)
+    return "button.global-button--dark.mt-2"
+
+
+def extract_modal_quote_sel(data: dict) -> str:
+    rm = data.get("read_more_result", {})
+    nodes = rm.get("modal_text_nodes", [])
+    if nodes:
+        cls = nodes[0].get("className", "")
+        tag = nodes[0].get("tag", "DIV").lower()
+        if cls:
+            first_cls = cls.split()[0]
+            return f"{tag}.{first_cls}"
+    return "div.review-read-more-modal__quote"
+
+
+def extract_modal_close_sel(data: dict) -> str:
+    rm = data.get("read_more_result", {})
+    sel = rm.get("close_btn_selector", "")
+    if sel:
+        return sel
+    cls = rm.get("close_btn_class", "")
+    if cls:
+        return f".{cls.split()[0]}"
+    return "button[aria-label='Close']"
+
+
+def extract_author_sel(data: dict) -> str:
+    return ".flex-1.truncate"
+
+
+# ============================================================
+# 내부 헬퍼
+# ============================================================
+
+def _extract_bem_class(class_strings: list[str], prefix: str) -> str:
+    candidates = []
+    for cs in class_strings:
+        for c in cs.split():
+            if c.startswith(prefix) and "[" not in c and ":" not in c:
+                candidates.append(c)
+    if not candidates:
+        return ""
+    return Counter(candidates).most_common(1)[0][0]
+
+
+def _extract_stable_class(class_strings: list[str], hint: str = "") -> str:
+    all_classes: list[str] = []
+    for cs in class_strings:
+        all_classes.extend(cs.split())
+
+    stable = [c for c in all_classes if "[" not in c and ":" not in c]
+    if hint:
+        hinted = [c for c in stable if hint in c]
+        if hinted:
+            return Counter(hinted).most_common(1)[0][0]
+    if stable:
+        return Counter(stable).most_common(1)[0][0]
+    return ""
+
+
+# ============================================================
+# 크롤러 패치
+# ============================================================
+
+def build_selector_block(selectors: dict, source_json: str) -> str:
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M")
+    lines = [
+        "# ============================================================",
+        f"# 셀렉터 상수 (auto_fix_selectors.py 자동 생성 — {ts})",
+        f"# 소스: {source_json}",
+        "# ============================================================",
+        "",
+        f'CARD_SEL        = {selectors["CARD_SEL"]!r}',
+        f'QUOTE_SEL       = {selectors["QUOTE_SEL"]!r}',
+        f'SCORE_SEL       = {selectors["SCORE_SEL"]!r}',
+        f'AUTHOR_SEL      = {selectors["AUTHOR_SEL"]!r}',
+        "",
+        "# DATE_SEL=None: 카드 전체 텍스트에서 정규식으로 날짜 추출",
+        "DATE_SEL        = None",
+        "",
+        f'READ_MORE_SEL   = {selectors["READ_MORE_SEL"]!r}',
+        f'MODAL_QUOTE_SEL = {selectors["MODAL_QUOTE_SEL"]!r}',
+        f'MODAL_CLOSE_SEL = {selectors["MODAL_CLOSE_SEL"]!r}',
+        "",
+        "# 날짜 추출 정규식 (카드 전체 텍스트에서)",
+        "_DATE_RE = re.compile(",
+        r'    r"\b(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)[A-Z]*\.?\s+\d{1,2},?\s+\d{4}\b",',
+        "    re.IGNORECASE,",
+        ")",
+    ]
+    return "\n".join(lines)
+
+
+def patch_crawler(crawler_path: Path, new_block: str) -> bool:
+    original = crawler_path.read_text(encoding="utf-8")
+
+    start_idx = original.find(BLOCK_START)
+    end_idx   = original.find(BLOCK_END)
+
+    if start_idx == -1 or end_idx == -1:
+        print(f"  [ERROR] 셀렉터 블록 마커를 찾지 못했습니다.")
+        print(f"  크롤러 파일에 아래 마커가 있는지 확인하세요:")
+        print(f"    시작: {BLOCK_START!r}")
+        print(f"    끝:   {BLOCK_END!r}")
+        return False
+
+    patched = original[:start_idx] + new_block + original[end_idx:]
+    crawler_path.write_text(patched, encoding="utf-8")
+    return True
+
+
+# ============================================================
+# 메인
+# ============================================================
+
+def main():
+    print("\n" + "=" * 60)
+    print("  Metacritic 셀렉터 자동 패치")
+    print("=" * 60)
+
+    if not INSPECT_JSON.exists():
+        print(f"[ERROR] {INSPECT_JSON} 없음")
+        print("  → 먼저 metacritic_inspector.py 를 실행하세요.")
+        return
+
+    with open(INSPECT_JSON, encoding="utf-8") as f:
+        data = json.load(f)
+
+    print(f"\n소스: {INSPECT_JSON}")
+    print(f"크롤러: {CRAWLER_FILE}")
+
+    selectors = {
+        "CARD_SEL"       : extract_card_sel(data),
+        "QUOTE_SEL"      : extract_quote_sel(data),
+        "SCORE_SEL"      : extract_score_sel(data),
+        "AUTHOR_SEL"     : extract_author_sel(data),
+        "READ_MORE_SEL"  : extract_read_more_sel(data),
+        "MODAL_QUOTE_SEL": extract_modal_quote_sel(data),
+        "MODAL_CLOSE_SEL": extract_modal_close_sel(data),
+    }
+
+    print("\n[추출된 셀렉터]")
+    for k, v in selectors.items():
+        print(f"  {k:<18} = {v!r}")
+
+    if not CRAWLER_FILE.exists():
+        print(f"\n[ERROR] {CRAWLER_FILE} 없음")
+        return
+
+    backup = CRAWLER_FILE.with_suffix(
+        f".backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.py"
+    )
+    shutil.copy(CRAWLER_FILE, backup)
+    print(f"\n백업 완료: {backup.name}")
+
+    new_block = build_selector_block(selectors, str(INSPECT_JSON))
+    success = patch_crawler(CRAWLER_FILE, new_block)
+
+    if success:
+        print(f"✅ 패치 완료: {CRAWLER_FILE}")
+        print("\n이상하면 백업 파일로 되돌리세요:")
+        print(f"  cp {backup.name} {CRAWLER_FILE.name}")
+    else:
+        print("❌ 패치 실패 — 백업은 유지됩니다.")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Metacritic 셀렉터 자동 탐지 및 크롤러 수정")
-    parser.add_argument("--slug",     default="elden-ring", help="게임 slug (기본: elden-ring)")
-    parser.add_argument("--headless", action="store_true",  help="헤드리스 모드")
-    parser.add_argument("--yes",      action="store_true",  help="확인 없이 자동 수정")
-    args = parser.parse_args()
-
-    asyncio.run(run(args.slug, args.headless, args.yes))
+    main()
