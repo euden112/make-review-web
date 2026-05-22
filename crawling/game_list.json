@@ -3,600 +3,700 @@
     "steam_app_id": "2483190",
     "steam_slug": "forza-horizon-6",
     "metacritic_slug": "forza-horizon-6",
-    "name": "Forza Horizon 6"
+    "name": "Forza Horizon 6",
+    "id": 1
   },
   {
     "steam_app_id": "1962700",
     "steam_slug": "subnautica-2",
     "metacritic_slug": "subnautica-2",
-    "name": "Subnautica 2"
+    "name": "Subnautica 2",
+    "id": 2
   },
   {
-    "steam_app_id": "2605790",
-    "steam_slug": "deep-rock-galactic-rogue-core",
-    "metacritic_slug": "deep-rock-galactic-rogue-core",
-    "name": "Deep Rock Galactic: Rogue Core"
-  },
-  {
-    "steam_app_id": "413150",
-    "steam_slug": "stardew-valley",
-    "metacritic_slug": "stardew-valley",
-    "name": "Stardew Valley"
+    "steam_app_id": "2183900",
+    "steam_slug": "warhammer-40-000-space-marine-2",
+    "metacritic_slug": "warhammer-40000-space-marine-ii",
+    "name": "Warhammer 40,000: Space Marine 2",
+    "id": 3
   },
   {
     "steam_app_id": "3321460",
     "steam_slug": "crimson-desert",
     "metacritic_slug": "crimson-desert",
-    "name": "Crimson Desert"
+    "name": "Crimson Desert",
+    "id": 4
   },
   {
     "steam_app_id": "1142710",
     "steam_slug": "total-war-warhammer-iii",
     "metacritic_slug": "total-war-warhammer-iii",
-    "name": "Total War: WARHAMMER III"
-  },
-  {
-    "steam_app_id": "3932890",
-    "steam_slug": "escape-from-tarkov",
-    "metacritic_slug": "escape-from-tarkov",
-    "name": "Escape from Tarkov"
-  },
-  {
-    "steam_app_id": "264710",
-    "steam_slug": "subnautica",
-    "metacritic_slug": "subnautica",
-    "name": "Subnautica"
-  },
-  {
-    "steam_app_id": "1295660",
-    "steam_slug": "sid-meier-s-civilization-vii",
-    "metacritic_slug": "sid-meiers-civilization-vii",
-    "name": "Sid Meier's Civilization VII"
-  },
-  {
-    "steam_app_id": "2868840",
-    "steam_slug": "slay-the-spire-2",
-    "metacritic_slug": "slay-the-spire-2",
-    "name": "Slay the Spire 2"
-  },
-  {
-    "steam_app_id": "2183900",
-    "steam_slug": "warhammer-40-000-space-marine-2",
-    "metacritic_slug": "warhammer-40000-space-marine-2",
-    "name": "Warhammer 40,000: Space Marine 2"
-  },
-  {
-    "steam_app_id": "1174180",
-    "steam_slug": "red-dead-redemption-2",
-    "metacritic_slug": "red-dead-redemption-2",
-    "name": "Red Dead Redemption 2"
+    "name": "Total War: WARHAMMER III",
+    "id": 5
   },
   {
     "steam_app_id": "3357650",
     "steam_slug": "pragmata",
     "metacritic_slug": "pragmata",
-    "name": "PRAGMATA"
+    "name": "PRAGMATA",
+    "id": 6
   },
   {
-    "steam_app_id": "2399830",
-    "steam_slug": "ark-survival-ascended",
-    "metacritic_slug": "ark-survival-ascended",
-    "name": "ARK: Survival Ascended"
+    "steam_app_id": "1295660",
+    "steam_slug": "sid-meier-s-civilization-vii",
+    "metacritic_slug": "sid-meiers-civilization-vii",
+    "name": "Sid Meier's Civilization VII",
+    "id": 7
   },
   {
-    "steam_app_id": "1604030",
-    "steam_slug": "v-rising",
-    "metacritic_slug": "v-rising",
-    "name": "V Rising"
+    "steam_app_id": "2868840",
+    "steam_slug": "slay-the-spire-2",
+    "metacritic_slug": "slay-the-spire-2",
+    "name": "Slay the Spire 2",
+    "id": 8
   },
   {
-    "steam_app_id": "1677280",
-    "steam_slug": "company-of-heroes-3",
-    "metacritic_slug": "company-of-heroes-3",
-    "name": "Company of Heroes 3"
+    "steam_app_id": "264710",
+    "steam_slug": "subnautica",
+    "metacritic_slug": "subnautica",
+    "name": "Subnautica",
+    "id": 9
   },
   {
-    "steam_app_id": "4466620",
-    "steam_slug": "sinisistar-2",
-    "metacritic_slug": "",
-    "name": "SiNiSistar 2"
+    "steam_app_id": "2536520",
+    "steam_slug": "diablo-ii-resurrected-infernal-edition",
+    "metacritic_slug": "diablo-ii-resurrected-infernal-edition",
+    "name": "Diablo II: Resurrected – Infernal Edition",
+    "id": 10
   },
   {
-    "steam_app_id": "3240220",
-    "steam_slug": "grand-theft-auto-v-enhanced",
-    "metacritic_slug": "grand-theft-auto-v-enhanced",
-    "name": "Grand Theft Auto V Enhanced"
+    "steam_app_id": "2272360",
+    "steam_slug": "warhammer-40-000-dawn-of-war-iv",
+    "metacritic_slug": "warhammer-40000-dawn-of-war-iv",
+    "name": "Warhammer 40,000: Dawn of War IV",
+    "id": 11
   },
   {
-    "steam_app_id": "1984270",
-    "steam_slug": "digimon-story-time-stranger",
-    "metacritic_slug": "digimon-story-time-stranger",
-    "name": "Digimon Story Time Stranger"
+    "steam_app_id": "3932890",
+    "steam_slug": "escape-from-tarkov",
+    "metacritic_slug": "escape-from-tarkov",
+    "name": "Escape from Tarkov",
+    "id": 12
   },
   {
-    "steam_app_id": "3527290",
-    "steam_slug": "peak",
-    "metacritic_slug": "peak",
-    "name": "PEAK"
-  },
-  {
-    "steam_app_id": "3542380",
-    "steam_slug": "rune-dice",
-    "metacritic_slug": "rune-dice",
-    "name": "Rune Dice"
-  },
-  {
-    "steam_app_id": "3472040",
-    "steam_slug": "nba-2k26",
-    "metacritic_slug": "nba-2k26",
-    "name": "NBA 2K26"
-  },
-  {
-    "steam_app_id": "1940340",
-    "steam_slug": "darkest-dungeon-ii",
-    "metacritic_slug": "darkest-dungeon-ii",
-    "name": "Darkest Dungeon® II"
-  },
-  {
-    "steam_app_id": "4244510",
-    "steam_slug": "pratfall",
-    "metacritic_slug": "pratfall",
-    "name": "Pratfall"
-  },
-  {
-    "steam_app_id": "848450",
-    "steam_slug": "subnautica-below-zero",
-    "metacritic_slug": "subnautica-below-zero",
-    "name": "Subnautica: Below Zero"
-  },
-  {
-    "steam_app_id": "381210",
-    "steam_slug": "dead-by-daylight",
-    "metacritic_slug": "dead-by-daylight",
-    "name": "Dead by Daylight"
-  },
-  {
-    "steam_app_id": "2215200",
-    "steam_slug": "lego-batman-legacy-of-the-dark-knight",
-    "metacritic_slug": "lego-batman-legacy-of-the-dark-knight",
-    "name": "LEGO® Batman™: Legacy of the Dark Knight"
-  },
-  {
-    "steam_app_id": "227300",
-    "steam_slug": "euro-truck-simulator-2",
-    "metacritic_slug": "euro-truck-simulator-2",
-    "name": "Euro Truck Simulator 2"
-  },
-  {
-    "steam_app_id": "1245620",
-    "steam_slug": "elden-ring",
-    "metacritic_slug": "elden-ring",
-    "name": "ELDEN RING"
-  },
-  {
-    "steam_app_id": "3241660",
-    "steam_slug": "r-e-p-o",
-    "metacritic_slug": "repo",
-    "name": "R.E.P.O."
-  },
-  {
-    "steam_app_id": "1332010",
-    "steam_slug": "stray",
-    "metacritic_slug": "stray",
-    "name": "Stray"
-  },
-  {
-    "steam_app_id": "3892270",
-    "steam_slug": "gamble-with-your-friends",
-    "metacritic_slug": "gamble-with-your-friends",
-    "name": "Gamble With Your Friends"
-  },
-  {
-    "steam_app_id": "673750",
-    "steam_slug": "super-bunny-man",
-    "metacritic_slug": "super-bunny-man",
-    "name": "Super Bunny Man"
-  },
-  {
-    "steam_app_id": "553850",
-    "steam_slug": "helldivers-2",
-    "metacritic_slug": "helldivers-2",
-    "name": "HELLDIVERS™ 2"
-  },
-  {
-    "steam_app_id": "960170",
-    "steam_slug": "djmax-respect-v",
-    "metacritic_slug": "djmax-respect-v",
-    "name": "DJMAX RESPECT V"
-  },
-  {
-    "steam_app_id": "3834090",
-    "steam_slug": "yapyap",
-    "metacritic_slug": "yapyap",
-    "name": "YAPYAP"
-  },
-  {
-    "steam_app_id": "2479810",
-    "steam_slug": "gray-zone-warfare",
-    "metacritic_slug": "gray-zone-warfare",
-    "name": "Gray Zone Warfare"
-  },
-  {
-    "steam_app_id": "294100",
-    "steam_slug": "rimworld",
-    "metacritic_slug": "rimworld",
-    "name": "RimWorld"
-  },
-  {
-    "steam_app_id": "1903340",
-    "steam_slug": "clair-obscur-expedition-33",
-    "metacritic_slug": "clair-obscur-expedition-33",
-    "name": "Clair Obscur: Expedition 33"
-  },
-  {
-    "steam_app_id": "1859910",
-    "steam_slug": "legend-of-mortal",
-    "metacritic_slug": "legend-of-mortal",
-    "name": "Legend of Mortal"
+    "steam_app_id": "1174180",
+    "steam_slug": "red-dead-redemption-2",
+    "metacritic_slug": "red-dead-redemption-2",
+    "name": "Red Dead Redemption 2",
+    "id": 13
   },
   {
     "steam_app_id": "3768760",
     "steam_slug": "007-first-light",
     "metacritic_slug": "007-first-light",
-    "name": "007 First Light"
+    "name": "007 First Light",
+    "id": 14
   },
   {
-    "steam_app_id": "2119830",
-    "steam_slug": "misery",
-    "metacritic_slug": "misery",
-    "name": "MISERY"
+    "steam_app_id": "2215200",
+    "steam_slug": "lego-batman-legacy-of-the-dark-knight",
+    "metacritic_slug": "lego-batman-legacy-of-the-dark-knight",
+    "name": "LEGO® Batman™: Legacy of the Dark Knight",
+    "id": 15
   },
   {
-    "steam_app_id": "2246340",
-    "steam_slug": "monster-hunter-wilds",
-    "metacritic_slug": "monster-hunter-wilds",
-    "name": "Monster Hunter Wilds"
+    "steam_app_id": "3527290",
+    "steam_slug": "peak",
+    "metacritic_slug": "peak",
+    "name": "PEAK",
+    "id": 16
   },
   {
-    "steam_app_id": "3124540",
-    "steam_slug": "far-far-west",
-    "metacritic_slug": "far-far-west",
-    "name": "Far Far West"
+    "steam_app_id": "4244510",
+    "steam_slug": "pratfall",
+    "metacritic_slug": "pratfall",
+    "name": "Pratfall",
+    "id": 17
   },
   {
-    "steam_app_id": "699130",
-    "steam_slug": "world-war-z",
-    "metacritic_slug": "world-war-z",
-    "name": "World War Z"
+    "steam_app_id": "2399830",
+    "steam_slug": "ark-survival-ascended",
+    "metacritic_slug": "ark-survival-ascended",
+    "name": "ARK: Survival Ascended",
+    "id": 18
+  },
+  {
+    "steam_app_id": "413150",
+    "steam_slug": "stardew-valley",
+    "metacritic_slug": "stardew-valley",
+    "name": "Stardew Valley",
+    "id": 19
+  },
+  {
+    "steam_app_id": "2605790",
+    "steam_slug": "deep-rock-galactic-rogue-core",
+    "metacritic_slug": "deep-rock-galactic-rogue-core",
+    "name": "Deep Rock Galactic: Rogue Core",
+    "id": 20
+  },
+  {
+    "steam_app_id": "1190970",
+    "steam_slug": "house-flipper-2",
+    "metacritic_slug": "house-flipper-2",
+    "name": "House Flipper 2",
+    "id": 21
+  },
+  {
+    "steam_app_id": "2532480",
+    "steam_slug": "warhammer-40-000-mechanicus-ii",
+    "metacritic_slug": "warhammer-40000-mechanicus-ii",
+    "name": "Warhammer 40,000: Mechanicus II",
+    "id": 22
+  },
+  {
+    "steam_app_id": "3240220",
+    "steam_slug": "grand-theft-auto-v-enhanced",
+    "metacritic_slug": "grand-theft-auto-v-enhanced",
+    "name": "Grand Theft Auto V Enhanced",
+    "id": 23
+  },
+  {
+    "steam_app_id": "1677280",
+    "steam_slug": "company-of-heroes-3",
+    "metacritic_slug": "company-of-heroes-3",
+    "name": "Company of Heroes 3",
+    "id": 24
+  },
+  {
+    "steam_app_id": "3241660",
+    "steam_slug": "r-e-p-o",
+    "metacritic_slug": "repo",
+    "name": "R.E.P.O.",
+    "id": 25
+  },
+  {
+    "steam_app_id": "3892270",
+    "steam_slug": "gamble-with-your-friends",
+    "metacritic_slug": "gamble-with-your-friends",
+    "name": "Gamble With Your Friends",
+    "id": 26
+  },
+  {
+    "steam_app_id": "294100",
+    "steam_slug": "rimworld",
+    "metacritic_slug": "rimworld",
+    "name": "RimWorld",
+    "id": 27
+  },
+  {
+    "steam_app_id": "632360",
+    "steam_slug": "risk-of-rain-2",
+    "metacritic_slug": "risk-of-rain-2",
+    "name": "Risk of Rain 2",
+    "id": 28
   },
   {
     "steam_app_id": "3404260",
     "steam_slug": "dead-as-disco",
     "metacritic_slug": "dead-as-disco",
-    "name": "Dead as Disco"
+    "name": "Dead as Disco",
+    "id": 29
   },
   {
-    "steam_app_id": "3430470",
-    "steam_slug": "platina-lab",
-    "metacritic_slug": "platina-lab",
-    "name": "PLATiNA :: LAB"
+    "steam_app_id": "4466620",
+    "steam_slug": "sinisistar-2",
+    "metacritic_slug": "",
+    "name": "SiNiSistar 2",
+    "id": 30
   },
   {
-    "steam_app_id": "108600",
-    "steam_slug": "project-zomboid",
-    "metacritic_slug": "project-zomboid",
-    "name": "Project Zomboid"
+    "steam_app_id": "960170",
+    "steam_slug": "djmax-respect-v",
+    "metacritic_slug": "djmax-respect-v",
+    "name": "DJMAX RESPECT V",
+    "id": 31
   },
   {
-    "steam_app_id": "648800",
-    "steam_slug": "raft",
-    "metacritic_slug": "raft",
-    "name": "Raft"
-  },
-  {
-    "steam_app_id": "394360",
-    "steam_slug": "hearts-of-iron-iv",
-    "metacritic_slug": "hearts-of-iron-iv",
-    "name": "Hearts of Iron IV"
-  },
-  {
-    "steam_app_id": "3161220",
-    "steam_slug": "coffee-talk-tokyo",
-    "metacritic_slug": "coffee-talk-tokyo",
-    "name": "Coffee Talk Tokyo"
-  },
-  {
-    "steam_app_id": "3041230",
-    "steam_slug": "windrose",
-    "metacritic_slug": "windrose",
-    "name": "Windrose"
-  },
-  {
-    "steam_app_id": "1623730",
-    "steam_slug": "palworld",
-    "metacritic_slug": "palworld",
-    "name": "Palworld"
-  },
-  {
-    "steam_app_id": "262060",
-    "steam_slug": "darkest-dungeon",
-    "metacritic_slug": "darkest-dungeon",
-    "name": "Darkest Dungeon®"
-  },
-  {
-    "steam_app_id": "2436940",
-    "steam_slug": "sephiria",
-    "metacritic_slug": "sephiria",
-    "name": "Sephiria"
-  },
-  {
-    "steam_app_id": "3008130",
-    "steam_slug": "dying-light-the-beast",
-    "metacritic_slug": "dying-light-the-beast",
-    "name": "Dying Light: The Beast"
-  },
-  {
-    "steam_app_id": "3105440",
-    "steam_slug": "heroes-of-might-and-magic-olden-era",
-    "metacritic_slug": "heroes-of-might-and-magic-olden-era",
-    "name": "Heroes of Might and Magic: Olden Era"
-  },
-  {
-    "steam_app_id": "3866920",
-    "steam_slug": "namakorium",
-    "metacritic_slug": "namakorium",
-    "name": "NAMAKORIUM (ナマコリウム)"
+    "steam_app_id": "3834090",
+    "steam_slug": "yapyap",
+    "metacritic_slug": "yapyap",
+    "name": "YAPYAP",
+    "id": 32
   },
   {
     "steam_app_id": "1621690",
     "steam_slug": "core-keeper",
     "metacritic_slug": "core-keeper",
-    "name": "Core Keeper"
+    "name": "Core Keeper",
+    "id": 33
   },
   {
-    "steam_app_id": "2879840",
-    "steam_slug": "escape-simulator-2",
-    "metacritic_slug": "escape-simulator-2",
-    "name": "Escape Simulator 2"
+    "steam_app_id": "381210",
+    "steam_slug": "dead-by-daylight",
+    "metacritic_slug": "dead-by-daylight",
+    "name": "Dead by Daylight",
+    "id": 34
   },
   {
-    "steam_app_id": "1778820",
-    "steam_slug": "tekken-8",
-    "metacritic_slug": "tekken-8",
-    "name": "TEKKEN 8"
+    "steam_app_id": "227300",
+    "steam_slug": "euro-truck-simulator-2",
+    "metacritic_slug": "euro-truck-simulator-2",
+    "name": "Euro Truck Simulator 2",
+    "id": 35
   },
   {
-    "steam_app_id": "1361210",
-    "steam_slug": "warhammer-40-000-darktide",
-    "metacritic_slug": "warhammer-40000-darktide",
-    "name": "Warhammer 40,000: Darktide"
+    "steam_app_id": "1304930",
+    "steam_slug": "the-outlast-trials",
+    "metacritic_slug": "the-outlast-trials",
+    "name": "The Outlast Trials",
+    "id": 36
   },
   {
-    "steam_app_id": "3526710",
-    "steam_slug": "everything-is-crab-the-animal-evolution-roguelite",
-    "metacritic_slug": "everything-is-crab-the-animal-evolution-roguelite",
-    "name": "Everything is Crab: The Animal Evolution Roguelite"
+    "steam_app_id": "1903340",
+    "steam_slug": "clair-obscur-expedition-33",
+    "metacritic_slug": "clair-obscur-expedition-33",
+    "name": "Clair Obscur: Expedition 33",
+    "id": 37
   },
   {
-    "steam_app_id": "2914150",
-    "steam_slug": "yunyun-syndrome-rhythm-psychosis",
-    "metacritic_slug": "yunyun-syndrome-rhythm-psychosis",
-    "name": "Yunyun Syndrome!? Rhythm Psychosis"
-  },
-  {
-    "steam_app_id": "3764200",
-    "steam_slug": "resident-evil-requiem",
-    "metacritic_slug": "resident-evil-requiem",
-    "name": "Resident Evil Requiem"
-  },
-  {
-    "steam_app_id": "2756930",
-    "steam_slug": "pump-it-up-rise",
-    "metacritic_slug": "pump-it-up-rise",
-    "name": "PUMP IT UP RISE"
-  },
-  {
-    "steam_app_id": "1086940",
-    "steam_slug": "baldur-s-gate-3",
-    "metacritic_slug": "baldurs-gate-3",
-    "name": "Baldur's Gate 3"
-  },
-  {
-    "steam_app_id": "1644940",
-    "steam_slug": "loddlenaut",
-    "metacritic_slug": "loddlenaut",
-    "name": "Loddlenaut"
-  },
-  {
-    "steam_app_id": "2358720",
-    "steam_slug": "black-myth-wukong",
-    "metacritic_slug": "black-myth-wukong",
-    "name": "Black Myth: Wukong"
-  },
-  {
-    "steam_app_id": "252490",
-    "steam_slug": "rust",
-    "metacritic_slug": "rust",
-    "name": "Rust"
-  },
-  {
-    "steam_app_id": "1206070",
-    "steam_slug": "phonopolis",
-    "metacritic_slug": "phonopolis",
-    "name": "Phonopolis"
-  },
-  {
-    "steam_app_id": "601150",
-    "steam_slug": "devil-may-cry-5",
-    "metacritic_slug": "devil-may-cry-5",
-    "name": "Devil May Cry 5"
-  },
-  {
-    "steam_app_id": "2221490",
-    "steam_slug": "tom-clancy-s-the-division-2",
-    "metacritic_slug": "tom-clancys-the-division-2",
-    "name": "Tom Clancy’s The Division® 2"
-  },
-  {
-    "steam_app_id": "1342490",
-    "steam_slug": "daemon-x-machina-titanic-scion",
-    "metacritic_slug": "daemon-x-machina-titanic-scion",
-    "name": "Daemon X Machina: Titanic Scion"
-  },
-  {
-    "steam_app_id": "1285190",
-    "steam_slug": "borderlands-4",
-    "metacritic_slug": "borderlands-4",
-    "name": "Borderlands 4"
-  },
-  {
-    "steam_app_id": "2681030",
-    "steam_slug": "outbound",
-    "metacritic_slug": "outbound",
-    "name": "Outbound"
-  },
-  {
-    "steam_app_id": "3438850",
-    "steam_slug": "sledding-game",
-    "metacritic_slug": "sledding-game",
-    "name": "Sledding Game"
-  },
-  {
-    "steam_app_id": "2157830",
-    "steam_slug": "john-carpenter-s-toxic-commando",
-    "metacritic_slug": "",
-    "name": "John Carpenter's Toxic Commando"
-  },
-  {
-    "steam_app_id": "1808500",
-    "steam_slug": "arc-raiders",
-    "metacritic_slug": "arc-raiders",
-    "name": "ARC Raiders"
-  },
-  {
-    "steam_app_id": "1091500",
-    "steam_slug": "cyberpunk-2077",
-    "metacritic_slug": "cyberpunk-2077",
-    "name": "Cyberpunk 2077"
-  },
-  {
-    "steam_app_id": "1868140",
-    "steam_slug": "dave-the-diver",
-    "metacritic_slug": "dave-the-diver",
-    "name": "DAVE THE DIVER"
-  },
-  {
-    "steam_app_id": "977950",
-    "steam_slug": "a-dance-of-fire-and-ice",
-    "metacritic_slug": "a-dance-of-fire-and-ice",
-    "name": "A Dance of Fire and Ice"
-  },
-  {
-    "steam_app_id": "2000950",
-    "steam_slug": "call-of-duty-modern-warfare",
-    "metacritic_slug": "call-of-duty-modern-warfare",
-    "name": "Call of Duty®: Modern Warfare®"
-  },
-  {
-    "steam_app_id": "768200",
-    "steam_slug": "smalland-survive-the-wilds",
-    "metacritic_slug": "smalland-survive-the-wilds",
-    "name": "Smalland: Survive the Wilds"
-  },
-  {
-    "steam_app_id": "346110",
-    "steam_slug": "ark-survival-evolved",
-    "metacritic_slug": "ark-survival-evolved",
-    "name": "ARK: Survival Evolved"
-  },
-  {
-    "steam_app_id": "728880",
-    "steam_slug": "overcooked-2",
-    "metacritic_slug": "overcooked-2",
-    "name": "Overcooked! 2"
-  },
-  {
-    "steam_app_id": "3489700",
-    "steam_slug": "stellar-blade",
-    "metacritic_slug": "stellar-blade",
-    "name": "Stellar Blade™"
-  },
-  {
-    "steam_app_id": "1943950",
-    "steam_slug": "escape-the-backrooms",
-    "metacritic_slug": "escape-the-backrooms",
-    "name": "Escape the Backrooms"
-  },
-  {
-    "steam_app_id": "250900",
-    "steam_slug": "the-binding-of-isaac-rebirth",
-    "metacritic_slug": "the-binding-of-isaac-rebirth",
-    "name": "The Binding of Isaac: Rebirth"
-  },
-  {
-    "steam_app_id": "1158310",
-    "steam_slug": "crusader-kings-iii",
-    "metacritic_slug": "crusader-kings-iii",
-    "name": "Crusader Kings III"
-  },
-  {
-    "steam_app_id": "3280350",
-    "steam_slug": "death-stranding-2-on-the-beach",
-    "metacritic_slug": "death-stranding-2-on-the-beach",
-    "name": "DEATH STRANDING 2: ON THE BEACH"
+    "steam_app_id": "3472040",
+    "steam_slug": "nba-2k26",
+    "metacritic_slug": "nba-2k26",
+    "name": "NBA 2K26",
+    "id": 38
   },
   {
     "steam_app_id": "1966720",
     "steam_slug": "lethal-company",
     "metacritic_slug": "lethal-company",
-    "name": "Lethal Company"
+    "name": "Lethal Company",
+    "id": 39
   },
   {
-    "steam_app_id": "2444750",
-    "steam_slug": "shape-of-dreams",
-    "metacritic_slug": "shape-of-dreams",
-    "name": "Shape of Dreams"
+    "steam_app_id": "3124540",
+    "steam_slug": "far-far-west",
+    "metacritic_slug": "far-far-west",
+    "name": "Far Far West",
+    "id": 40
   },
   {
-    "steam_app_id": "4197610",
-    "steam_slug": "librarian-tidy-up-the-arcane-library",
-    "metacritic_slug": "librarian-tidy-up-the-arcane-library",
-    "name": "Librarian: Tidy Up the Arcane Library!"
+    "steam_app_id": "848450",
+    "steam_slug": "subnautica-below-zero",
+    "metacritic_slug": "subnautica-below-zero",
+    "name": "Subnautica: Below Zero",
+    "id": 41
   },
   {
-    "steam_app_id": "1643320",
-    "steam_slug": "s-t-a-l-k-e-r-2-heart-of-chornobyl",
-    "metacritic_slug": "stalker-2-heart-of-chornobyl",
-    "name": "S.T.A.L.K.E.R. 2: Heart of Chornobyl"
+    "steam_app_id": "553850",
+    "steam_slug": "helldivers-2",
+    "metacritic_slug": "helldivers-2",
+    "name": "HELLDIVERS™ 2",
+    "id": 42
   },
   {
-    "steam_app_id": "270880",
-    "steam_slug": "american-truck-simulator",
-    "metacritic_slug": "american-truck-simulator",
-    "name": "American Truck Simulator"
+    "steam_app_id": "1778820",
+    "steam_slug": "tekken-8",
+    "metacritic_slug": "tekken-8",
+    "name": "TEKKEN 8",
+    "id": 43
   },
   {
-    "steam_app_id": "105600",
-    "steam_slug": "terraria",
-    "metacritic_slug": "terraria",
-    "name": "Terraria"
+    "steam_app_id": "1859910",
+    "steam_slug": "legend-of-mortal",
+    "metacritic_slug": "legend-of-mortal",
+    "name": "Legend of Mortal",
+    "id": 44
   },
   {
-    "steam_app_id": "2622380",
-    "steam_slug": "elden-ring-nightreign",
-    "metacritic_slug": "elden-ring-nightreign",
-    "name": "ELDEN RING NIGHTREIGN"
+    "steam_app_id": "1623730",
+    "steam_slug": "palworld",
+    "metacritic_slug": "palworld",
+    "name": "Palworld",
+    "id": 45
+  },
+  {
+    "steam_app_id": "3764200",
+    "steam_slug": "resident-evil-requiem",
+    "metacritic_slug": "resident-evil-requiem",
+    "name": "Resident Evil Requiem",
+    "id": 46
+  },
+  {
+    "steam_app_id": "1940340",
+    "steam_slug": "darkest-dungeon-ii",
+    "metacritic_slug": "darkest-dungeon-ii",
+    "name": "Darkest Dungeon® II",
+    "id": 47
+  },
+  {
+    "steam_app_id": "648800",
+    "steam_slug": "raft",
+    "metacritic_slug": "raft",
+    "name": "Raft",
+    "id": 48
+  },
+  {
+    "steam_app_id": "699130",
+    "steam_slug": "world-war-z",
+    "metacritic_slug": "world-war-z",
+    "name": "World War Z",
+    "id": 49
+  },
+  {
+    "steam_app_id": "1943950",
+    "steam_slug": "escape-the-backrooms",
+    "metacritic_slug": "escape-the-backrooms",
+    "name": "Escape the Backrooms",
+    "id": 50
+  },
+  {
+    "steam_app_id": "594570",
+    "steam_slug": "total-war-warhammer-ii",
+    "metacritic_slug": "total-war-warhammer-ii",
+    "name": "Total War: WARHAMMER II",
+    "id": 51
+  },
+  {
+    "steam_app_id": "1245620",
+    "steam_slug": "elden-ring",
+    "metacritic_slug": "elden-ring",
+    "name": "ELDEN RING",
+    "id": 52
+  },
+  {
+    "steam_app_id": "3041230",
+    "steam_slug": "windrose",
+    "metacritic_slug": "windrose",
+    "name": "Windrose",
+    "id": 53
+  },
+  {
+    "steam_app_id": "1611910",
+    "steam_slug": "warhammer-40-000-chaos-gate-daemonhunters",
+    "metacritic_slug": "warhammer-40000-chaos-gate-daemonhunters",
+    "name": "Warhammer 40,000: Chaos Gate - Daemonhunters",
+    "id": 54
+  },
+  {
+    "steam_app_id": "2186680",
+    "steam_slug": "warhammer-40-000-rogue-trader",
+    "metacritic_slug": "warhammer-40000-rogue-trader",
+    "name": "Warhammer 40,000: Rogue Trader",
+    "id": 55
+  },
+  {
+    "steam_app_id": "3105440",
+    "steam_slug": "heroes-of-might-and-magic-olden-era",
+    "metacritic_slug": "heroes-of-might-and-magic-olden-era",
+    "name": "Heroes of Might and Magic: Olden Era",
+    "id": 56
+  },
+  {
+    "steam_app_id": "3161220",
+    "steam_slug": "coffee-talk-tokyo",
+    "metacritic_slug": "coffee-talk-tokyo",
+    "name": "Coffee Talk Tokyo",
+    "id": 57
+  },
+  {
+    "steam_app_id": "394360",
+    "steam_slug": "hearts-of-iron-iv",
+    "metacritic_slug": "hearts-of-iron-iv",
+    "name": "Hearts of Iron IV",
+    "id": 58
+  },
+  {
+    "steam_app_id": "108600",
+    "steam_slug": "project-zomboid",
+    "metacritic_slug": "project-zomboid",
+    "name": "Project Zomboid",
+    "id": 59
+  },
+  {
+    "steam_app_id": "3551340",
+    "steam_slug": "football-manager-26",
+    "metacritic_slug": "football-manager-26",
+    "name": "Football Manager 26",
+    "id": 60
+  },
+  {
+    "steam_app_id": "3542380",
+    "steam_slug": "rune-dice",
+    "metacritic_slug": "rune-dice",
+    "name": "Rune Dice",
+    "id": 61
+  },
+  {
+    "steam_app_id": "2141730",
+    "steam_slug": "backrooms-escape-together",
+    "metacritic_slug": "backrooms-escape-together",
+    "name": "Backrooms: Escape Together",
+    "id": 62
+  },
+  {
+    "steam_app_id": "1361210",
+    "steam_slug": "warhammer-40-000-darktide",
+    "metacritic_slug": "warhammer-40000-darktide",
+    "name": "Warhammer 40,000: Darktide",
+    "id": 63
+  },
+  {
+    "steam_app_id": "1086940",
+    "steam_slug": "baldur-s-gate-3",
+    "metacritic_slug": "baldurs-gate-3",
+    "name": "Baldur's Gate 3",
+    "id": 64
+  },
+  {
+    "steam_app_id": "673750",
+    "steam_slug": "super-bunny-man",
+    "metacritic_slug": "super-bunny-man",
+    "name": "Super Bunny Man",
+    "id": 65
+  },
+  {
+    "steam_app_id": "3430470",
+    "steam_slug": "platina-lab",
+    "metacritic_slug": "platina-lab",
+    "name": "PLATiNA :: LAB",
+    "id": 66
+  },
+  {
+    "steam_app_id": "2001120",
+    "steam_slug": "split-fiction",
+    "metacritic_slug": "split-fiction",
+    "name": "Split Fiction",
+    "id": 67
+  },
+  {
+    "steam_app_id": "1332010",
+    "steam_slug": "stray",
+    "metacritic_slug": "stray",
+    "name": "Stray",
+    "id": 68
+  },
+  {
+    "steam_app_id": "2879840",
+    "steam_slug": "escape-simulator-2",
+    "metacritic_slug": "escape-simulator-2",
+    "name": "Escape Simulator 2",
+    "id": 69
+  },
+  {
+    "steam_app_id": "2246340",
+    "steam_slug": "monster-hunter-wilds",
+    "metacritic_slug": "monster-hunter-wilds",
+    "name": "Monster Hunter Wilds",
+    "id": 70
+  },
+  {
+    "steam_app_id": "2870920",
+    "steam_slug": "restaurats",
+    "metacritic_slug": "restaurats",
+    "name": "Restaurats",
+    "id": 71
+  },
+  {
+    "steam_app_id": "3008130",
+    "steam_slug": "dying-light-the-beast",
+    "metacritic_slug": "dying-light-the-beast",
+    "name": "Dying Light: The Beast",
+    "id": 72
+  },
+  {
+    "steam_app_id": "1089090",
+    "steam_slug": "one-piece-pirate-warriors-4",
+    "metacritic_slug": "one-piece-pirate-warriors-4",
+    "name": "ONE PIECE: PIRATE WARRIORS 4",
+    "id": 73
+  },
+  {
+    "steam_app_id": "2479810",
+    "steam_slug": "gray-zone-warfare",
+    "metacritic_slug": "gray-zone-warfare",
+    "name": "Gray Zone Warfare",
+    "id": 74
+  },
+  {
+    "steam_app_id": "364360",
+    "steam_slug": "total-war-warhammer",
+    "metacritic_slug": "total-war-warhammer",
+    "name": "Total War: WARHAMMER",
+    "id": 75
+  },
+  {
+    "steam_app_id": "2688950",
+    "steam_slug": "planet-coaster-2",
+    "metacritic_slug": "planet-coaster-2",
+    "name": "Planet Coaster 2",
+    "id": 76
+  },
+  {
+    "steam_app_id": "1158310",
+    "steam_slug": "crusader-kings-iii",
+    "metacritic_slug": "crusader-kings-iii",
+    "name": "Crusader Kings III",
+    "id": 77
+  },
+  {
+    "steam_app_id": "2827200",
+    "steam_slug": "mimesis",
+    "metacritic_slug": "mimesis",
+    "name": "MIMESIS",
+    "id": 78
+  },
+  {
+    "steam_app_id": "3526710",
+    "steam_slug": "everything-is-crab-the-animal-evolution-roguelite",
+    "metacritic_slug": "everything-is-crab-the-animal-evolution-roguelite",
+    "name": "Everything is Crab: The Animal Evolution Roguelite",
+    "id": 79
+  },
+  {
+    "steam_app_id": "2914150",
+    "steam_slug": "yunyun-syndrome-rhythm-psychosis",
+    "metacritic_slug": "yunyun-syndrome-rhythm-psychosis",
+    "name": "Yunyun Syndrome!? Rhythm Psychosis",
+    "id": 80
+  },
+  {
+    "steam_app_id": "2567870",
+    "steam_slug": "chained-together",
+    "metacritic_slug": "chained-together",
+    "name": "Chained Together",
+    "id": 81
+  },
+  {
+    "steam_app_id": "2681030",
+    "steam_slug": "outbound",
+    "metacritic_slug": "outbound",
+    "name": "Outbound",
+    "id": 82
+  },
+  {
+    "steam_app_id": "2436940",
+    "steam_slug": "sephiria",
+    "metacritic_slug": "sephiria",
+    "name": "Sephiria",
+    "id": 83
+  },
+  {
+    "steam_app_id": "3438850",
+    "steam_slug": "sledding-game",
+    "metacritic_slug": "sledding-game",
+    "name": "Sledding Game",
+    "id": 84
+  },
+  {
+    "steam_app_id": "1426210",
+    "steam_slug": "it-takes-two",
+    "metacritic_slug": "it-takes-two",
+    "name": "It Takes Two",
+    "id": 85
   },
   {
     "steam_app_id": "322330",
     "steam_slug": "don-t-starve-together",
     "metacritic_slug": "dont-starve-together",
-    "name": "Don't Starve Together"
+    "name": "Don't Starve Together",
+    "id": 86
   },
   {
-    "steam_app_id": "4321500",
-    "steam_slug": "raising-a-happy-neet",
-    "metacritic_slug": "raising-a-happy-neet",
-    "name": "Raising a Happy NEET"
+    "steam_app_id": "1091500",
+    "steam_slug": "cyberpunk-2077",
+    "metacritic_slug": "cyberpunk-2077",
+    "name": "Cyberpunk 2077",
+    "id": 87
+  },
+  {
+    "steam_app_id": "286160",
+    "steam_slug": "tabletop-simulator",
+    "metacritic_slug": "tabletop-simulator",
+    "name": "Tabletop Simulator",
+    "id": 88
+  },
+  {
+    "steam_app_id": "2444750",
+    "steam_slug": "shape-of-dreams",
+    "metacritic_slug": "shape-of-dreams",
+    "name": "Shape of Dreams",
+    "id": 89
+  },
+  {
+    "steam_app_id": "529340",
+    "steam_slug": "victoria-3",
+    "metacritic_slug": "victoria-3",
+    "name": "Victoria 3",
+    "id": 90
+  },
+  {
+    "steam_app_id": "949230",
+    "steam_slug": "cities-skylines-ii",
+    "metacritic_slug": "cities-skylines-ii",
+    "name": "Cities: Skylines II",
+    "id": 91
+  },
+  {
+    "steam_app_id": "3489700",
+    "steam_slug": "stellar-blade",
+    "metacritic_slug": "stellar-blade",
+    "name": "Stellar Blade™",
+    "id": 92
+  },
+  {
+    "steam_app_id": "977950",
+    "steam_slug": "a-dance-of-fire-and-ice",
+    "metacritic_slug": "a-dance-of-fire-and-ice",
+    "name": "A Dance of Fire and Ice",
+    "id": 93
+  },
+  {
+    "steam_app_id": "3326230",
+    "steam_slug": "hozy",
+    "metacritic_slug": "hozy",
+    "name": "Hozy",
+    "id": 94
+  },
+  {
+    "steam_app_id": "768200",
+    "steam_slug": "smalland-survive-the-wilds",
+    "metacritic_slug": "smalland-survive-the-wilds",
+    "name": "Smalland: Survive the Wilds",
+    "id": 95
+  },
+  {
+    "steam_app_id": "2968420",
+    "steam_slug": "powerwash-simulator-2",
+    "metacritic_slug": "powerwash-simulator-2",
+    "name": "PowerWash Simulator 2",
+    "id": 96
+  },
+  {
+    "steam_app_id": "261550",
+    "steam_slug": "mount-amp-blade-ii-bannerlord",
+    "metacritic_slug": "mount-blade-ii-bannerlord",
+    "name": "Mount &amp; Blade II: Bannerlord",
+    "id": 97
+  },
+  {
+    "steam_app_id": "250900",
+    "steam_slug": "the-binding-of-isaac-rebirth",
+    "metacritic_slug": "the-binding-of-isaac-rebirth",
+    "name": "The Binding of Isaac: Rebirth",
+    "id": 98
+  },
+  {
+    "steam_app_id": "3412160",
+    "steam_slug": "the-house-always-wins",
+    "metacritic_slug": "the-house-always-wins",
+    "name": "The House Always Wins",
+    "id": 99
+  },
+  {
+    "steam_app_id": "2157830",
+    "steam_slug": "john-carpenter-s-toxic-commando",
+    "metacritic_slug": "john-carpenters-toxic-commando",
+    "name": "John Carpenter's Toxic Commando",
+    "id": 100
   }
 ]

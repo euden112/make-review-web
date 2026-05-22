@@ -252,6 +252,14 @@ def save(games: list[dict], update: bool) -> list[dict]:
                 games.append({"app_id": app_id})
 
     ordered = [existing[g["app_id"]] for g in games if g["app_id"] in existing]
+
+    # 기존 id 최댓값 이후부터 새 항목에 순서대로 id 부여
+    next_id = max((e.get("id", 0) for e in ordered), default=0) + 1
+    for entry in ordered:
+        if "id" not in entry:
+            entry["id"] = next_id
+            next_id += 1
+
     return ordered
 
 

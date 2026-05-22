@@ -339,7 +339,7 @@ def parse_and_dedup(
 # 게임 단위 수집 (3-pool 전략)
 # ============================================================
 
-def collect_game(slug: str, app_id: str, name: str) -> dict:
+def collect_game(slug: str, app_id: str, name: str, game_list_id: int | None = None) -> dict:
     print(f"  [{slug}] 수집 시작 (app_id={app_id})")
 
     images = get_image_urls(app_id)
@@ -356,11 +356,12 @@ def collect_game(slug: str, app_id: str, name: str) -> dict:
     return {
         slug: {
             "meta": {
-                "game_id"   : app_id,
-                "name_ko"   : name,
-                "cover_image": images["cover_image"],
-                "hero_image" : images["hero_image"],
-                "crawled_at" : datetime.now().isoformat(),
+                "game_list_id": game_list_id,
+                "game_id"     : app_id,
+                "name_ko"     : name,
+                "cover_image" : images["cover_image"],
+                "hero_image"  : images["hero_image"],
+                "crawled_at"  : datetime.now().isoformat(),
             },
             "reviews": all_reviews,
         }
@@ -393,9 +394,10 @@ def main():
     success, skipped_count, failed = [], [], []
 
     for i, entry in enumerate(entries, 1):
-        app_id = entry["steam_app_id"]
-        name   = entry.get("name", app_id)
-        slug   = entry.get("steam_slug") or make_slug(name)
+        app_id        = entry["steam_app_id"]
+        name          = entry.get("name", app_id)
+        slug          = entry.get("steam_slug") or make_slug(name)
+        game_list_id  = entry.get("id")
 
         print(f"[{i:3d}/{len(entries)}] {name} ({slug})")
 
@@ -405,7 +407,7 @@ def main():
             continue
 
         try:
-            result = collect_game(slug, app_id, name)
+            result = collect_game(slug, app_id, name, game_list_id)
             existing_data.update(result)
             with open(OUT_FILE, "w", encoding="utf-8") as f:
                 json.dump(existing_data, f, ensure_ascii=False, indent=2)
