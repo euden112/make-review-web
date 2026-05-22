@@ -46,8 +46,8 @@ python crawling/steam/steam_crawler.py
 python crawling/metacritic/metacritic_crawler.py
 ```
 
-수집된 파일은 각각 `crawling/steam/{slug}.json`, `crawling/metacritic/{slug}.json` 으로 저장됩니다.
-이미 파일이 존재하는 게임은 자동으로 스킵되어 이어서 실행할 수 있습니다.
+수집된 파일은 `crawling/output/steam.json`, `crawling/output/metacritic.json` 에 게임별로 합산 저장됩니다.
+이미 수집된 게임(slug 키 존재)은 자동으로 스킵되어 이어서 실행할 수 있습니다.
 
 ---
 
@@ -59,9 +59,9 @@ python crawling/metacritic/metacritic_crawler.py
 **파일 전송 방법 (웹 VSCode 이용):**
 
 1. 로컬에서 크롤러 실행 후 생성된 JSON 파일 확인
-   - `crawling/steam/*.json`
-   - `crawling/metacritic/*.json`
-2. 웹 VSCode 탐색기에서 해당 폴더에 우클릭 → **Upload...** 로 파일 업로드
+   - `crawling/output/steam.json`
+   - `crawling/output/metacritic.json`
+2. 웹 VSCode 탐색기에서 `crawling/output/` 폴더에 우클릭 → **Upload...** 로 파일 업로드
 3. 클라우드 터미널에서 전송 스크립트 실행
 
 ```bash

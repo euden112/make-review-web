@@ -20,93 +20,100 @@ import httpx
 
 BASE_DIR = Path(__file__).resolve().parent
 
-PLATFORM_DIR = {
-    "steam"      : BASE_DIR / "steam",
-    "metacritic" : BASE_DIR / "metacritic",
+PLATFORM_FILE = {
+    "steam"      : BASE_DIR / "output" / "steam.json",
+    "metacritic" : BASE_DIR / "output" / "metacritic.json",
 }
 API_PATH = {
     "steam"      : "/api/v1/reviews/steam",
     "metacritic" : "/api/v1/reviews/metacritic",
 }
 
-TIMEOUT            = 60
-EXCLUDE_FILENAMES  = {"game_list.json"}   # 이 폴더의 비리뷰 파일
+TIMEOUT = 60
 
 
-def collect_review_files(platform: str) -> list[Path]:
-    folder = PLATFORM_DIR[platform]
-    files  = sorted(
-        f for f in folder.glob("*.json")
-        if f.name not in EXCLUDE_FILENAMES
-    )
-    return files
+def load_merged_file(platform: str) -> dict:
+    path = PLATFORM_FILE[platform]
+    if not path.exists():
+        return {}
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
 
 
-async def send_file(
+def save_merged_file(platform: str, data: dict) -> None:
+    path = PLATFORM_FILE[platform]
+    if not data:
+        path.unlink(missing_ok=True)
+        return
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+async def send_game(
     client: httpx.AsyncClient,
-    file_path: Path,
+    slug: str,
+    payload: dict,
     api_url: str,
-    keep: bool,
 ) -> bool:
-    with open(file_path, encoding="utf-8") as f:
-        payload = json.load(f)
-
     try:
         resp = await client.post(api_url, json=payload, timeout=TIMEOUT)
     except httpx.ConnectError:
         print(f"  [CONN ERROR] 서버에 연결할 수 없습니다: {api_url}")
         return False
     except httpx.TimeoutException:
-        print(f"  [TIMEOUT] {file_path.name}")
+        print(f"  [TIMEOUT] {slug}")
         return False
     except Exception as e:
-        print(f"  [ERROR] {file_path.name}: {e}")
+        print(f"  [ERROR] {slug}: {e}")
         return False
 
     if resp.status_code in (200, 201):
-        print(f"  [OK {resp.status_code}] {file_path.name}")
-        if not keep:
-            file_path.unlink()
+        print(f"  [OK {resp.status_code}] {slug}")
         return True
     else:
         try:
             detail = resp.json()
         except Exception:
             detail = resp.text[:200]
-        print(f"  [FAIL {resp.status_code}] {file_path.name} — {detail}")
+        print(f"  [FAIL {resp.status_code}] {slug} — {detail}")
         return False
 
 
 async def send(platform: str, host: str, keep: bool):
-    files = collect_review_files(platform)
-    if not files:
-        print(f"[{platform}] 전송할 파일이 없습니다: {PLATFORM_DIR[platform]}")
+    merged = load_merged_file(platform)
+    if not merged:
+        print(f"[{platform}] 전송할 데이터가 없습니다: {PLATFORM_FILE[platform]}")
         return
 
     api_url = host.rstrip("/") + API_PATH[platform]
+    slugs   = list(merged.keys())
 
     print("=" * 60)
     print(f"  플랫폼    : {platform}")
-    print(f"  파일 수   : {len(files)}개")
+    print(f"  게임 수   : {len(slugs)}개")
     print(f"  전송 주소 : {api_url}")
-    print(f"  전송 후   : {'파일 유지' if keep else '파일 삭제'}")
+    print(f"  전송 후   : {'데이터 유지' if keep else '전송 완료 항목 삭제'}")
     print("=" * 60)
 
     success = failed = 0
 
     async with httpx.AsyncClient() as client:
-        for i, fp in enumerate(files, 1):
-            print(f"[{i:3d}/{len(files)}] {fp.name}", end="  ")
-            ok = await send_file(client, fp, api_url, keep)
+        for i, slug in enumerate(slugs, 1):
+            print(f"[{i:3d}/{len(slugs)}] {slug}", end="  ")
+            payload = {slug: merged[slug]}
+            ok = await send_game(client, slug, payload, api_url)
             if ok:
                 success += 1
+                if not keep:
+                    del merged[slug]
+                    save_merged_file(platform, merged)
             else:
                 failed += 1
 
     print("\n" + "=" * 60)
     print(f"  완료: {success}개 성공 / {failed}개 실패")
     if failed:
-        print("  실패한 파일은 삭제되지 않았습니다. 재실행하면 재전송됩니다.")
+        print("  실패한 항목은 파일에 남아있습니다. 재실행하면 재전송됩니다.")
     print("=" * 60)
 
 

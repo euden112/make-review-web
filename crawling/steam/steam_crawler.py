@@ -27,6 +27,8 @@ MAX_URLS             = 2
 
 REVIEW_API_BASE = "https://store.steampowered.com/appreviews"
 GAME_LIST_PATH  = Path(__file__).resolve().parent.parent / "game_list.json"
+OUTPUT_DIR      = Path(__file__).resolve().parent.parent / "output"
+OUT_FILE        = OUTPUT_DIR / "steam.json"
 
 # 한국어 카테고리 키워드
 GAME_CATEGORIES: dict[str, list[str]] = {
@@ -369,8 +371,12 @@ def collect_game(slug: str, app_id: str, name: str) -> dict:
 # ============================================================
 
 def main():
-    base_dir = Path(__file__).resolve().parent
-    base_dir.mkdir(parents=True, exist_ok=True)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    existing_data: dict = {}
+    if OUT_FILE.exists():
+        with open(OUT_FILE, encoding="utf-8") as f:
+            existing_data = json.load(f)
 
     entries = load_game_list()
     if not entries:
@@ -380,7 +386,8 @@ def main():
     print(f"  총 게임 수    : {len(entries)}")
     print(f"  게임당 최대   : {MAX_REVIEWS_PER_GAME}개")
     print(f"  언어          : koreana (한국어)")
-    print(f"  저장 위치     : {base_dir}/{{slug}}.json")
+    print(f"  저장 위치     : {OUT_FILE}")
+    print(f"  기존 수집     : {len(existing_data)}개 게임")
     print("=" * 60 + "\n")
 
     success, skipped_count, failed = [], [], []
@@ -389,21 +396,21 @@ def main():
         app_id = entry["steam_app_id"]
         name   = entry.get("name", app_id)
         slug   = entry.get("steam_slug") or make_slug(name)
-        out_path = base_dir / f"{slug}.json"
 
         print(f"[{i:3d}/{len(entries)}] {name} ({slug})")
 
-        if out_path.exists():
-            print(f"  → 이미 존재, 스킵: {out_path.name}")
+        if slug in existing_data:
+            print(f"  → 이미 수집됨, 스킵: {slug}")
             skipped_count.append(slug)
             continue
 
         try:
             result = collect_game(slug, app_id, name)
-            with open(out_path, "w", encoding="utf-8") as f:
-                json.dump(result, f, ensure_ascii=False, indent=2)
+            existing_data.update(result)
+            with open(OUT_FILE, "w", encoding="utf-8") as f:
+                json.dump(existing_data, f, ensure_ascii=False, indent=2)
             review_count = len(result[slug]["reviews"])
-            print(f"  → 저장 완료: {out_path.name} ({review_count}개)\n")
+            print(f"  → 저장 완료: {slug} ({review_count}개)\n")
             success.append(slug)
         except Exception as e:
             print(f"  → [ERROR] {slug} 실패: {e}\n")
@@ -414,7 +421,7 @@ def main():
     print("\n" + "=" * 60)
     print("크롤링 완료 요약")
     print(f"  성공  : {len(success)}개")
-    print(f"  스킵  : {len(skipped_count)}개 (기존 파일 존재)")
+    print(f"  스킵  : {len(skipped_count)}개 (이미 수집됨)")
     print(f"  실패  : {len(failed)}개")
     if failed:
         print(f"  실패 목록: {', '.join(failed)}")
