@@ -322,11 +322,30 @@ async def _try_load_more(page) -> bool:
     return False
 
 
-async def _scroll_incremental(page) -> None:
-    """smooth scrollBy로 연속 이벤트 발생 → IntersectionObserver 트리거 후 바닥 점프."""
-    await page.evaluate("window.scrollBy({ top: window.innerHeight * 3, behavior: 'smooth' });")
+async def _scroll_page(page) -> None:
+    """window / documentElement / body / main 등 가능한 스크롤 대상 모두 시도.
+    Metacritic 신규 SPA 디자인은 window가 아닌 내부 컨테이너를 스크롤한다."""
+    await page.evaluate("""() => {
+        const h = window.innerHeight;
+        const targets = [
+            window,
+            document.documentElement,
+            document.body,
+            document.querySelector('main'),
+            document.querySelector('[class*="content"]'),
+            document.querySelector('[class*="review"]'),
+        ].filter(Boolean);
+        targets.forEach(t => {
+            try { t.scrollBy({ top: h * 3, behavior: 'smooth' }); } catch(e) {}
+        });
+    }""")
     await asyncio.sleep(1)
-    await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+    await page.evaluate("""() => {
+        const big = 999999;
+        [window, document.documentElement, document.body].forEach(t => {
+            try { t.scrollTo(0, big); } catch(e) {}
+        });
+    }""")
     await asyncio.sleep(3)
 
 
@@ -387,21 +406,28 @@ async def scrape_reviews_by_scroll(
                 break
 
             # 스크롤 전 위치 기록
-            before = await page.evaluate(
-                "() => ({ y: window.pageYOffset, h: document.body.scrollHeight })"
-            )
+            before = await page.evaluate("""() => ({
+                win:  window.pageYOffset,
+                doc:  document.documentElement.scrollTop,
+                body: document.body.scrollTop,
+                h:    Math.max(document.body.scrollHeight,
+                               document.documentElement.scrollHeight),
+            })""")
 
-            # 한 화면씩 점진적으로 스크롤 (IntersectionObserver 트리거)
-            await _scroll_incremental(page)
-
-            # "더보기" 버튼 시도
+            await _scroll_page(page)
             await _try_load_more(page)
 
-            after = await page.evaluate(
-                "() => ({ y: window.pageYOffset, h: document.body.scrollHeight })"
-            )
+            after = await page.evaluate("""() => ({
+                win:  window.pageYOffset,
+                doc:  document.documentElement.scrollTop,
+                body: document.body.scrollTop,
+                h:    Math.max(document.body.scrollHeight,
+                               document.documentElement.scrollHeight),
+            })""")
             print(
-                f"    스크롤: {before['y']}→{after['y']}px "
+                f"    스크롤 win:{before['win']}→{after['win']} "
+                f"doc:{before['doc']}→{after['doc']} "
+                f"body:{before['body']}→{after['body']} "
                 f"(문서높이 {after['h']}px)"
             )
 
@@ -409,12 +435,12 @@ async def scrape_reviews_by_scroll(
             new_all = await page.query_selector_all(CARD_SEL)
             new_cards = await _filter_leaf_cards(new_all)
             if len(new_cards) == total_cards:
-                # 마우스 휠로 재시도 (일부 사이트는 wheel 이벤트만 인식)
+                # 마우스 휠로 재시도 (wheel 이벤트를 직접 인식하는 사이트 대응)
                 await page.mouse.move(960, 540)
-                for _ in range(6):
-                    await page.mouse.wheel(0, 800)
-                    await asyncio.sleep(0.4)
-                await asyncio.sleep(3)
+                for _ in range(8):
+                    await page.mouse.wheel(0, 600)
+                    await asyncio.sleep(0.3)
+                await asyncio.sleep(4)
                 new_all = await page.query_selector_all(CARD_SEL)
                 new_cards = await _filter_leaf_cards(new_all)
 
