@@ -189,20 +189,7 @@ def allocate(total: int, ratios: dict[str, float]) -> dict[str, int]:
 def quality_score(row: ReviewRow) -> float:
     playtime = float(row.playtime_hours or 0.0)
     helpful = float(row.helpful_count or 0)
-
-    playtime = min(playtime, 500.0)
-
-    # 구간별 가중치 차등
-    if playtime < 1.0:
-        playtime_score = 0.3
-    elif playtime < 10.0:
-        playtime_score = (0.5 * (playtime + 1.0) ** 0.5)
-    elif playtime < 100.0:
-        playtime_score = (0.8 * (playtime + 1.0) ** 0.5)
-    else:
-        playtime_score = (0.6 * (playtime + 1.0) ** 0.5)
-
-    return playtime_score + (1.2 * (helpful + 1.0) ** 0.5)
+    return (0.5 * (playtime + 1.0) ** 0.5) + (1.2 * (helpful + 1.0) ** 0.5)
 
 
 def stratified_select_reviews(
