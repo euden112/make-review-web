@@ -202,7 +202,7 @@ def run_filter_pipeline(text: str) -> FilterResult:
 
 def build_url(slug: str, review_type: str) -> str:
     return (
-        f"{BASE_URL}/game/{slug}/{review_type}"
+        f"{BASE_URL}/game/{slug}/{review_type}/"
         f"?platform={PLATFORM}&sort-by=Recently+Added"
     )
 
