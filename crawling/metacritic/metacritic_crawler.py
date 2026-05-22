@@ -323,12 +323,11 @@ async def _try_load_more(page) -> bool:
 
 
 async def _scroll_incremental(page) -> None:
-    """한 번에 바닥으로 점프하지 않고 한 화면씩 스크롤.
-    IntersectionObserver 기반 lazy-load 트리거에 효과적."""
-    for _ in range(4):
-        await page.evaluate("window.scrollBy(0, window.innerHeight)")
-        await asyncio.sleep(0.6)
-    await asyncio.sleep(1.5)
+    """smooth scrollBy로 연속 이벤트 발생 → IntersectionObserver 트리거 후 바닥 점프."""
+    await page.evaluate("window.scrollBy({ top: window.innerHeight * 3, behavior: 'smooth' });")
+    await asyncio.sleep(1)
+    await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+    await asyncio.sleep(3)
 
 
 async def scrape_reviews_by_scroll(
@@ -424,7 +423,7 @@ async def scrape_reviews_by_scroll(
                 no_new_count = 0
             else:
                 no_new_count += 1
-                if no_new_count >= 3:
+                if no_new_count >= 5:
                     print(f"  [{slug}] {type_label} 새 카드 없음 ({no_new_count}회 연속) → 종료")
                     break
 
