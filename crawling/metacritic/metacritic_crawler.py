@@ -311,30 +311,64 @@ async def _try_load_more(page) -> bool:
     return False
 
 
+async def _find_scroll_container(page) -> str | None:
+    """리뷰 카드의 실제 스크롤 컨테이너 CSS 경로를 반환."""
+    return await page.evaluate(f"""() => {{
+        const card = document.querySelector('{CARD_SEL}');
+        if (!card) return null;
+        let el = card.parentElement;
+        while (el && el !== document.documentElement) {{
+            const s = window.getComputedStyle(el);
+            if (/(auto|scroll)/.test(s.overflowY + s.overflow)) {{
+                el.setAttribute('data-scroll-target', 'true');
+                return el.tagName + (el.id ? '#' + el.id : '');
+            }}
+            el = el.parentElement;
+        }}
+        return null;
+    }}""")
+
+
 async def _scroll_page(page) -> None:
-    """window / documentElement / body / main 등 가능한 스크롤 대상 모두 시도.
-    Metacritic 신규 SPA 디자인은 window가 아닌 내부 컨테이너를 스크롤한다."""
-    await page.evaluate("""() => {
-        const h = window.innerHeight;
-        const targets = [
-            window,
-            document.documentElement,
-            document.body,
-            document.querySelector('main'),
-            document.querySelector('[class*="content"]'),
-            document.querySelector('[class*="review"]'),
-        ].filter(Boolean);
-        targets.forEach(t => {
-            try { t.scrollBy({ top: h * 3, behavior: 'smooth' }); } catch(e) {}
-        });
-    }""")
+    """실제 스크롤 컨테이너를 찾아 직접 스크롤한다.
+    Metacritic SPA는 html/body가 overflow:hidden이고 내부 div가 스크롤 컨테이너."""
+    await page.evaluate(f"""() => {{
+        // 1) 리뷰 카드 부모 중 overflow:auto/scroll 인 컨테이너 탐색
+        const card = document.querySelector('{CARD_SEL}');
+        let scrollEl = null;
+        if (card) {{
+            let el = card.parentElement;
+            while (el && el !== document.documentElement) {{
+                const s = window.getComputedStyle(el);
+                if (/(auto|scroll)/.test(s.overflowY + s.overflow)) {{
+                    scrollEl = el;
+                    break;
+                }}
+                el = el.parentElement;
+            }}
+        }}
+        // 2) 찾은 컨테이너(또는 documentElement) 스크롤
+        const target = scrollEl || document.documentElement;
+        target.scrollBy({{ top: window.innerHeight * 3, behavior: 'smooth' }});
+    }}""")
     await asyncio.sleep(1)
-    await page.evaluate("""() => {
-        const big = 999999;
-        [window, document.documentElement, document.body].forEach(t => {
-            try { t.scrollTo(0, big); } catch(e) {}
-        });
-    }""")
+    await page.evaluate(f"""() => {{
+        const card = document.querySelector('{CARD_SEL}');
+        let scrollEl = null;
+        if (card) {{
+            let el = card.parentElement;
+            while (el && el !== document.documentElement) {{
+                const s = window.getComputedStyle(el);
+                if (/(auto|scroll)/.test(s.overflowY + s.overflow)) {{
+                    scrollEl = el;
+                    break;
+                }}
+                el = el.parentElement;
+            }}
+        }}
+        const target = scrollEl || document.documentElement;
+        target.scrollTop = target.scrollHeight;
+    }}""")
     await asyncio.sleep(3)
 
 
@@ -394,30 +428,18 @@ async def scrape_reviews_by_scroll(
             if len(reviews) >= max_count:
                 break
 
-            # 스크롤 전 위치 기록
-            before = await page.evaluate("""() => ({
-                win:  window.pageYOffset,
-                doc:  document.documentElement.scrollTop,
-                body: document.body.scrollTop,
-                h:    Math.max(document.body.scrollHeight,
-                               document.documentElement.scrollHeight),
-            })""")
-
+            container = await _find_scroll_container(page)
             await _scroll_page(page)
             await _try_load_more(page)
 
-            after = await page.evaluate("""() => ({
-                win:  window.pageYOffset,
-                doc:  document.documentElement.scrollTop,
-                body: document.body.scrollTop,
-                h:    Math.max(document.body.scrollHeight,
-                               document.documentElement.scrollHeight),
-            })""")
+            scroll_pos = await page.evaluate(f"""() => {{
+                const el = document.querySelector('[data-scroll-target]')
+                        || document.documentElement;
+                return {{ top: el.scrollTop, h: el.scrollHeight }};
+            }}""")
             print(
-                f"    스크롤 win:{before['win']}→{after['win']} "
-                f"doc:{before['doc']}→{after['doc']} "
-                f"body:{before['body']}→{after['body']} "
-                f"(문서높이 {after['h']}px)"
+                f"    컨테이너:{container or 'documentElement'} "
+                f"scrollTop:{scroll_pos['top']}px / {scroll_pos['h']}px"
             )
 
             # 카드 수 변화 확인
