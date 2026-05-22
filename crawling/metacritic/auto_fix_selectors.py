@@ -34,16 +34,17 @@ HEADERS      = {
     )
 }
 
-# 크롤러에 현재 하드코딩된 셀렉터
+# 크롤러 상수(CARD_SEL, QUOTE_SEL …)에 현재 하드코딩된 셀렉터 값
+# auto_fix 는 이 값이 크롤러 파일 내에 문자열로 존재할 때 교체한다
 CURRENT_SELECTORS: dict[str, str] = {
-    "card":        "div.review-card__content",
-    "quote":       ".review-card__quote",
-    "score":       ".c-siteReviewScore span",
-    "author":      ".review-card__header",
-    "date":        ".review-card__date",
-    "read_more":   "button.review-card__read-more",
-    "modal_quote": ".review-read-more-modal__quote",
-    "modal_close": ".global-modal__close-button-wrapper",
+    "card":        "div.review-card__content",   # CARD_SEL
+    "quote":       ".review-card__quote",         # QUOTE_SEL
+    "score":       ".c-siteReviewScore span",     # SCORE_SEL
+    "author":      ".review-card__header",        # AUTHOR_SEL
+    "date":        ".review-card__date",          # DATE_SEL
+    "read_more":   "button.review-card__read-more",  # READ_MORE_SEL
+    "modal_quote": ".review-read-more-modal__quote", # MODAL_QUOTE_SEL
+    "modal_close": ".global-modal__close-button-wrapper", # MODAL_CLOSE_SEL
 }
 
 

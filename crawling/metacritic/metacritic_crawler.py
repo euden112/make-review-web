@@ -210,40 +210,53 @@ def clean_author(raw: str) -> str:
     return re.sub(r"^\d+\s*", "", raw).strip()
 
 # ============================================================
+# 셀렉터 상수 (auto_fix_selectors.py 가 이 값들을 교체)
+# ============================================================
+
+CARD_SEL        = "div.review-card__content"
+QUOTE_SEL       = ".review-card__quote"
+SCORE_SEL       = ".c-siteReviewScore span"
+AUTHOR_SEL      = ".review-card__header"
+DATE_SEL        = ".review-card__date"
+READ_MORE_SEL   = "button.review-card__read-more"
+MODAL_QUOTE_SEL = ".review-read-more-modal__quote"
+MODAL_CLOSE_SEL = ".global-modal__close-button-wrapper"
+
+# ============================================================
 # 단일 리뷰 카드 파싱
 # ============================================================
 
 async def parse_card(page, card, review_type_label: str) -> dict | None:
     try:
-        author_el = await card.query_selector(".review-card__header")
+        author_el = await card.query_selector(AUTHOR_SEL)
         author = ""
         if author_el:
             author = clean_author((await author_el.inner_text()).strip())
 
-        score_el = await card.query_selector(".c-siteReviewScore span")
+        score_el = await card.query_selector(SCORE_SEL)
         score = (await score_el.inner_text()).strip() if score_el else ""
 
-        date_el = await card.query_selector(".review-card__date")
+        date_el = await card.query_selector(DATE_SEL)
         date = (await date_el.inner_text()).strip() if date_el else ""
 
-        read_more_btn = await card.query_selector("button.review-card__read-more")
+        read_more_btn = await card.query_selector(READ_MORE_SEL)
         if read_more_btn:
             try:
                 await read_more_btn.click(timeout=3000)
-                await page.wait_for_selector(".review-read-more-modal__quote", timeout=5000)
-                body_el = await page.query_selector(".review-read-more-modal__quote")
+                await page.wait_for_selector(MODAL_QUOTE_SEL, timeout=5000)
+                body_el = await page.query_selector(MODAL_QUOTE_SEL)
                 body = (await body_el.inner_text()).strip() if body_el else ""
                 close_btn = await page.query_selector(
-                    ".global-modal__close-button-wrapper, button[aria-label='Close']"
+                    f"{MODAL_CLOSE_SEL}, button[aria-label='Close']"
                 )
                 if close_btn:
                     await close_btn.click(timeout=2000)
                     await asyncio.sleep(0.3)
             except Exception:
-                body_el = await card.query_selector(".review-card__quote")
+                body_el = await card.query_selector(QUOTE_SEL)
                 body = (await body_el.inner_text()).strip() if body_el else ""
         else:
-            body_el = await card.query_selector(".review-card__quote")
+            body_el = await card.query_selector(QUOTE_SEL)
             body = (await body_el.inner_text()).strip() if body_el else ""
 
         body = preprocess_body(body)
@@ -272,6 +285,24 @@ async def parse_card(page, card, review_type_label: str) -> dict | None:
 # 스크롤 기반 리뷰 수집
 # ============================================================
 
+async def _try_load_more(page) -> bool:
+    """페이지에서 더보기 버튼을 찾아 클릭. 클릭 성공 시 True."""
+    try:
+        btn = await page.query_selector(
+            "button[data-testid*='load'], "
+            "button[class*='load-more'], "
+            "a[class*='load-more'], "
+            "button[class*='loadMore']"
+        )
+        if btn and await btn.is_visible():
+            await btn.click(timeout=3000)
+            await asyncio.sleep(2)
+            return True
+    except Exception:
+        pass
+    return False
+
+
 async def scrape_reviews_by_scroll(
     context,
     slug: str,
@@ -283,19 +314,27 @@ async def scrape_reviews_by_scroll(
     page = await context.new_page()
     reviews: list[dict] = []
     seen_bodies: set[str] = set()
+    filtered_out = 0
 
     try:
         await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        # 첫 카드가 렌더링될 때까지 대기 (최대 10초)
+        try:
+            await page.wait_for_selector(CARD_SEL, timeout=10000)
+        except Exception:
+            print(f"  [{slug}] {type_label} 카드 셀렉터({CARD_SEL}) 대기 시간 초과")
         await page.wait_for_timeout(2000)
-        print(f"  [{slug}] {type_label} 수집 시작")
+        print(f"  [{slug}] {type_label} 수집 시작 (목표: {max_count}개)")
 
-        prev_count   = 0
-        no_new_count = 0
+        processed_idx = 0
+        no_new_count  = 0
 
         while len(reviews) < max_count:
-            cards = await page.query_selector_all("div.review-card__content")
+            cards = await page.query_selector_all(CARD_SEL)
+            total_cards = len(cards)
 
-            for card in cards[prev_count:]:
+            # 새로 로드된 카드만 처리
+            for card in cards[processed_idx:]:
                 if len(reviews) >= max_count:
                     break
                 parsed = await parse_card(page, card, type_label)
@@ -304,29 +343,46 @@ async def scrape_reviews_by_scroll(
                     if key not in seen_bodies:
                         seen_bodies.add(key)
                         reviews.append(parsed)
+                else:
+                    filtered_out += 1
 
-            prev_count = len(cards)
+            processed_idx = total_cards
+            print(f"    카드 {total_cards}개 확인 | 수집 {len(reviews)}개 | 필터 제외 {filtered_out}개")
+
             if len(reviews) >= max_count:
                 break
 
-            await page.evaluate("window.scrollBy({ top: window.innerHeight * 3, behavior: 'smooth' });")
-            await asyncio.sleep(1)
+            # 마지막 카드를 뷰포트 안으로 스크롤 (lazy-load 트리거)
+            if cards:
+                try:
+                    await cards[-1].scroll_into_view_if_needed()
+                    await asyncio.sleep(1)
+                except Exception:
+                    pass
+
+            # 페이지 맨 아래로 스크롤
             await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
             await asyncio.sleep(3)
 
-            new_cards = await page.query_selector_all("div.review-card__content")
-            if len(new_cards) == prev_count:
+            # "더보기" 버튼 시도
+            await _try_load_more(page)
+
+            # 카드 수 변화 확인
+            new_cards = await page.query_selector_all(CARD_SEL)
+            if len(new_cards) == total_cards:
+                # 한 번 더 대기 후 재확인
                 await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
                 await asyncio.sleep(5)
-                new_cards = await page.query_selector_all("div.review-card__content")
+                new_cards = await page.query_selector_all(CARD_SEL)
 
-            if len(new_cards) == prev_count:
-                no_new_count += 1
-                if no_new_count >= 5:
-                    print(f"  [{slug}] {type_label} 더 이상 새 리뷰 없음 → 종료")
-                    break
-            else:
+            if len(new_cards) > total_cards:
+                print(f"    → 새 카드 {len(new_cards) - total_cards}개 로드")
                 no_new_count = 0
+            else:
+                no_new_count += 1
+                if no_new_count >= 3:
+                    print(f"  [{slug}] {type_label} 새 카드 없음 ({no_new_count}회 연속) → 종료")
+                    break
 
     except PlaywrightTimeoutError:
         print(f"  [{slug}] {type_label} timeout")
@@ -335,7 +391,7 @@ async def scrape_reviews_by_scroll(
     finally:
         await page.close()
 
-    print(f"  [{slug}] {type_label} 수집 완료: {len(reviews)}개")
+    print(f"  [{slug}] {type_label} 수집 완료: {len(reviews)}개 (필터 제외: {filtered_out}개)")
     return reviews[:max_count]
 
 # ============================================================
