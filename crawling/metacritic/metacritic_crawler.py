@@ -279,9 +279,7 @@ async def parse_card(page, card, review_type_label: str) -> dict | None:
 # ============================================================
 
 async def _filter_leaf_cards(cards: list) -> list:
-    """CARD_SEL이 중첩 매칭될 때 가장 안쪽(leaf) 카드만 남긴다.
-    부모 div와 자식 div가 동일 셀렉터에 걸리면 같은 body가 중복 수집되므로
-    다른 매칭 카드를 자식으로 포함한 요소는 제거한다."""
+    """CARD_SEL이 중첩 매칭될 때 가장 안쪽(leaf) 카드만 남긴다."""
     result = []
     for card in cards:
         has_child = await card.evaluate(
@@ -291,85 +289,6 @@ async def _filter_leaf_cards(cards: list) -> list:
         if not has_child:
             result.append(card)
     return result
-
-
-async def _try_load_more(page) -> bool:
-    """페이지에서 더보기 버튼을 찾아 클릭. 클릭 성공 시 True."""
-    try:
-        btn = await page.query_selector(
-            "button[data-testid*='load'], "
-            "button[class*='load-more'], "
-            "a[class*='load-more'], "
-            "button[class*='loadMore']"
-        )
-        if btn and await btn.is_visible():
-            await btn.click(timeout=3000)
-            await asyncio.sleep(2)
-            return True
-    except Exception:
-        pass
-    return False
-
-
-async def _find_scroll_container(page) -> str | None:
-    """리뷰 카드의 실제 스크롤 컨테이너 CSS 경로를 반환."""
-    return await page.evaluate(f"""() => {{
-        const card = document.querySelector('{CARD_SEL}');
-        if (!card) return null;
-        let el = card.parentElement;
-        while (el && el !== document.documentElement) {{
-            const s = window.getComputedStyle(el);
-            if (/(auto|scroll)/.test(s.overflowY + s.overflow)) {{
-                el.setAttribute('data-scroll-target', 'true');
-                return el.tagName + (el.id ? '#' + el.id : '');
-            }}
-            el = el.parentElement;
-        }}
-        return null;
-    }}""")
-
-
-async def _scroll_page(page) -> None:
-    """실제 스크롤 컨테이너를 찾아 직접 스크롤한다.
-    Metacritic SPA는 html/body가 overflow:hidden이고 내부 div가 스크롤 컨테이너."""
-    await page.evaluate(f"""() => {{
-        // 1) 리뷰 카드 부모 중 overflow:auto/scroll 인 컨테이너 탐색
-        const card = document.querySelector('{CARD_SEL}');
-        let scrollEl = null;
-        if (card) {{
-            let el = card.parentElement;
-            while (el && el !== document.documentElement) {{
-                const s = window.getComputedStyle(el);
-                if (/(auto|scroll)/.test(s.overflowY + s.overflow)) {{
-                    scrollEl = el;
-                    break;
-                }}
-                el = el.parentElement;
-            }}
-        }}
-        // 2) 찾은 컨테이너(또는 documentElement) 스크롤
-        const target = scrollEl || document.documentElement;
-        target.scrollBy({{ top: window.innerHeight * 3, behavior: 'smooth' }});
-    }}""")
-    await asyncio.sleep(1)
-    await page.evaluate(f"""() => {{
-        const card = document.querySelector('{CARD_SEL}');
-        let scrollEl = null;
-        if (card) {{
-            let el = card.parentElement;
-            while (el && el !== document.documentElement) {{
-                const s = window.getComputedStyle(el);
-                if (/(auto|scroll)/.test(s.overflowY + s.overflow)) {{
-                    scrollEl = el;
-                    break;
-                }}
-                el = el.parentElement;
-            }}
-        }}
-        const target = scrollEl || document.documentElement;
-        target.scrollTop = target.scrollHeight;
-    }}""")
-    await asyncio.sleep(3)
 
 
 async def scrape_reviews_by_scroll(
@@ -428,32 +347,25 @@ async def scrape_reviews_by_scroll(
             if len(reviews) >= max_count:
                 break
 
-            container = await _find_scroll_container(page)
-            await _scroll_page(page)
-            await _try_load_more(page)
+            # 마지막 카드 위치로 마우스를 이동한 뒤 휠 스크롤
+            # virtual list는 window.scrollTo가 아닌 실제 wheel 이벤트로 트리거됨
+            if cards:
+                try:
+                    box = await cards[-1].bounding_box()
+                    if box:
+                        await page.mouse.move(
+                            box["x"] + box["width"] / 2,
+                            box["y"] + box["height"] / 2,
+                        )
+                        for _ in range(6):
+                            await page.mouse.wheel(0, 500)
+                            await asyncio.sleep(0.4)
+                        await asyncio.sleep(2)
+                except Exception:
+                    pass
 
-            scroll_pos = await page.evaluate(f"""() => {{
-                const el = document.querySelector('[data-scroll-target]')
-                        || document.documentElement;
-                return {{ top: el.scrollTop, h: el.scrollHeight }};
-            }}""")
-            print(
-                f"    컨테이너:{container or 'documentElement'} "
-                f"scrollTop:{scroll_pos['top']}px / {scroll_pos['h']}px"
-            )
-
-            # 카드 수 변화 확인
             new_all = await page.query_selector_all(CARD_SEL)
             new_cards = await _filter_leaf_cards(new_all)
-            if len(new_cards) == total_cards:
-                # 마우스 휠로 재시도 (wheel 이벤트를 직접 인식하는 사이트 대응)
-                await page.mouse.move(960, 540)
-                for _ in range(8):
-                    await page.mouse.wheel(0, 600)
-                    await asyncio.sleep(0.3)
-                await asyncio.sleep(4)
-                new_all = await page.query_selector_all(CARD_SEL)
-                new_cards = await _filter_leaf_cards(new_all)
 
             if len(new_cards) > total_cards:
                 print(f"    → 새 카드 {len(new_cards) - total_cards}개 로드")
