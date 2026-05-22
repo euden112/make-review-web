@@ -387,11 +387,24 @@ async def scrape_reviews_by_scroll(
             if len(reviews) >= max_count:
                 break
 
+            # 스크롤 전 위치 기록
+            before = await page.evaluate(
+                "() => ({ y: window.pageYOffset, h: document.body.scrollHeight })"
+            )
+
             # 한 화면씩 점진적으로 스크롤 (IntersectionObserver 트리거)
             await _scroll_incremental(page)
 
             # "더보기" 버튼 시도
             await _try_load_more(page)
+
+            after = await page.evaluate(
+                "() => ({ y: window.pageYOffset, h: document.body.scrollHeight })"
+            )
+            print(
+                f"    스크롤: {before['y']}→{after['y']}px "
+                f"(문서높이 {after['h']}px)"
+            )
 
             # 카드 수 변화 확인
             new_all = await page.query_selector_all(CARD_SEL)
