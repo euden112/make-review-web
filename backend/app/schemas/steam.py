@@ -19,8 +19,8 @@ class SteamReview(BaseModel):
 class SteamMeta(BaseModel):
     game_id: str = Field(description="스팀 앱 ID 또는 게임명")
     name_ko: Optional[str] = Field(default=None, description="게임 이름 (Steam API 반환값)")
-    total_positive: Optional[int] = Field(default=0, description="총 긍정 리뷰 수")
-    total_negative: Optional[int] = Field(default=0, description="총 부정 리뷰 수")
+    total_positive: int = Field(default=0, description="총 긍정 리뷰 수")
+    total_negative: int = Field(default=0, description="총 부정 리뷰 수")
     crawled_at: str
     cover_image: Optional[str] = Field(default=None, description="게임 커버 이미지 URL (library_600x900.jpg)")
     hero_image: Optional[str] = Field(default=None, description="게임 히어로 이미지 URL (library_hero.jpg 또는 header.jpg)")

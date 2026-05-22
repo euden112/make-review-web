@@ -22,7 +22,7 @@ class MetacriticMeta(BaseModel):
     crawled_at: str
     total: int
     critic_count: int
-    user_count: int
+    user_count: int = Field(default=0, description="유저 리뷰 수 (현재 미수집)")
     filtered_count: Optional[int] = Field(default=None, description="필터링 후 남은 리뷰 수")
 
 # 3. 크롤러가 최종 전송할 때 사용하는 포장지 구조입니다.
