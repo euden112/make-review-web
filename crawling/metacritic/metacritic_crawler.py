@@ -1,10 +1,10 @@
 """
 Metacritic Game Review Crawler
 - crawling/game_list.json 에서 게임 목록 읽기 (metacritic_slug 필드 사용)
-- 전문가(critic) 리뷰 + 유저(user) 리뷰 수집
-- 영어 전용 플랫폼 → language="en" 고정
-- sentence_transformers 없음 — 영어 키워드 매칭으로 카테고리 분류
-- 게임당 파일 저장, 재시작 시 기존 파일 스킵
+- 전문가(critic) 리뷰만 수집
+- 영어 전용 플랫폼 → language="en" 고정, 언어 감지 불필요
+- 영어 키워드 매칭으로 카테고리 분류
+- crawling/output/metacritic.json 에 합산 저장, 재시작 시 기존 게임 스킵
 """
 
 import asyncio
@@ -14,20 +14,17 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from langdetect import detect, LangDetectException
-
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 
 # ============================================================
 # 설정
 # ============================================================
 
-MAX_CRITIC_REVIEWS   = 200
-MAX_BODY_LENGTH      = 1000
-MIN_BODY_LENGTH      = 10
-MAX_URLS             = 2
-HEADLESS             = True
-MAX_CONCURRENT_GAMES = 2
+MAX_CRITIC_REVIEWS = 200
+MAX_BODY_LENGTH    = 1000
+MIN_BODY_LENGTH    = 10
+MAX_URLS           = 2
+HEADLESS           = True
 
 PLATFORM = "pc"
 BASE_URL  = "https://www.metacritic.com"
@@ -181,18 +178,10 @@ def category_tag(text: str) -> list[dict]:
                     break
     return [{"category": c, "sentiment": s} for c, s in matched.items()]
 
-def is_english(text: str) -> bool:
-    try:
-        return detect(text) == "en"
-    except LangDetectException:
-        return True  # 너무 짧거나 감지 불가 시 통과
-
 def run_filter_pipeline(text: str) -> FilterResult:
     r = rule_based_filter(text)
     if not r.passed:
         return r
-    if not is_english(text):
-        return FilterResult(False, "lang_filter", "not_english")
     cats = category_tag(text)
     return FilterResult(True, "pass", "pass", categories=cats)
 
@@ -511,7 +500,6 @@ async def main():
     print("=" * 60 + "\n")
 
     success, skipped_count, failed = [], [], []
-    semaphore = asyncio.Semaphore(MAX_CONCURRENT_GAMES)
 
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(headless=HEADLESS)
@@ -532,10 +520,7 @@ async def main():
                 continue
 
             try:
-                async with semaphore:
-                    result = await collect_game(entry, context)
-                if result is None:
-                    raise RuntimeError("collect_game returned None")
+                result = await collect_game(entry, context)
 
                 existing_data.update(result)
                 with open(OUT_FILE, "w", encoding="utf-8") as f:
