@@ -51,18 +51,20 @@ CURRENT_SELECTORS: dict[str, str] = {
 async def detect_card(page) -> str | None:
     """반복 등장하는 리뷰 카드 컨테이너 div 탐지."""
     candidates = await page.evaluate("""
-        const counts = {};
-        document.querySelectorAll('div[class]').forEach(el => {
-            if ((el.innerText || '').trim().length < 80) return;
-            el.className.trim().split(/\\s+/).forEach(cls => {
-                if (cls) counts[cls] = (counts[cls] || 0) + 1;
+        (() => {
+            const counts = {};
+            document.querySelectorAll('div[class]').forEach(el => {
+                if ((el.innerText || '').trim().length < 80) return;
+                el.className.trim().split(/\\s+/).forEach(cls => {
+                    if (cls) counts[cls] = (counts[cls] || 0) + 1;
+                });
             });
-        });
-        return Object.entries(counts)
-            .filter(([, v]) => v >= 3)
-            .sort((a, b) => b[1] - a[1])
-            .slice(0, 5)
-            .map(([cls, cnt]) => ({ selector: 'div.' + cls, count: cnt }));
+            return Object.entries(counts)
+                .filter(([, v]) => v >= 3)
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 5)
+                .map(([cls, cnt]) => ({ selector: 'div.' + cls, count: cnt }));
+        })()
     """)
     return candidates[0]["selector"] if candidates else None
 
@@ -70,22 +72,24 @@ async def detect_card(page) -> str | None:
 async def detect_score(page, card_sel: str) -> str | None:
     """카드 내 0-100 숫자 요소 탐지."""
     candidates = await page.evaluate(f"""
-        const found = {{}};
-        Array.from(document.querySelectorAll('{card_sel}')).slice(0, 15).forEach(card => {{
-            card.querySelectorAll('*').forEach(el => {{
-                const t = (el.innerText || '').trim();
-                if (/^\\d{{1,3}}$/.test(t) && parseInt(t) <= 100 && el.children.length === 0) {{
-                    const cls = Array.from(el.classList).join('.');
-                    const tag = el.tagName.toLowerCase();
-                    const sel = cls ? tag + '.' + cls : tag;
-                    found[sel] = (found[sel] || 0) + 1;
-                }}
+        (() => {{
+            const found = {{}};
+            Array.from(document.querySelectorAll('{card_sel}')).slice(0, 15).forEach(card => {{
+                card.querySelectorAll('*').forEach(el => {{
+                    const t = (el.innerText || '').trim();
+                    if (/^\\d{{1,3}}$/.test(t) && parseInt(t) <= 100 && el.children.length === 0) {{
+                        const cls = Array.from(el.classList).join('.');
+                        const tag = el.tagName.toLowerCase();
+                        const sel = cls ? tag + '.' + cls : tag;
+                        found[sel] = (found[sel] || 0) + 1;
+                    }}
+                }});
             }});
-        }});
-        return Object.entries(found)
-            .sort((a, b) => b[1] - a[1])
-            .slice(0, 3)
-            .map(([sel, cnt]) => ({ selector: sel, count: cnt }));
+            return Object.entries(found)
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 3)
+                .map(([sel, cnt]) => ({{ selector: sel, count: cnt }}));
+        }})()
     """)
     return candidates[0]["selector"] if candidates else None
 
@@ -93,22 +97,24 @@ async def detect_score(page, card_sel: str) -> str | None:
 async def detect_quote(page, card_sel: str) -> str | None:
     """카드 내 본문 텍스트 요소 탐지 (100자 이상)."""
     candidates = await page.evaluate(f"""
-        const found = {{}};
-        Array.from(document.querySelectorAll('{card_sel}')).slice(0, 15).forEach(card => {{
-            card.querySelectorAll('p, div, span').forEach(el => {{
-                const t = (el.innerText || '').trim();
-                if (t.length >= 100 && t.length <= 2000 && el.children.length <= 2) {{
-                    const cls = Array.from(el.classList).join('.');
-                    const tag = el.tagName.toLowerCase();
-                    const sel = cls ? tag + '.' + cls : tag;
-                    found[sel] = (found[sel] || 0) + 1;
-                }}
+        (() => {{
+            const found = {{}};
+            Array.from(document.querySelectorAll('{card_sel}')).slice(0, 15).forEach(card => {{
+                card.querySelectorAll('p, div, span').forEach(el => {{
+                    const t = (el.innerText || '').trim();
+                    if (t.length >= 100 && t.length <= 2000 && el.children.length <= 2) {{
+                        const cls = Array.from(el.classList).join('.');
+                        const tag = el.tagName.toLowerCase();
+                        const sel = cls ? tag + '.' + cls : tag;
+                        found[sel] = (found[sel] || 0) + 1;
+                    }}
+                }});
             }});
-        }});
-        return Object.entries(found)
-            .sort((a, b) => b[1] - a[1])
-            .slice(0, 3)
-            .map(([sel, cnt]) => ({ selector: sel, count: cnt }));
+            return Object.entries(found)
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 3)
+                .map(([sel, cnt]) => ({{ selector: sel, count: cnt }}));
+        }})()
     """)
     return candidates[0]["selector"] if candidates else None
 
@@ -120,21 +126,23 @@ async def detect_author(page, card_sel: str) -> str | None:
         return None
 
     candidates = await page.evaluate(f"""
-        const found = {{}};
-        Array.from(document.querySelectorAll('{card_sel}')).slice(0, 15).forEach(card => {{
-            card.querySelectorAll('*').forEach(el => {{
-                const t = (el.innerText || '').trim();
-                if (t.length >= 2 && t.length <= 60 && !/^[\\d\\s]+$/.test(t)
-                    && el.children.length === 0) {{
-                    const cls = Array.from(el.classList).join('.');
-                    if (cls) found['.' + cls] = (found['.' + cls] || 0) + 1;
-                }}
+        (() => {{
+            const found = {{}};
+            Array.from(document.querySelectorAll('{card_sel}')).slice(0, 15).forEach(card => {{
+                card.querySelectorAll('*').forEach(el => {{
+                    const t = (el.innerText || '').trim();
+                    if (t.length >= 2 && t.length <= 60 && !/^[\\d\\s]+$/.test(t)
+                        && el.children.length === 0) {{
+                        const cls = Array.from(el.classList).join('.');
+                        if (cls) found['.' + cls] = (found['.' + cls] || 0) + 1;
+                    }}
+                }});
             }});
-        }});
-        return Object.entries(found)
-            .sort((a, b) => b[1] - a[1])
-            .slice(0, 8)
-            .map(([sel, cnt]) => ({ selector: sel, count: cnt }));
+            return Object.entries(found)
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 8)
+                .map(([sel, cnt]) => ({{ selector: sel, count: cnt }}));
+        }})()
     """)
     if not candidates:
         return None
@@ -146,21 +154,23 @@ async def detect_author(page, card_sel: str) -> str | None:
 async def detect_date(page, card_sel: str) -> str | None:
     """날짜 패턴을 포함한 요소 탐지."""
     candidates = await page.evaluate(f"""
-        const DATE_RE = /\\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|\\d{{4}})/i;
-        const found = {{}};
-        Array.from(document.querySelectorAll('{card_sel}')).slice(0, 15).forEach(card => {{
-            card.querySelectorAll('*').forEach(el => {{
-                const t = (el.innerText || '').trim();
-                if (DATE_RE.test(t) && t.length <= 30 && el.children.length === 0) {{
-                    const cls = Array.from(el.classList).join('.');
-                    if (cls) found['.' + cls] = (found['.' + cls] || 0) + 1;
-                }}
+        (() => {{
+            const DATE_RE = /\\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|\\d{{4}})/i;
+            const found = {{}};
+            Array.from(document.querySelectorAll('{card_sel}')).slice(0, 15).forEach(card => {{
+                card.querySelectorAll('*').forEach(el => {{
+                    const t = (el.innerText || '').trim();
+                    if (DATE_RE.test(t) && t.length <= 30 && el.children.length === 0) {{
+                        const cls = Array.from(el.classList).join('.');
+                        if (cls) found['.' + cls] = (found['.' + cls] || 0) + 1;
+                    }}
+                }});
             }});
-        }});
-        return Object.entries(found)
-            .sort((a, b) => b[1] - a[1])
-            .slice(0, 3)
-            .map(([sel, cnt]) => ({ selector: sel, count: cnt }));
+            return Object.entries(found)
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 3)
+                .map(([sel, cnt]) => ({{ selector: sel, count: cnt }}));
+        }})()
     """)
     return candidates[0]["selector"] if candidates else None
 
@@ -168,14 +178,16 @@ async def detect_date(page, card_sel: str) -> str | None:
 async def detect_read_more(page) -> str | None:
     """'Read More' 텍스트를 가진 버튼 탐지."""
     candidates = await page.evaluate("""
-        return Array.from(document.querySelectorAll('button, a[role="button"]'))
-            .filter(el => /read.?more/i.test(el.innerText || ''))
-            .slice(0, 3)
-            .map(el => {
-                const cls = Array.from(el.classList).join('.');
-                const tag = el.tagName.toLowerCase();
-                return { selector: cls ? tag + '.' + cls : tag };
-            });
+        (() => {
+            return Array.from(document.querySelectorAll('button, a[role="button"]'))
+                .filter(el => /read.?more/i.test(el.innerText || ''))
+                .slice(0, 3)
+                .map(el => {
+                    const cls = Array.from(el.classList).join('.');
+                    const tag = el.tagName.toLowerCase();
+                    return { selector: cls ? tag + '.' + cls : tag };
+                });
+        })()
     """)
     return candidates[0]["selector"] if candidates else None
 
@@ -190,30 +202,34 @@ async def detect_modal(page, read_more_sel: str) -> tuple[str | None, str | None
         await page.wait_for_timeout(2000)
 
         modal_quote = await page.evaluate("""
-            return Array.from(document.querySelectorAll('*'))
-                .filter(el => {
-                    const t = (el.innerText || '').trim();
-                    return t.length > 150 && el.children.length <= 2;
-                })
-                .sort((a, b) => b.innerText.length - a.innerText.length)
-                .slice(0, 3)
-                .map(el => {
-                    const cls = Array.from(el.classList).join('.');
-                    const tag = el.tagName.toLowerCase();
-                    return { selector: cls ? tag + '.' + cls : tag };
-                });
+            (() => {
+                return Array.from(document.querySelectorAll('*'))
+                    .filter(el => {
+                        const t = (el.innerText || '').trim();
+                        return t.length > 150 && el.children.length <= 2;
+                    })
+                    .sort((a, b) => b.innerText.length - a.innerText.length)
+                    .slice(0, 3)
+                    .map(el => {
+                        const cls = Array.from(el.classList).join('.');
+                        const tag = el.tagName.toLowerCase();
+                        return { selector: cls ? tag + '.' + cls : tag };
+                    });
+            })()
         """)
 
         modal_close = await page.evaluate("""
-            const el = Array.from(document.querySelectorAll('button, [role="button"]'))
-                .find(el => {
-                    const t = (el.innerText || '').trim();
-                    const label = el.getAttribute('aria-label') || '';
-                    return /close|×|✕/i.test(t) || /close/i.test(label);
-                });
-            if (!el) return null;
-            const cls = Array.from(el.classList).join('.');
-            return cls ? '.' + cls : 'button';
+            (() => {
+                const el = Array.from(document.querySelectorAll('button, [role="button"]'))
+                    .find(el => {
+                        const t = (el.innerText || '').trim();
+                        const label = el.getAttribute('aria-label') || '';
+                        return /close|×|✕/i.test(t) || /close/i.test(label);
+                    });
+                if (!el) return null;
+                const cls = Array.from(el.classList).join('.');
+                return cls ? '.' + cls : 'button';
+            })()
         """)
 
         quote_sel = modal_quote[0]["selector"] if modal_quote else None
