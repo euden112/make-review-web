@@ -199,17 +199,39 @@ def clean_author(raw: str) -> str:
     return re.sub(r"^\d+\s*", "", raw).strip()
 
 # ============================================================
-# 셀렉터 상수 (auto_fix_selectors.py 가 이 값들을 교체)
+# 셀렉터 상수 (metacritic_inspector.py 결과 기반 수정 — 2026-05)
 # ============================================================
 
-CARD_SEL        = "div.review-card__content"
-QUOTE_SEL       = ".review-card__quote"
-SCORE_SEL       = ".c-siteReviewScore span"
-AUTHOR_SEL      = ".review-card__header"
-DATE_SEL        = ".review-card__date"
-READ_MORE_SEL   = "button.review-card__read-more"
-MODAL_QUOTE_SEL = ".review-read-more-modal__quote"
-MODAL_CLOSE_SEL = ".global-modal__close-button-wrapper"
+# 리뷰 카드: c-siteReviewScore(점수박스)와 line-clamp-7(본문)을 둘 다 가진 최소 래퍼
+# _filter_leaf_cards 로 중첩 제거
+CARD_SEL        = "div:has(.c-siteReviewScore):has(.line-clamp-7)"
+
+# 본문: 실제 class에 md: 반응형 접두사 포함 → 첫 클래스만으로 매칭
+QUOTE_SEL       = "div.line-clamp-7"
+
+# 점수: span에 class 없음, 부모 div.c-siteReviewScore 기준으로 탐색
+SCORE_SEL       = "div.c-siteReviewScore span"
+
+# 작성자: 기존 셀렉터 유지 (inspector에서 확인됨)
+AUTHOR_SEL      = ".flex-1.truncate"
+
+# 날짜: 별도 DOM 요소 없음 → parse_card 에서 카드 텍스트 정규식으로 추출
+DATE_SEL        = None
+
+# Read More 버튼: 텍스트 "read more" 로 탐색 (class가 너무 길고 변동 가능)
+READ_MORE_SEL   = "button.global-button--dark.mt-2"
+
+# 모달 본문: inspector 에서 확인된 실제 클래스
+MODAL_QUOTE_SEL = "div.review-read-more-modal__quote"
+
+# 모달 닫기: aria-label 기반 (inspector 확인)
+MODAL_CLOSE_SEL = "button[aria-label='Close']"
+
+# 날짜 추출 정규식 (카드 전체 텍스트에서)
+_DATE_RE = re.compile(
+    r"\b(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)[A-Z]*\.?\s+\d{1,2},?\s+\d{4}\b",
+    re.IGNORECASE,
+)
 
 # ============================================================
 # 단일 리뷰 카드 파싱
@@ -225,8 +247,15 @@ async def parse_card(page, card, review_type_label: str) -> dict | None:
         score_el = await card.query_selector(SCORE_SEL)
         score = (await score_el.inner_text()).strip() if score_el else ""
 
-        date_el = await card.query_selector(DATE_SEL)
-        date = (await date_el.inner_text()).strip() if date_el else ""
+        # DATE_SEL=None: 카드 전체 텍스트에서 정규식으로 날짜 추출
+        date = ""
+        if DATE_SEL:
+            date_el = await card.query_selector(DATE_SEL)
+            date = (await date_el.inner_text()).strip() if date_el else ""
+        else:
+            card_text_for_date = (await card.inner_text()).strip()
+            m = _DATE_RE.search(card_text_for_date)
+            date = m.group(0).strip() if m else ""
 
         read_more_btn = await card.query_selector(READ_MORE_SEL)
         if read_more_btn:
@@ -235,9 +264,7 @@ async def parse_card(page, card, review_type_label: str) -> dict | None:
                 await page.wait_for_selector(MODAL_QUOTE_SEL, timeout=5000)
                 body_el = await page.query_selector(MODAL_QUOTE_SEL)
                 body = (await body_el.inner_text()).strip() if body_el else ""
-                close_btn = await page.query_selector(
-                    f"{MODAL_CLOSE_SEL}, button[aria-label='Close']"
-                )
+                close_btn = await page.query_selector(MODAL_CLOSE_SEL)
                 if close_btn:
                     await close_btn.click(timeout=2000)
                     await asyncio.sleep(0.3)
@@ -307,11 +334,10 @@ async def scrape_reviews_by_scroll(
 
     try:
         await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-        # 첫 카드가 렌더링될 때까지 대기 (최대 10초)
         try:
             await page.wait_for_selector(CARD_SEL, timeout=10000)
         except Exception:
-            print(f"  [{slug}] {type_label} 카드 셀렉터({CARD_SEL}) 대기 시간 초과")
+            print(f"  [{slug}] {type_label} 카드 셀렉터 대기 시간 초과")
         await page.wait_for_timeout(2000)
         print(f"  [{slug}] {type_label} 수집 시작 (목표: {max_count}개)")
 
@@ -323,7 +349,7 @@ async def scrape_reviews_by_scroll(
             cards = await _filter_leaf_cards(all_cards)
             total_cards = len(cards)
 
-            # 새로 로드된 카드만 처리
+            # 새로 추가된 카드만 처리 (DOM이 append 방식으로 증가함이 확인됨)
             for card in cards[processed_idx:]:
                 if len(reviews) >= max_count:
                     break
@@ -347,22 +373,12 @@ async def scrape_reviews_by_scroll(
             if len(reviews) >= max_count:
                 break
 
-            # 마지막 카드 위치로 마우스를 이동한 뒤 휠 스크롤
-            # virtual list는 window.scrollTo가 아닌 실제 wheel 이벤트로 트리거됨
-            if cards:
-                try:
-                    box = await cards[-1].bounding_box()
-                    if box:
-                        await page.mouse.move(
-                            box["x"] + box["width"] / 2,
-                            box["y"] + box["height"] / 2,
-                        )
-                        for _ in range(6):
-                            await page.mouse.wheel(0, 500)
-                            await asyncio.sleep(0.4)
-                        await asyncio.sleep(2)
-                except Exception:
-                    pass
+            # window.scrollBy: headless에서 mouse.wheel보다 안정적
+            # inspector scroll_test 에서 35→65로 DOM 증가 확인 (virtual list 아님)
+            await page.evaluate("window.scrollBy(0, 2000)")
+            await asyncio.sleep(0.5)
+            await page.evaluate("window.scrollBy(0, 2000)")
+            await asyncio.sleep(2.5)
 
             new_all = await page.query_selector_all(CARD_SEL)
             new_cards = await _filter_leaf_cards(new_all)
