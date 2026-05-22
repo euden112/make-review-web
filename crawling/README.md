@@ -53,14 +53,21 @@ python crawling/metacritic/metacritic_crawler.py
 
 ### 3단계 — 백엔드 전송
 
+크롤링은 **로컬 머신**에서 실행하고, 생성된 JSON 파일을 클라우드 서버로 옮겨 전송합니다.
+클라우드 서버는 외부 IP를 지원하지 않으므로, 로컬에서 직접 API를 호출할 수 없습니다.
+
+**파일 전송 방법 (웹 VSCode 이용):**
+
+1. 로컬에서 크롤러 실행 후 생성된 JSON 파일 확인
+   - `crawling/steam/*.json`
+   - `crawling/metacritic/*.json`
+2. 웹 VSCode 탐색기에서 해당 폴더에 우클릭 → **Upload...** 로 파일 업로드
+3. 클라우드 터미널에서 전송 스크립트 실행
+
 ```bash
-# 로컬 백엔드
+# 클라우드 터미널에서 실행
 python crawling/send_to_api.py steam
 python crawling/send_to_api.py metacritic
-
-# 클라우드 백엔드
-python crawling/send_to_api.py steam --host https://your-tunnel-url.trycloudflare.com
-python crawling/send_to_api.py metacritic --host https://your-tunnel-url.trycloudflare.com
 ```
 
 전송 성공한 파일은 자동으로 삭제됩니다. 실패한 파일은 남아있어 재실행 시 재전송됩니다.
