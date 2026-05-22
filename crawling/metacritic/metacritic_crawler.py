@@ -259,12 +259,15 @@ async def parse_card(page, card, review_type_label: str) -> dict | None:
             body_el = await card.query_selector(QUOTE_SEL)
             body = (await body_el.inner_text()).strip() if body_el else ""
 
+        raw_len = len(body)
         body = preprocess_body(body)
         if body is None:
+            print(f"      [skip] 본문 없음/짧음 (원본 {raw_len}자, score={score!r})")
             return None
 
         result = run_filter_pipeline(body)
         if not result.passed:
+            print(f"      [skip] 필터: {result.stage}/{result.reason} | {body[:60]!r}")
             return None
 
         return {
@@ -278,7 +281,8 @@ async def parse_card(page, card, review_type_label: str) -> dict | None:
             "review_categories": result.categories,
         }
 
-    except Exception:
+    except Exception as e:
+        print(f"      [skip] 파싱 예외: {e}")
         return None
 
 # ============================================================
@@ -303,6 +307,15 @@ async def _try_load_more(page) -> bool:
     return False
 
 
+async def _scroll_incremental(page) -> None:
+    """한 번에 바닥으로 점프하지 않고 한 화면씩 스크롤.
+    IntersectionObserver 기반 lazy-load 트리거에 효과적."""
+    for _ in range(4):
+        await page.evaluate("window.scrollBy(0, window.innerHeight)")
+        await asyncio.sleep(0.6)
+    await asyncio.sleep(1.5)
+
+
 async def scrape_reviews_by_scroll(
     context,
     slug: str,
@@ -315,6 +328,7 @@ async def scrape_reviews_by_scroll(
     reviews: list[dict] = []
     seen_bodies: set[str] = set()
     filtered_out = 0
+    deduplicated = 0
 
     try:
         await page.goto(url, wait_until="domcontentloaded", timeout=30000)
@@ -343,26 +357,22 @@ async def scrape_reviews_by_scroll(
                     if key not in seen_bodies:
                         seen_bodies.add(key)
                         reviews.append(parsed)
+                    else:
+                        deduplicated += 1
                 else:
                     filtered_out += 1
 
             processed_idx = total_cards
-            print(f"    카드 {total_cards}개 확인 | 수집 {len(reviews)}개 | 필터 제외 {filtered_out}개")
+            print(
+                f"    카드 {total_cards}개 | 수집 {len(reviews)}개 "
+                f"| 필터제외 {filtered_out}개 | 중복 {deduplicated}개"
+            )
 
             if len(reviews) >= max_count:
                 break
 
-            # 마지막 카드를 뷰포트 안으로 스크롤 (lazy-load 트리거)
-            if cards:
-                try:
-                    await cards[-1].scroll_into_view_if_needed()
-                    await asyncio.sleep(1)
-                except Exception:
-                    pass
-
-            # 페이지 맨 아래로 스크롤
-            await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            await asyncio.sleep(3)
+            # 한 화면씩 점진적으로 스크롤 (IntersectionObserver 트리거)
+            await _scroll_incremental(page)
 
             # "더보기" 버튼 시도
             await _try_load_more(page)
@@ -370,9 +380,12 @@ async def scrape_reviews_by_scroll(
             # 카드 수 변화 확인
             new_cards = await page.query_selector_all(CARD_SEL)
             if len(new_cards) == total_cards:
-                # 한 번 더 대기 후 재확인
-                await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                await asyncio.sleep(5)
+                # 마우스 휠로 재시도 (일부 사이트는 wheel 이벤트만 인식)
+                await page.mouse.move(960, 540)
+                for _ in range(6):
+                    await page.mouse.wheel(0, 800)
+                    await asyncio.sleep(0.4)
+                await asyncio.sleep(3)
                 new_cards = await page.query_selector_all(CARD_SEL)
 
             if len(new_cards) > total_cards:
