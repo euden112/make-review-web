@@ -9,6 +9,16 @@ from app.models.domain import Game, GamePlatformMap, Platform
 
 logger = logging.getLogger(__name__)
 
+# 모듈 레벨 클라이언트: 요청마다 생성하지 않고 재사용
+# timeout=30: 챗봇 응답 대기 최대 30초 (기본값 600초는 UX에 부적절)
+_groq_client: AsyncGroq | None = None
+
+def _get_groq_client(api_key: str) -> AsyncGroq:
+    global _groq_client
+    if _groq_client is None:
+        _groq_client = AsyncGroq(api_key=api_key, timeout=30.0)
+    return _groq_client
+
 SYSTEM_PROMPT_TEMPLATE = """당신은 게임 추천 전문가 챗봇입니다. 사용자가 좋아하거나 싫어하는 게임을 알려주면, 우리 데이터베이스에 있는 게임 목록에서 최적의 게임을 추천해줍니다.
 
 **현재 데이터베이스에 있는 게임 목록 (이 목록에 없는 게임은 절대 추천하지 마세요):**
@@ -73,7 +83,7 @@ async def get_recommendation(
 
     trimmed = messages[-MAX_HISTORY_MESSAGES:]
 
-    client = AsyncGroq(api_key=api_key)
+    client = _get_groq_client(api_key)
     try:
         response = await client.chat.completions.create(
             model=model,

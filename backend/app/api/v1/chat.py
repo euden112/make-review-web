@@ -24,6 +24,10 @@ class ChatResponse(BaseModel):
     reply: str
 
 
+_MAX_MESSAGES = 40          # 최대 메시지 수 (왕복 20회)
+_MAX_CONTENT_CHARS = 1000   # 메시지 1건당 최대 글자 수
+
+
 @router.post("/recommend", response_model=ChatResponse)
 async def recommend_games(
     body: ChatRequest,
@@ -32,6 +36,18 @@ async def recommend_games(
     """좋아하는/싫어하는 게임을 기반으로 게임 추천 (Groq API 사용)"""
     if not body.messages:
         raise HTTPException(status_code=400, detail="messages가 비어있습니다.")
+
+    if len(body.messages) > _MAX_MESSAGES:
+        raise HTTPException(status_code=400, detail=f"메시지 수가 너무 많습니다. (최대 {_MAX_MESSAGES}개)")
+
+    for msg in body.messages:
+        if len(msg.content) > _MAX_CONTENT_CHARS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"메시지가 너무 깁니다. (최대 {_MAX_CONTENT_CHARS}자)",
+            )
+        if msg.role not in ("user", "assistant"):
+            raise HTTPException(status_code=400, detail=f"유효하지 않은 role: {msg.role}")
 
     try:
         reply = await get_recommendation(

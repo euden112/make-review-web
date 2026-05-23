@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 
 const API_BASE = import.meta.env.VITE_API_BASE || ''
+const MAX_INPUT_CHARS = 1000
 
 const WELCOME_MESSAGE = {
   id: 'welcome',
@@ -23,7 +24,7 @@ export default function ChatBot({ isDark }) {
 
   const sendMessage = async () => {
     const text = input.trim()
-    if (!text || loading) return
+    if (!text || loading || text.length > MAX_INPUT_CHARS) return
 
     const userMessage = { id: crypto.randomUUID(), role: 'user', content: text }
     const nextMessages = [...messages, userMessage]
@@ -147,7 +148,7 @@ export default function ChatBot({ isDark }) {
               <textarea
                 rows={2}
                 value={input}
-                onChange={(e) => setInput(e.target.value)}
+                onChange={(e) => setInput(e.target.value.slice(0, MAX_INPUT_CHARS))}
                 onKeyDown={handleKeyDown}
                 placeholder="좋아하는/싫어하는 게임을 입력하세요..."
                 className={`flex-1 resize-none rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 ${inputBg}`}
@@ -161,9 +162,16 @@ export default function ChatBot({ isDark }) {
                 전송
               </button>
             </div>
-            <p className={`text-xs mt-1 ${isDark ? 'text-gray-500' : 'text-gray-400'}`}>
-              Enter로 전송 · Shift+Enter로 줄바꿈
-            </p>
+            <div className="flex items-center justify-between mt-1">
+              <p className={`text-xs ${isDark ? 'text-gray-500' : 'text-gray-400'}`}>
+                Enter로 전송 · Shift+Enter로 줄바꿈
+              </p>
+              {input.length > MAX_INPUT_CHARS * 0.8 && (
+                <p className={`text-xs ${input.length >= MAX_INPUT_CHARS ? 'text-red-500' : (isDark ? 'text-gray-500' : 'text-gray-400')}`}>
+                  {input.length}/{MAX_INPUT_CHARS}
+                </p>
+              )}
+            </div>
           </div>
         </div>
       )}
