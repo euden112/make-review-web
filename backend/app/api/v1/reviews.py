@@ -1,7 +1,8 @@
 import hashlib
+import re
 from datetime import datetime, timedelta
 from typing import Dict
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.dialects.postgresql import insert
@@ -14,6 +15,15 @@ from app.models.domain import Platform, ReviewType, Game, GamePlatformMap, Inges
 
 router = APIRouter()
 
+_BB_TAG = re.compile(r'\[/?[a-zA-Z0-9*=_\- ]+\]')
+
+def _clean_review_text(text: str | None) -> str | None:
+    if not text:
+        return text
+    text = _BB_TAG.sub(' ', text)
+    text = ' '.join(text.split())
+    return text or None
+
 def generate_review_key(*args):
     raw = "|".join(str(a) for a in args if a is not None)
     return hashlib.sha256(raw.encode('utf-8')).hexdigest()
@@ -21,7 +31,7 @@ def generate_review_key(*args):
 def parse_date(date_str: str, format_str: str):
     try:
         return datetime.strptime(date_str, format_str)
-    except:
+    except (ValueError, TypeError):
         return None
 
 async def get_reference_data(db: AsyncSession):
@@ -33,8 +43,27 @@ async def get_reference_data(db: AsyncSession):
 async def receive_metacritic_data(payload: Dict[str, MetacriticPayload], db: AsyncSession = Depends(get_db)):
     platforms, review_types = await get_reference_data(db)
     platform_id = platforms.get("metacritic")
+    if not platform_id:
+        raise HTTPException(status_code=500, detail="metacritic platform not configured in DB")
+
+    empty_games: list[str] = []
+    processed_games = 0
+    total_reviews = 0
+
+    if not any(game_data.reviews for game_data in payload.values()):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": "Metacritic payload에 저장 가능한 리뷰가 없습니다.",
+                "empty_games": list(payload.keys()),
+            },
+        )
 
     for slug, game_data in payload.items():
+        if not game_data.reviews:
+            empty_games.append(slug)
+            continue
+
         # 1. Game Upsert
         game_list_id = game_data.meta.game_list_id
         normalized_key = str(game_list_id) if game_list_id is not None else slug
@@ -94,6 +123,10 @@ async def receive_metacritic_data(payload: Dict[str, MetacriticPayload], db: Asy
                 except ValueError:
                     pass
 
+            clean_body = _clean_review_text(rev.body)
+            if not clean_body:
+                continue
+
             reviews_data.append({
                 "platform_id": platform_id,
                 "game_id": game_id,
@@ -103,7 +136,7 @@ async def receive_metacritic_data(payload: Dict[str, MetacriticPayload], db: Asy
                 "author_name": rev.author,
                 "score_raw": rev.score,
                 "normalized_score_100": normalized,
-                "review_text_clean": rev.body,
+                "review_text_clean": clean_body,
                 "helpful_count": getattr(rev, 'helpful_count', 0),
                 "source_meta_json": getattr(rev, 'source_meta_json', {}),
                 "review_categories_json": getattr(rev, 'review_categories', []),
@@ -114,27 +147,35 @@ async def receive_metacritic_data(payload: Dict[str, MetacriticPayload], db: Asy
             })
 
         # 5. ExternalReview 대량 저장 (Bulk Upsert)
-        if reviews_data:
-            stmt = insert(ExternalReview).values(reviews_data)
-            stmt = stmt.on_conflict_do_update(
-                index_elements=['platform_id', 'game_id', 'source_review_key'],
-                set_=dict(
-                    ingestion_run_id=stmt.excluded.ingestion_run_id,
-                    review_type_id=stmt.excluded.review_type_id,
-                    author_name=stmt.excluded.author_name,
-                    score_raw=stmt.excluded.score_raw,
-                    normalized_score_100=stmt.excluded.normalized_score_100,
-                    review_text_clean=stmt.excluded.review_text_clean,
-                    reviewed_at=stmt.excluded.reviewed_at,
-                    helpful_count=stmt.excluded.helpful_count,
-                    source_meta_json=func.coalesce(stmt.excluded.source_meta_json, ExternalReview.source_meta_json),
-                    review_categories_json=stmt.excluded.review_categories_json,
-                    language_code=stmt.excluded.language_code,
-                    is_deleted=False,
-                    updated_at=datetime.utcnow()
-                )
+        if not reviews_data:
+            run.status = "failed"
+            run.fetched_count = len(game_data.reviews)
+            run.inserted_count = 0
+            run.ended_at = datetime.utcnow()
+            await db.commit()
+            empty_games.append(slug)
+            continue
+
+        stmt = insert(ExternalReview).values(reviews_data)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=['platform_id', 'game_id', 'source_review_key'],
+            set_=dict(
+                ingestion_run_id=stmt.excluded.ingestion_run_id,
+                review_type_id=stmt.excluded.review_type_id,
+                author_name=stmt.excluded.author_name,
+                score_raw=stmt.excluded.score_raw,
+                normalized_score_100=stmt.excluded.normalized_score_100,
+                review_text_clean=stmt.excluded.review_text_clean,
+                reviewed_at=stmt.excluded.reviewed_at,
+                helpful_count=stmt.excluded.helpful_count,
+                source_meta_json=func.coalesce(stmt.excluded.source_meta_json, ExternalReview.source_meta_json),
+                review_categories_json=stmt.excluded.review_categories_json,
+                language_code=stmt.excluded.language_code,
+                is_deleted=False,
+                updated_at=datetime.utcnow()
             )
-            await db.execute(stmt)
+        )
+        await db.execute(stmt)
 
         # 6. IngestionRun 완료 기록
         run.status = "success"
@@ -142,8 +183,24 @@ async def receive_metacritic_data(payload: Dict[str, MetacriticPayload], db: Asy
         run.inserted_count = len(reviews_data)
         run.ended_at = datetime.utcnow()
         await db.commit()
+        processed_games += 1
+        total_reviews += len(reviews_data)
 
-    return {"status": "success", "message": f"Metacritic 데이터 {len(payload)}건 DB 저장 완료"}
+    if processed_games == 0:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": "Metacritic payload에 저장 가능한 리뷰가 없습니다.",
+                "empty_games": empty_games,
+            },
+        )
+
+    status = "partial" if empty_games else "success"
+    return {
+        "status": status,
+        "message": f"Metacritic 데이터 {processed_games}개 게임, {total_reviews}개 리뷰 DB 저장 완료",
+        "empty_games": empty_games,
+    }
 
 
 @router.post("/steam")
@@ -151,6 +208,10 @@ async def receive_steam_data(payload: Dict[str, SteamPayload], db: AsyncSession 
     platforms, review_types = await get_reference_data(db)
     platform_id = platforms.get("steam")
     user_type_id = review_types.get("user")
+    if not platform_id:
+        raise HTTPException(status_code=500, detail="steam platform not configured in DB")
+    if not user_type_id:
+        raise HTTPException(status_code=500, detail="user review_type not configured in DB")
 
     for slug, game_data in payload.items():
         # 1. Game Upsert

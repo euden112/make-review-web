@@ -45,9 +45,10 @@ async def mock_map_runner(**kwargs):
 
 
 async def mock_reduce_runner(**kwargs):
-    map_summaries = kwargs["map_summaries"]
+    grouped = kwargs.get("grouped_summaries", {})
+    all_summaries = grouped.get("all", [])
     one_liner = "Strong overall gameplay with occasional optimization complaints."
-    full_text = "\n".join(map_summaries[:5])
+    full_text = "\n".join(all_summaries[:5])
     return FinalSummary(
         one_liner=one_liner,
         aspect_scores={

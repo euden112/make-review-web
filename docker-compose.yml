@@ -19,7 +19,10 @@ services:
       - ./database/07_migration_sprint3_m005.sql:/docker-entrypoint-initdb.d/07_migration_sprint3_m005.sql
       - ./database/08_migration_sprint4.sql:/docker-entrypoint-initdb.d/08_migration_sprint4.sql
       - ./database/09_migration_sprint4_fixes.sql:/docker-entrypoint-initdb.d/09_migration_sprint4_fixes.sql
-      - ./database/10_migration_sprint6_fixes.sql:/docker-entrypoint-initdb.d/10_migration_sprint6_fixes.sql
+      - ./database/10_migration_sprint4_failure_stats.sql:/docker-entrypoint-initdb.d/10_migration_sprint4_failure_stats.sql
+      - ./database/10_migration_sprint6_fixes.sql:/docker-entrypoint-initdb.d/11_migration_sprint6_fixes.sql
+      - ./database/12_migration_one_liner_separation.sql:/docker-entrypoint-initdb.d/12_migration_one_liner_separation.sql
+      - ./database/13_migration_user_summary_split.sql:/docker-entrypoint-initdb.d/13_migration_user_summary_split.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s
@@ -50,6 +53,18 @@ services:
       - ollama_data:/root/.ollama
     environment:
       - OLLAMA_HOST=0.0.0.0:11434
+    # Note: Ollama requires significant resources.
+    # You may need to adjust docker memory settings.
+    # CPU 배포(학교 클라우드·로컬 CPU 테스트, plan-cpu-deployment §3 조치#3):
+    # GPU 예약 블록은 nvidia 런타임 부재 호스트에서 ollama 기동을 막는다.
+    # GPU 호스트에서 가속하려면 아래 블록의 주석을 해제할 것.
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
 
   backend:
     build:
@@ -62,7 +77,7 @@ services:
       - "8000:8000"
     volumes:
       - ./backend:/app
-      - ./ai-pipeline:/workspace/ai-pipeline
+      - .:/workspace
     environment:
       - DATABASE_URL=postgresql+asyncpg://postgres:password@postgres:5432/review_db
       - REDIS_URL=redis://redis:6379/0
@@ -70,10 +85,48 @@ services:
       - REDIS_PORT=6379
       - REDIS_DB=0
       - OLLAMA_BASE_URL=http://ollama:11434
-      - LOCAL_MAP_MODEL=gemma3:4b
+      # Map 모델: 벤치마크 기반 qwen2.5:1.5b 채택 (plan-cpu-deployment §2)
+      - LOCAL_MAP_MODEL=qwen2.5:1.5b
+      # CPU 배포: NUM_CTX=2048 → num_predict 400·chunker 안전 입력 자동 축소 (§3 조치#2)
+      - OLLAMA_NUM_CTX=2048
       - GROQ_API_KEY=${GROQ_API_KEY}
       - GROQ_MODEL=${GROQ_MODEL:-meta-llama/llama-4-scout-17b-16e-instruct}
-      - PYTHONPATH=/app:/workspace/ai-pipeline
+      - PYTHONPATH=/workspace/backend:/workspace/ai-pipeline:/workspace/crawling/steam
+    command: sh -c "pip install -r requirements.txt && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+
+  # 일일 잡 컨테이너 (기획서 9-3): 매일 17:05 UTC 정렬로
+  # 가격·여론 리프레셔 → AI 요약 배치 실행. API 프로세스와 격리해
+  # 응답 지연·잡 중복 실행(레이트리밋/Groq 한도 침해)을 방지한다.
+  # 단일 인스턴스로만 기동(scale 금지).
+  scheduler:
+    image: python:3.11-slim
+    container_name: capstone_scheduler
+    working_dir: /app
+    volumes:
+      - ./backend:/app
+      - .:/workspace
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:password@postgres:5432/review_db
+      - REDIS_URL=redis://redis:6379/0
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - OLLAMA_BASE_URL=http://ollama:11434
+      # Map 모델·CPU 컨텍스트 (plan-cpu-deployment §2·§3, backend와 동일)
+      - LOCAL_MAP_MODEL=qwen2.5:1.5b
+      - OLLAMA_NUM_CTX=2048
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - GROQ_MODEL=${GROQ_MODEL:-meta-llama/llama-4-scout-17b-16e-instruct}
+      - PYTHONPATH=/workspace/backend:/workspace/ai-pipeline:/workspace/crawling/steam
+    command: sh -c "pip install -r requirements.txt && python -m app.jobs.scheduler --loop"
+    restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy

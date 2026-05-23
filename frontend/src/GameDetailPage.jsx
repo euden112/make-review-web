@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import Navbar from './Navbar'
 
-const API_BASE = import.meta.env.VITE_API_BASE || ''
+const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8000'
 
 const CATEGORY_LABELS = {
   graphics: '그래픽',
@@ -24,6 +24,80 @@ function SentimentBadge({ value }) {
     <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${cfg.cls}`}>
       {cfg.label}
     </span>
+  )
+}
+
+const BUCKET_COLORS = {
+  early: { bar: '#6366f1', light: 'rgba(99,102,241,0.15)' },
+  mid:   { bar: '#f59e0b', light: 'rgba(245,158,11,0.15)' },
+  late:  { bar: '#10b981', light: 'rgba(16,185,129,0.15)' },
+}
+
+function PlaytimeBarChart({ buckets, isDark }) {
+  const keys = ['early', 'mid', 'late']
+  const available = keys.filter(k => buckets?.[k]?.data_available)
+  if (available.length === 0) return null
+
+  const W = 420, H = 160, PAD = { top: 12, right: 16, bottom: 40, left: 44 }
+  const inner = { w: W - PAD.left - PAD.right, h: H - PAD.top - PAD.bottom }
+  const barW = Math.floor(inner.w / keys.length * 0.45)
+  const gap = inner.w / keys.length
+  const stroke = isDark ? '#3a3a5e' : '#e5e7eb'
+  const axisColor = isDark ? '#6b7280' : '#9ca3af'
+
+  const gridLines = [0, 25, 50, 75, 100]
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full max-w-md" style={{ maxHeight: 160 }}>
+      <rect x={0} y={0} width={W} height={H} fill="transparent" />
+      {gridLines.map(v => {
+        const y = PAD.top + inner.h - (v / 100) * inner.h
+        return (
+          <g key={v}>
+            <line x1={PAD.left} y1={y} x2={PAD.left + inner.w} y2={y} stroke={stroke} strokeWidth={1} strokeDasharray={v === 0 ? '0' : '3,3'} />
+            <text x={PAD.left - 6} y={y + 4} textAnchor="end" fontSize={9} fill={axisColor}>{v}%</text>
+          </g>
+        )
+      })}
+
+      {keys.map((k, i) => {
+        const d = buckets?.[k]
+        const score = d?.data_available ? (d.sentiment_score ?? 0) : 0
+        const cx = PAD.left + gap * i + gap / 2
+        const barH = (score / 100) * inner.h
+        const barY = PAD.top + inner.h - barH
+        const col = BUCKET_COLORS[k]
+        const sentiment = d?.sentiment_overall
+        const barColor = sentiment === 'positive' ? '#22c55e' : sentiment === 'negative' ? '#ef4444' : col.bar
+
+        return (
+          <g key={k}>
+            <rect
+              x={cx - barW / 2} y={PAD.top + inner.h}
+              width={barW} height={0}
+              fill={col.light} rx={3}
+            />
+            {d?.data_available && (
+              <>
+                <rect x={cx - barW / 2} y={barY} width={barW} height={barH} fill={barColor} rx={3} opacity={0.85} />
+                <text x={cx} y={barY - 4} textAnchor="middle" fontSize={10} fontWeight="bold" fill={barColor}>
+                  {score.toFixed(0)}%
+                </text>
+              </>
+            )}
+            {!d?.data_available && (
+              <text x={cx} y={PAD.top + inner.h / 2} textAnchor="middle" fontSize={9} fill={axisColor}>데이터 없음</text>
+            )}
+            <text x={cx} y={PAD.top + inner.h + 14} textAnchor="middle" fontSize={9} fill={axisColor}>
+              {d?.label?.split(' ')[0] || k}
+            </text>
+            <text x={cx} y={PAD.top + inner.h + 26} textAnchor="middle" fontSize={8} fill={axisColor}>
+              {d?.label?.replace(/^[^\s]+\s/, '') || ''}
+            </text>
+          </g>
+        )
+      })}
+    </svg>
   )
 }
 
@@ -89,45 +163,168 @@ function PlaytimeBucketCard({ bucket, data }) {
   )
 }
 
-function RepresentativeReviewSection({ title, reviews, emptyMessage }) {
+function ReviewCard({ review, translation, translating }) {
+  const [showOriginal, setShowOriginal] = useState(false)
+  const [expanded, setExpanded] = useState(false)
+
+  const quote = typeof review === 'string' ? review : review?.quote || review?.summary || ''
+  const reason = typeof review === 'string' ? '' : review?.reason || ''
+  const source = typeof review === 'string' ? '' : review?.source || ''
+  const reviewId = typeof review === 'string' ? '' : review?.review_id
+
+  const displayText = showOriginal ? quote : (translation || quote)
+  const hasTranslation = !!translation && translation !== quote
+  const isLong = displayText.length > 420
+
+  return (
+    <div className="rounded-lg border border-gray-200 dark:border-[#3a3a5e] bg-gray-50 dark:bg-[#2a2a3e] p-4">
+      <div className="flex flex-wrap items-center gap-2 mb-2">
+        {source && (
+          <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-300 border border-blue-200 dark:border-blue-700">
+            {source}
+          </span>
+        )}
+        {reviewId !== undefined && reviewId !== null && (
+          <span className="text-[11px] text-gray-400 dark:text-gray-500">
+            #{reviewId}
+          </span>
+        )}
+        <div className="ml-auto">
+          {translating && !translation && (
+            <span className="text-[11px] text-gray-400 dark:text-gray-500 animate-pulse">번역 중...</span>
+          )}
+          {hasTranslation && (
+            <button
+              onClick={() => setShowOriginal(p => !p)}
+              className="text-[11px] text-blue-500 dark:text-blue-400 hover:underline bg-transparent border-none cursor-pointer"
+            >
+              {showOriginal ? '번역 보기' : '원문 보기'}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {quote && (
+        <p className={`text-sm leading-relaxed text-gray-700 dark:text-[#cccccc] ${!expanded && isLong ? 'line-clamp-6' : ''}`}>
+          {displayText}
+        </p>
+      )}
+
+      {isLong && (
+        <button
+          onClick={() => setExpanded(p => !p)}
+          className="mt-2 text-[11px] text-blue-500 dark:text-blue-400 hover:underline bg-transparent border-none cursor-pointer"
+        >
+          {expanded ? '접기' : '전체 보기'}
+        </button>
+      )}
+
+      {!showOriginal && translation && translation !== quote && (
+        <p className="text-[11px] text-gray-400 dark:text-gray-500 mt-1">AI 번역</p>
+      )}
+
+      {reason && (
+        <p className="text-xs text-gray-400 dark:text-gray-500 mt-2">
+          {reason}
+        </p>
+      )}
+    </div>
+  )
+}
+
+function PointList({ title, items, color }) {
+  if (!items?.length) return null
+  return (
+    <div className="mt-4">
+      <p className="text-xs font-bold text-gray-500 dark:text-gray-400 mb-2">{title}</p>
+      <ul className="flex flex-col gap-1.5">
+        {items.slice(0, 4).map((item, idx) => (
+          <li key={idx} className="text-xs leading-relaxed text-gray-600 dark:text-[#aaaaaa] flex gap-1.5">
+            <span className="shrink-0" style={{ color }}>{color === '#22c55e' ? '+' : '-'}</span>
+            {item}
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+function SummaryCard({ title, data, emptyMessage }) {
+  return (
+    <div className="bg-white dark:bg-[#1e1e2e] rounded-xl p-7 border border-gray-200 dark:border-[#2a2a3e] shadow-sm">
+      <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0] mb-3">{title}</h2>
+      {data?.summary ? (
+        <>
+          <div className="flex items-center gap-2 mb-3">
+            <SentimentBadge value={data.sentiment_overall} />
+            {data.sentiment_score != null && (
+              <span className="text-xs text-gray-500 dark:text-gray-400">
+                점수: {data.sentiment_score.toFixed(0)}%
+              </span>
+            )}
+          </div>
+          <p className="text-sm leading-relaxed text-gray-700 dark:text-[#cccccc]">
+            {data.summary}
+          </p>
+          <PointList title="주요 호평" items={data.pros} color="#22c55e" />
+          <PointList title="주의할 점" items={data.cons} color="#ef4444" />
+        </>
+      ) : (
+        <p className="text-sm text-gray-400 dark:text-gray-500">{emptyMessage}</p>
+      )}
+    </div>
+  )
+}
+
+function RecommendationTargetsSection({ recommendations }) {
+  if (!recommendations?.length) return null
+
+  return (
+    <div className="bg-white dark:bg-[#1e1e2e] rounded-xl p-7 border border-gray-200 dark:border-[#2a2a3e] shadow-sm">
+      <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0] mb-1">이런 사람에게 추천</h2>
+      <p className="text-xs text-gray-400 dark:text-gray-500 mb-4">
+        리뷰에서 반복된 긍정 근거를 바탕으로 정리한 추천 대상
+      </p>
+      <div className="grid grid-cols-2 gap-3">
+        {recommendations.map((item, idx) => (
+          <div key={`${item.category}-${idx}`} className="rounded-lg bg-gray-50 dark:bg-[#2a2a3e] border border-gray-200 dark:border-[#3a3a5e] p-4">
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <h3 className="text-sm font-bold text-gray-800 dark:text-[#e0e0e0]">{item.label}</h3>
+              {item.category && (
+                <span className="text-[11px] px-2 py-0.5 rounded-full bg-blue-50 dark:bg-[#1a2a4a] text-blue-600 dark:text-blue-300 border border-blue-200 dark:border-blue-700">
+                  {CATEGORY_LABELS[item.category] || item.category}
+                </span>
+              )}
+            </div>
+            <p className="text-xs leading-relaxed text-gray-600 dark:text-[#aaaaaa]">
+              {item.summary}
+            </p>
+            {item.evidence_count > 0 && (
+              <p className="text-[11px] text-gray-400 dark:text-gray-500 mt-3">
+                긍정 근거 {item.evidence_count}건
+              </p>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function RepresentativeReviewSection({ title, reviews, translations, translating, emptyMessage }) {
   return (
     <div className="bg-white dark:bg-[#1e1e2e] rounded-xl p-7 border border-gray-200 dark:border-[#2a2a3e] shadow-sm">
       <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0] mb-3">{title}</h2>
       {reviews && reviews.length > 0 ? (
         <div className="grid gap-3">
-          {reviews.map((review, idx) => {
-            const quote = typeof review === 'string' ? review : review?.quote || review?.summary || ''
-            const reason = typeof review === 'string' ? '' : review?.reason || ''
-            const source = typeof review === 'string' ? '' : review?.source || ''
-            const reviewId = typeof review === 'string' ? '' : review?.review_id
-
-            return (
-              <div key={idx} className="rounded-lg border border-gray-200 dark:border-[#3a3a5e] bg-gray-50 dark:bg-[#2a2a3e] p-4">
-                <div className="flex flex-wrap items-center gap-2 mb-2">
-                  {source && (
-                    <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-300 border border-blue-200 dark:border-blue-700">
-                      {source}
-                    </span>
-                  )}
-                  {reviewId !== undefined && reviewId !== null && (
-                    <span className="text-[11px] text-gray-400 dark:text-gray-500">
-                      review_id: {reviewId}
-                    </span>
-                  )}
-                </div>
-                {quote && (
-                  <p className="text-sm leading-relaxed text-gray-700 dark:text-[#cccccc]">
-                    {quote}
-                  </p>
-                )}
-                {reason && (
-                  <p className="text-xs text-gray-400 dark:text-gray-500 mt-2">
-                    {reason}
-                  </p>
-                )}
-              </div>
-            )
-          })}
+          {reviews.map((review, idx) => (
+            <ReviewCard
+              key={idx}
+              review={review}
+              translation={translations?.[idx]}
+              translating={translating}
+            />
+          ))}
         </div>
       ) : (
         <p className="text-sm text-gray-400 dark:text-gray-500">{emptyMessage}</p>
@@ -153,6 +350,58 @@ function groupRepresentativeReviews(reviews) {
   return grouped
 }
 
+function formatWon(value) {
+  if (value == null || Number(value) <= 0) return '정보 없음'
+  return `₩${Number(value).toLocaleString()}`
+}
+
+function formatDisplayItemValue(item) {
+  if (!item) return ''
+  if (item.text) return item.text
+  if (item.unit === 'KRW') return formatWon(item.value)
+  if (item.unit === 'percent') return item.value > 0 ? `${item.value}% 할인 중` : '현재 할인 없음'
+  if (item.unit === 'ratio' && item.value != null) return `${(item.value * 100).toFixed(0)}%`
+  return item.value ?? ''
+}
+
+function buySignalDisplayItems(signal) {
+  if (!signal) return []
+  if (Array.isArray(signal.display_items) && signal.display_items.length > 0) {
+    return signal.display_items
+  }
+
+  const items = [
+    {
+      type: 'current_price',
+      label: '현재 가격',
+      value: signal.final_price ?? signal.original_price,
+      unit: 'KRW',
+      always_show: true,
+    },
+    {
+      type: 'discount',
+      label: '할인 정보',
+      value: signal.discount_percent ?? 0,
+      unit: 'percent',
+      always_show: true,
+    },
+  ]
+  if (signal.show_positive_ratio && signal.positive_ratio != null) {
+    items.push({
+      type: 'positive_ratio',
+      label: '긍정 비율',
+      value: signal.positive_ratio,
+      delta: signal.positive_delta,
+      unit: 'ratio',
+      text: signal.positive_delta != null
+        ? `최근 긍정 비율 ${(signal.positive_ratio * 100).toFixed(0)}% (+${(signal.positive_delta * 100).toFixed(0)}%p)`
+        : `최근 긍정 비율 ${(signal.positive_ratio * 100).toFixed(0)}%`,
+      always_show: false,
+    })
+  }
+  return items
+}
+
 function GameDetailPage({ isDark, toggleDark }) {
   const { id } = useParams()
   const navigate = useNavigate()
@@ -161,6 +410,10 @@ function GameDetailPage({ isDark, toggleDark }) {
   const [summary, setSummary] = useState(null)
   const [playtimeAnalysis, setPlaytimeAnalysis] = useState(null)
   const [criticSummary, setCriticSummary] = useState(null)
+  const [userSummary, setUserSummary] = useState(null)
+  const [buySignal, setBuySignal] = useState(null)
+  const [recommendationTargets, setRecommendationTargets] = useState(null)
+  const [reviewTranslations, setReviewTranslations] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
@@ -176,28 +429,47 @@ function GameDetailPage({ isDark, toggleDark }) {
       setError(null)
 
       try {
-        const gamesRes = await fetch(`${API_BASE}/api/v1/games/`)
+        const [gamesRes, summaryRes, playtimeRes, criticRes, userRes, buySignalRes, recommendationRes] = await Promise.all([
+          fetch(`${API_BASE}/api/v1/games/`),
+          fetch(`${API_BASE}/api/v1/games/${id}/summary`),
+          fetch(`${API_BASE}/api/v1/games/${id}/playtime-analysis`),
+          fetch(`${API_BASE}/api/v1/games/${id}/critic-summary`),
+          fetch(`${API_BASE}/api/v1/games/${id}/user-summary`).catch(() => null),
+          fetch(`${API_BASE}/api/v1/games/${id}/buy-signal`).catch(() => null),
+          fetch(`${API_BASE}/api/v1/games/${id}/recommendation-targets?limit=4`).catch(() => null),
+        ])
+
         if (gamesRes.ok) {
           const gamesData = await gamesRes.json()
           const found = gamesData.find(g => g.id === parseInt(id))
           setGame(found || null)
         }
 
-        const summaryRes = await fetch(`${API_BASE}/api/v1/games/${id}/summary`)
         if (summaryRes.ok) {
           setSummary(await summaryRes.json())
         } else if (summaryRes.status === 404) {
           setError('아직 AI 요약본이 없습니다.')
         }
 
-        const playtimeRes = await fetch(`${API_BASE}/api/v1/games/${id}/playtime-analysis`)
         if (playtimeRes.ok) {
           setPlaytimeAnalysis(await playtimeRes.json())
         }
 
-        const criticRes = await fetch(`${API_BASE}/api/v1/games/${id}/critic-summary`)
         if (criticRes.ok) {
           setCriticSummary(await criticRes.json())
+        }
+
+        if (userRes?.ok) {
+          setUserSummary(await userRes.json())
+        }
+
+
+        if (buySignalRes?.ok) {
+          setBuySignal(await buySignalRes.json())
+        }
+
+        if (recommendationRes?.ok) {
+          setRecommendationTargets(await recommendationRes.json())
         }
       } catch {
         setError('서버에 연결할 수 없습니다.')
@@ -208,6 +480,32 @@ function GameDetailPage({ isDark, toggleDark }) {
 
     fetchData()
   }, [id])
+
+  useEffect(() => {
+    if (!summary?.representative_reviews?.length) return
+
+    const grouped = groupRepresentativeReviews(summary.representative_reviews)
+    const steamQuotes = grouped.steam.slice(0, 3).map(r => (typeof r === 'string' ? r : r?.quote || r?.summary || ''))
+    const criticQuotes = grouped.metacritic.slice(0, 3).map(r => (typeof r === 'string' ? r : r?.quote || r?.summary || ''))
+    const allQuotes = [...steamQuotes, ...criticQuotes].filter(Boolean)
+
+    if (!allQuotes.length) return
+
+    fetch(`${API_BASE}/api/v1/translate/batch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ texts: allQuotes }),
+    })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        const steamTr = data?.translations?.slice(0, steamQuotes.length) ?? []
+        const criticTr = data?.translations?.slice(steamQuotes.length) ?? []
+        setReviewTranslations({ steam: steamTr, metacritic: criticTr })
+      })
+      .catch(() => setReviewTranslations({ steam: [], metacritic: [] }))
+  }, [summary])
+
+  const translating = !!summary?.representative_reviews?.length && reviewTranslations === null
 
   if (!game && !loading) return <div className="p-10">게임을 찾을 수 없습니다.</div>
 
@@ -227,7 +525,13 @@ function GameDetailPage({ isDark, toggleDark }) {
           />
         )}
 
-        <div className="absolute top-4 right-6 z-10">
+        <div className="absolute top-4 right-6 z-10 flex items-center gap-4">
+          <button
+            onClick={() => navigate('/', { state: { compareId: parseInt(id) } })}
+            className="text-white/70 text-xs cursor-pointer hover:text-white transition-colors bg-transparent border border-white/20 hover:border-white/50 rounded-lg px-3 py-1.5"
+          >
+            ⇄ 다른 게임과 비교
+          </button>
           <span
             onClick={() => navigate('/')}
             className="text-white/70 text-xs cursor-pointer hover:text-white transition-colors"
@@ -248,6 +552,24 @@ function GameDetailPage({ isDark, toggleDark }) {
             {game?.canonical_title || ''}
           </h1>
 
+          {buySignal?.is_good_timing && (
+            <div className="flex items-center gap-2 mb-3 flex-wrap">
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black"
+                style={{ background: 'rgba(34,197,94,0.2)', color: '#22c55e', border: '1px solid rgba(34,197,94,0.4)' }}>
+                ✦ 지금이 적기
+              </span>
+              {buySignal.discount_percent > 0 && (
+                <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-black"
+                  style={{ background: '#ef4444', color: '#fff' }}>
+                  -{buySignal.discount_percent}%
+                </span>
+              )}
+              {buySignal.reasons?.slice(0, 2).map((r, i) => (
+                <span key={i} className="text-xs text-white/70">{r}</span>
+              ))}
+            </div>
+          )}
+
           {game?.rating != null && (
             <div className="flex items-center gap-2 mb-4">
               <span className="text-xl font-extrabold" style={{ color: '#ffb020' }}>
@@ -264,9 +586,9 @@ function GameDetailPage({ isDark, toggleDark }) {
             </div>
           )}
 
-          {summary && (
+          {summary && (summary.one_liner || summary.summary_text) && (
             <p className="text-sm leading-relaxed max-w-xl" style={{ color: '#e6edf8' }}>
-              {summary.summary_text?.split('\n')[0]?.replace(/\*\*/g, '')}
+              {summary.one_liner ?? summary.summary_text?.split('\n')[0]?.replace(/\*\*/g, '')}
             </p>
           )}
         </div>
@@ -287,22 +609,35 @@ function GameDetailPage({ isDark, toggleDark }) {
 
         {!loading && summary && (
           <>
-            {/* 전체 요약 */}
-            <div className="bg-white dark:bg-[#1e1e2e] rounded-xl p-7 border border-gray-200 dark:border-[#2a2a3e] shadow-sm">
-              <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0] mb-3">AI 종합 요약</h2>
-              <p className="text-sm leading-relaxed text-gray-700 dark:text-[#cccccc]">
-                {summary.summary_text?.replace(/\*\*/g, '')}
-              </p>
-              {summary.keywords && summary.keywords.length > 0 && (
-                <div className="flex flex-wrap gap-2 mt-4">
+            {/* 키워드 (태그) 별도 섹션 — AI 종합 요약은 유저 리뷰 요약과 중복이라 제거 */}
+            {summary.keywords && summary.keywords.length > 0 && (
+              <div className="bg-white dark:bg-[#1e1e2e] rounded-xl p-7 border border-gray-200 dark:border-[#2a2a3e] shadow-sm">
+                <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0] mb-3">키워드</h2>
+                <div className="flex flex-wrap gap-2">
                   {summary.keywords.map((kw, i) => (
                     <span key={i} className="text-xs px-2 py-1 rounded-full bg-blue-50 dark:bg-[#1a2a4a] text-blue-600 dark:text-blue-300 border border-blue-200 dark:border-blue-700">
                       {kw}
                     </span>
                   ))}
                 </div>
-              )}
-            </div>
+              </div>
+            )}
+
+            {/* ── B안: user/critic 분리 2단 블록 (unified 본문 폐지) ── */}
+            {(userSummary?.summary || criticSummary?.summary) && (
+              <div className="grid grid-cols-2 gap-6">
+                <SummaryCard
+                  title="유저 리뷰 요약"
+                  data={userSummary}
+                  emptyMessage="유저 리뷰 데이터가 없습니다."
+                />
+                <SummaryCard
+                  title="비평가 리뷰 요약"
+                  data={criticSummary}
+                  emptyMessage="비평가 리뷰 데이터가 없습니다."
+                />
+              </div>
+            )}
 
             {/* 플랫폼별 대표 리뷰 */}
             <div className="bg-white dark:bg-[#1e1e2e] rounded-xl p-7 border border-gray-200 dark:border-[#2a2a3e] shadow-sm">
@@ -315,11 +650,15 @@ function GameDetailPage({ isDark, toggleDark }) {
                       <RepresentativeReviewSection
                         title="Steam 대표 리뷰"
                         reviews={groupedReviews.steam.slice(0, 3)}
+                        translations={reviewTranslations?.steam}
+                        translating={translating}
                         emptyMessage="Steam 대표 리뷰가 없습니다."
                       />
                       <RepresentativeReviewSection
                         title="Metacritic 대표 리뷰"
                         reviews={groupedReviews.metacritic.slice(0, 3)}
+                        translations={reviewTranslations?.metacritic}
+                        translating={translating}
                         emptyMessage="Metacritic 대표 리뷰가 없습니다."
                       />
                     </>
@@ -414,87 +753,104 @@ function GameDetailPage({ isDark, toggleDark }) {
             {!playtimeAnalysis ? (
               <p className="text-sm text-gray-400 dark:text-gray-500">플레이타임 분석 데이터가 없습니다.</p>
             ) : (
-              <div className="flex gap-4">
-                {['early', 'mid', 'late'].map(bucket => (
-                  <PlaytimeBucketCard
-                    key={bucket}
-                    bucket={bucket}
-                    data={playtimeAnalysis.buckets?.[bucket]}
-                  />
-                ))}
+              <div className="flex flex-col gap-6">
+                <div className="flex items-end gap-8">
+                  <PlaytimeBarChart buckets={playtimeAnalysis.buckets} isDark={isDark} />
+                  <div className="flex flex-col gap-1 text-xs text-gray-400 dark:text-gray-500 pb-8">
+                    <span className="flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-sm bg-green-500" /> 긍정적</span>
+                    <span className="flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-sm bg-red-500" /> 부정적</span>
+                    <span className="flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-sm bg-amber-400" /> 중립</span>
+                  </div>
+                </div>
+                <div className="flex gap-4">
+                  {['early', 'mid', 'late'].map(bucket => (
+                    <PlaytimeBucketCard
+                      key={bucket}
+                      bucket={bucket}
+                      data={playtimeAnalysis.buckets?.[bucket]}
+                    />
+                  ))}
+                </div>
               </div>
             )}
           </div>
         )}
 
-        {/* ── Sprint 4: 비평가 반응 ── */}
-        {!loading && (
-          <div className="bg-white dark:bg-[#1e1e2e] rounded-xl p-7 border border-gray-200 dark:border-[#2a2a3e] shadow-sm">
-            <div className="flex items-center justify-between mb-1">
-              <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0]">비평가 반응</h2>
-              {criticSummary && (
-                <span className="text-xs text-gray-400 dark:text-gray-500">출시 당시 전문가 반응</span>
+        {/* ── 구매 타이밍 시그널 ── */}
+        {!loading && buySignal && (
+          <div className={`rounded-xl p-7 border shadow-sm ${
+            buySignal.is_good_timing
+              ? 'bg-green-50 dark:bg-[#0d2a1a] border-green-200 dark:border-green-800'
+              : 'bg-white dark:bg-[#1e1e2e] border-gray-200 dark:border-[#2a2a3e]'
+          }`}>
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0] flex items-center gap-2">
+                구매 타이밍
+                {buySignal.is_good_timing && (
+                  <span className="text-xs px-2 py-0.5 rounded-full font-black"
+                    style={{ background: 'rgba(34,197,94,0.15)', color: '#22c55e', border: '1px solid rgba(34,197,94,0.35)' }}>
+                    ✦ 지금이 적기
+                  </span>
+                )}
+              </h2>
+              {buySignal.discount_percent > 0 && (
+                <span className="text-sm font-black px-3 py-1 rounded-full"
+                  style={{ background: '#ef4444', color: '#fff' }}>
+                  -{buySignal.discount_percent}% 할인 중
+                </span>
               )}
             </div>
 
-            {!criticSummary ? (
-              <p className="text-sm text-gray-400 dark:text-gray-500">비평가 리뷰 데이터가 없습니다.</p>
-            ) : (
-              <div className="flex flex-col gap-4 mt-3">
-                <div className="flex items-center gap-3">
-                  <SentimentBadge value={criticSummary.sentiment_overall} />
-                  {criticSummary.sentiment_score !== null && (
-                    <span className="text-sm text-gray-500 dark:text-gray-400">
-                      점수: {criticSummary.sentiment_score.toFixed(0)}%
-                    </span>
-                  )}
-                </div>
-
-                {criticSummary.summary && (
-                  <p className="text-sm leading-relaxed text-gray-700 dark:text-[#cccccc]">
-                    {criticSummary.summary}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              {buySignalDisplayItems(buySignal).map((item) => (
+                <div
+                  key={item.type}
+                  className="rounded-lg bg-white/70 dark:bg-[#2a2a3e] border border-gray-200 dark:border-[#3a3a5e] px-4 py-3"
+                >
+                  <p className="text-[11px] font-bold text-gray-400 dark:text-gray-500 mb-1">
+                    {item.label}
                   </p>
-                )}
-
-                <div className="grid grid-cols-2 gap-4">
-                  {criticSummary.pros?.length > 0 && (
-                    <div>
-                      <p className="text-xs font-bold text-green-600 dark:text-green-400 mb-1">장점</p>
-                      <ul className="flex flex-col gap-1">
-                        {criticSummary.pros.map((p, i) => (
-                          <li key={i} className="text-xs text-gray-600 dark:text-[#aaaaaa] flex gap-1">
-                            <span className="text-green-500 shrink-0">•</span> {p}
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                  {criticSummary.cons?.length > 0 && (
-                    <div>
-                      <p className="text-xs font-bold text-red-500 dark:text-red-400 mb-1">단점</p>
-                      <ul className="flex flex-col gap-1">
-                        {criticSummary.cons.map((c, i) => (
-                          <li key={i} className="text-xs text-gray-600 dark:text-[#aaaaaa] flex gap-1">
-                            <span className="text-red-400 shrink-0">•</span> {c}
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
+                  <p className={`text-sm font-black ${
+                    item.type === 'positive_ratio' || (item.type === 'discount' && item.value > 0)
+                      ? 'text-green-600 dark:text-green-400'
+                      : 'text-gray-900 dark:text-[#e0e0e0]'
+                  }`}>
+                    {formatDisplayItemValue(item)}
+                  </p>
+                  {item.type === 'current_price'
+                    && buySignal.original_price != null
+                    && buySignal.discount_percent > 0
+                    && buySignal.original_price !== (buySignal.final_price ?? buySignal.original_price) && (
+                    <p className="text-[11px] text-gray-400 line-through mt-1">
+                      {formatWon(buySignal.original_price)}
+                    </p>
                   )}
                 </div>
+              ))}
+            </div>
 
-                {criticSummary.keywords?.length > 0 && (
-                  <div className="flex flex-wrap gap-2">
-                    {criticSummary.keywords.map((kw, i) => (
-                      <span key={i} className="text-xs px-2 py-0.5 rounded-full bg-purple-50 dark:bg-purple-900/20 text-purple-600 dark:text-purple-300 border border-purple-200 dark:border-purple-700">
-                        {kw}
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
+            {/* BUG-3: 세일 카운트다운 미제공 → 스냅샷 시각 + 스토어 확인 헤지 */}
+            <div className="mt-4 pt-3 border-t border-gray-200 dark:border-[#2a2a3e] flex flex-wrap items-center justify-between gap-2">
+              {buySignal.price_as_of && (
+                <span className="text-xs text-gray-400">
+                  가격 기준 {new Date(buySignal.price_as_of).toLocaleString('ko-KR')}
+                  {buySignal.price_is_stale && ' · 최신이 아닐 수 있음'}
+                </span>
+              )}
+              {buySignal.store_url && (
+                <a href={buySignal.store_url} target="_blank" rel="noopener noreferrer"
+                  className="text-xs font-bold text-blue-600 dark:text-blue-400 hover:underline">
+                  최종 가격은 Steam에서 확인 →
+                </a>
+              )}
+            </div>
           </div>
+        )}
+
+        {!loading && (
+          <RecommendationTargetsSection
+            recommendations={recommendationTargets?.recommendations}
+          />
         )}
       </div>
     </div>

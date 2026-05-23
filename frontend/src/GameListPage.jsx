@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import Navbar from './Navbar'
 
-const API_BASE = import.meta.env.VITE_API_BASE || ''
+const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8000'
 
 function HeroBanner({ games }) {
   const [current, setCurrent] = useState(0)
@@ -238,21 +238,39 @@ function StarRating({ rating }) {
   )
 }
 
-function GameCard({ game, onClick }) {
+function GameCard({ game, onClick, isSelected, onToggleCompare, compareDisabled, buySignal }) {
   const [hovered, setHovered] = useState(false)
 
   return (
     <div
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
-      className={`bg-white dark:bg-[#1e1e2e] rounded-lg overflow-hidden border border-gray-200 dark:border-[#2a2a3e] flex flex-row h-36 cursor-pointer transition-all duration-200 ${hovered ? 'shadow-lg -translate-y-0.5' : 'shadow-sm'}`}
+      className={`bg-white dark:bg-[#1e1e2e] rounded-lg overflow-hidden border flex flex-row h-36 cursor-pointer transition-all duration-200 ${
+        isSelected
+          ? 'border-blue-500 shadow-md shadow-blue-500/20'
+          : hovered ? 'border-gray-300 dark:border-[#3a3a5e] shadow-lg -translate-y-0.5' : 'border-gray-200 dark:border-[#2a2a3e] shadow-sm'
+      }`}
     >
-      <div className="w-24 min-w-[95px] bg-gray-100 dark:bg-[#2a2a3e] flex items-center justify-center">
+      <div className="w-24 min-w-[95px] bg-gray-100 dark:bg-[#2a2a3e] flex items-center justify-center relative">
         {game.cover_image ? (
           <img src={game.cover_image} alt={game.canonical_title} className="w-full h-full object-cover" />
         ) : (
           <span className="text-gray-400 text-xs">No Image</span>
         )}
+        <button
+          onClick={e => { e.stopPropagation(); onToggleCompare(game.id) }}
+          disabled={compareDisabled && !isSelected}
+          title={isSelected ? '비교에서 제거' : '비교에 추가'}
+          className={`absolute top-1.5 right-1.5 w-5 h-5 rounded-full border-2 flex items-center justify-center text-[10px] font-black transition-colors cursor-pointer ${
+            isSelected
+              ? 'bg-blue-500 border-blue-500 text-white'
+              : compareDisabled
+                ? 'bg-gray-200 dark:bg-[#2a2a3e] border-gray-300 dark:border-[#3a3a5e] text-gray-400 cursor-not-allowed'
+                : 'bg-white dark:bg-[#1e1e2e] border-gray-300 dark:border-[#3a3a5e] text-gray-400 hover:border-blue-400 hover:text-blue-400'
+          }`}
+        >
+          {isSelected ? '✓' : '+'}
+        </button>
       </div>
 
       <div className="p-3 flex flex-col justify-between flex-1 overflow-hidden">
@@ -261,11 +279,19 @@ function GameCard({ game, onClick }) {
             <h2 className="text-gray-900 dark:text-[#e0e0e0] text-sm font-bold m-0 truncate flex-1">
               {game.canonical_title}
             </h2>
-            {game.rating != null && (
-              <div className="bg-[#f5a623] text-[#eeeeee] text-xs font-bold rounded px-1.5 py-0.5 min-w-[38px] text-center">
-                {game.rating.toFixed(1)}
-              </div>
-            )}
+            <div className="flex items-center gap-1.5">
+              {buySignal?.is_good_timing && (
+                <span className="text-[10px] font-black px-1.5 py-0.5 rounded-full whitespace-nowrap"
+                  style={{ background: 'rgba(34,197,94,0.15)', color: '#22c55e', border: '1px solid rgba(34,197,94,0.4)' }}>
+                  ✦ 적기{buySignal.discount_percent > 0 ? ` -${buySignal.discount_percent}%` : ''}
+                </span>
+              )}
+              {game.rating != null && (
+                <div className="bg-[#f5a623] text-[#eeeeee] text-xs font-bold rounded px-1.5 py-0.5 min-w-[38px] text-center">
+                  {game.rating.toFixed(1)}
+                </div>
+              )}
+            </div>
           </div>
 
           <StarRating rating={game.rating != null ? Math.round(game.rating) : null} />
@@ -289,11 +315,22 @@ function GameCard({ game, onClick }) {
 function GameListPage({ isDark, toggleDark }) {
   const [games, setGames] = useState([])
   const [loading, setLoading] = useState(true)
+  const [buySignals, setBuySignals] = useState({})
   const navigate = useNavigate()
+  const location = useLocation()
 
   const [searchText, setSearchText] = useState('')
   const [selectedGenre, setSelectedGenre] = useState('')
   const [sortOrder, setSortOrder] = useState('none')
+  const [compareIds, setCompareIds] = useState(
+    location.state?.compareId ? [location.state.compareId] : []
+  )
+
+  const toggleCompare = (id) => {
+    setCompareIds(prev =>
+      prev.includes(id) ? prev.filter(x => x !== id) : prev.length < 2 ? [...prev, id] : prev
+    )
+  }
 
   useEffect(() => {
     fetch(`${API_BASE}/api/v1/games/`)
@@ -301,6 +338,15 @@ function GameListPage({ isDark, toggleDark }) {
       .then(data => {
         setGames(data)
         setLoading(false)
+        // buy-signal 비동기 개별 조회 (non-blocking)
+        data.forEach(game => {
+          fetch(`${API_BASE}/api/v1/games/${game.id}/buy-signal`)
+            .then(r => r.ok ? r.json() : null)
+            .then(signal => {
+              if (signal) setBuySignals(prev => ({ ...prev, [game.id]: signal }))
+            })
+            .catch(() => null)
+        })
       })
       .catch(() => setLoading(false))
   }, [])
@@ -310,7 +356,7 @@ function GameListPage({ isDark, toggleDark }) {
   )]
 
   const filteredGames = games
-    .filter(g => g.canonical_title.includes(searchText))
+    .filter(g => g.canonical_title.toLowerCase().includes(searchText.toLowerCase()))
     .filter(g => !selectedGenre || (g.tags || []).includes(selectedGenre))
     .sort((a, b) => {
       const rA = a.rating ?? 0
@@ -345,12 +391,45 @@ function GameListPage({ isDark, toggleDark }) {
           <div className="grid grid-cols-3 gap-5">
             {filteredGames.length > 0 ? (
               filteredGames.map((game) => (
-                <GameCard key={game.id} game={game} onClick={handleCardClick} />
+                <GameCard
+                  key={game.id}
+                  game={game}
+                  onClick={handleCardClick}
+                  isSelected={compareIds.includes(game.id)}
+                  onToggleCompare={toggleCompare}
+                  compareDisabled={compareIds.length >= 2}
+                  buySignal={buySignals[game.id]}
+                />
               ))
             ) : (
               <div className="col-span-3 text-center py-20 text-gray-400">
                 검색 결과가 없습니다.
               </div>
+            )}
+          </div>
+        )}
+
+        {/* 비교 플로팅 바 */}
+        {compareIds.length > 0 && (
+          <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-4 bg-white dark:bg-[#1e1e2e] border border-gray-200 dark:border-[#3a3a5e] shadow-xl rounded-2xl px-6 py-3">
+            <span className="text-sm text-gray-600 dark:text-gray-300">
+              {compareIds.length === 1
+                ? '비교할 게임을 1개 더 선택하세요'
+                : '2개 게임이 선택됨'}
+            </span>
+            <button
+              onClick={() => setCompareIds([])}
+              className="text-xs text-gray-400 hover:text-gray-600 bg-transparent border-none cursor-pointer"
+            >
+              취소
+            </button>
+            {compareIds.length === 2 && (
+              <button
+                onClick={() => navigate(`/compare?ids=${compareIds.join(',')}`)}
+                className="bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold px-4 py-1.5 rounded-lg border-none cursor-pointer transition-colors"
+              >
+                비교하기 →
+              </button>
             )}
           </div>
         )}
