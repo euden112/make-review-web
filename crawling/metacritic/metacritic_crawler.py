@@ -416,11 +416,12 @@ async def collect_game(entry: dict, context) -> dict | None:
     return {
         slug: {
             "meta": {
-                "game"        : slug,
-                "platform"    : PLATFORM,
-                "crawled_at"  : datetime.now().isoformat(),
-                "total"       : len(critic_reviews),
-                "critic_count": len(critic_reviews),
+                "game"         : slug,
+                "platform"     : PLATFORM,
+                "crawled_at"   : datetime.now().isoformat(),
+                "total"        : len(critic_reviews),
+                "critic_count" : len(critic_reviews),
+                "game_list_id" : entry.get("id"),
             },
             "reviews": critic_reviews,
         }

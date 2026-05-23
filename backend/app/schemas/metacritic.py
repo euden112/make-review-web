@@ -22,6 +22,7 @@ class MetacriticMeta(BaseModel):
     crawled_at: str
     total: int
     critic_count: int
+    game_list_id: Optional[int] = Field(default=None, description="game_list.json 기준 게임 고유 ID")
     user_count: int = Field(default=0, description="유저 리뷰 수 (현재 미수집)")
     filtered_count: Optional[int] = Field(default=None, description="필터링 후 남은 리뷰 수")
 
