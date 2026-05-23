@@ -34,6 +34,15 @@ async def invalidate_critic_cache(game_id: int):
     """파이프라인 재실행 시 비평가 요약 캐시 파기"""
     await redis_db.delete(f"critic_summary:{game_id}")
 
+async def invalidate_user_summary_cache(game_id: int):
+    """파이프라인 재실행 시 유저 요약 캐시 파기"""
+    await redis_db.delete(f"user_summary:{game_id}")
+
+async def invalidate_highlights_cache(game_id: int):
+    """새 리뷰 유입 시 highlights 캐시 파기 (TTL 24h이지만 즉시 갱신 필요 시 사용)"""
+    async for key in redis_db.scan_iter(f"highlights:{game_id}:*"):
+        await redis_db.delete(key)
+
 def get_redis_cache():
     """AI 파이프라인(Map 단계)에서 Redis 클라이언트 인스턴스에 직접 접근하기 위한 의존성 함수"""
     return redis_db

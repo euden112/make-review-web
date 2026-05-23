@@ -6,10 +6,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
 from app.core.database import get_db
+from app.core.redis_client import get_json_cache, set_json_cache
 from app.models.domain import PlaytimeAnalysis, CriticSummary, UserSummary
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+_CACHE_TTL = 86400  # 24시간 (파이프라인 재실행 시 무효화)
 
 
 def _format_label(early_max: float | None, mid_max: float | None, bucket: str) -> str:
@@ -28,6 +31,11 @@ async def get_playtime_analysis(
     db: AsyncSession = Depends(get_db),
 ):
     """플레이타임 버킷별 여론 분석 반환."""
+    cache_key = f"playtime_analysis:{game_id}"
+    cached = await get_json_cache(cache_key)
+    if cached is not None:
+        return cached
+
     row = (await db.execute(
         select(PlaytimeAnalysis).where(PlaytimeAnalysis.game_id == game_id)
     )).scalar_one_or_none()
@@ -64,7 +72,7 @@ async def get_playtime_analysis(
             "summary":          summary,
         }
 
-    return {
+    result = {
         "game_id":          game_id,
         "bucket_thresholds": thresholds,
         "buckets": {
@@ -74,6 +82,8 @@ async def get_playtime_analysis(
         },
         "created_at": row.created_at.isoformat() if row.created_at else None,
     }
+    await set_json_cache(cache_key, result, _CACHE_TTL)
+    return result
 
 
 @router.get("/{game_id}/critic-summary")
@@ -82,6 +92,11 @@ async def get_critic_summary(
     db: AsyncSession = Depends(get_db),
 ):
     """비평가 반응 요약 반환."""
+    cache_key = f"critic_summary:{game_id}"
+    cached = await get_json_cache(cache_key)
+    if cached is not None:
+        return cached
+
     row = (await db.execute(
         select(CriticSummary).where(CriticSummary.game_id == game_id)
     )).scalar_one_or_none()
@@ -89,7 +104,7 @@ async def get_critic_summary(
     if not row:
         raise HTTPException(status_code=404, detail="비평가 반응 데이터가 없습니다.")
 
-    return {
+    result = {
         "game_id":          game_id,
         "sentiment_overall": row.sentiment,
         "sentiment_score":  float(row.score) if row.score is not None else None,
@@ -99,6 +114,8 @@ async def get_critic_summary(
         "summary":          row.summary,
         "created_at":       row.created_at.isoformat() if row.created_at else None,
     }
+    await set_json_cache(cache_key, result, _CACHE_TTL)
+    return result
 
 
 @router.get("/{game_id}/user-summary")
@@ -107,6 +124,11 @@ async def get_user_summary(
     db: AsyncSession = Depends(get_db),
 ):
     """유저 리뷰 요약 반환 (B안: unified 본문 폐지 후 user 전용 섹션의 데이터원)."""
+    cache_key = f"user_summary:{game_id}"
+    cached = await get_json_cache(cache_key)
+    if cached is not None:
+        return cached
+
     row = (await db.execute(
         select(UserSummary).where(UserSummary.game_id == game_id)
     )).scalar_one_or_none()
@@ -114,7 +136,7 @@ async def get_user_summary(
     if not row:
         raise HTTPException(status_code=404, detail="유저 리뷰 요약 데이터가 없습니다.")
 
-    return {
+    result = {
         "game_id":          game_id,
         "sentiment_overall": row.sentiment,
         "sentiment_score":  float(row.score) if row.score is not None else None,
@@ -124,3 +146,5 @@ async def get_user_summary(
         "summary":          row.summary,
         "created_at":       row.created_at.isoformat() if row.created_at else None,
     }
+    await set_json_cache(cache_key, result, _CACHE_TTL)
+    return result

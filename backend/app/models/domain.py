@@ -311,3 +311,28 @@ class UserSummary(Base):
     __table_args__ = (
         UniqueConstraint('game_id', name='uq_user_summary_game'),
     )
+
+
+# ==============================================================================
+# [Sprint 6] 게임 이벤트 이슈 트래킹 테이블
+# ==============================================================================
+
+class GameEvent(Base):
+    """게임 이벤트 저장 (패치·DLC·논란·세일 등)
+
+    Steam News API 기반 이벤트와 부정 비율 변화량을 저장.
+    마이그레이션: 10_migration_sprint6_fixes.sql (docker: 11_migration_sprint6_fixes.sql)
+    """
+    __tablename__ = "game_events"
+    id              = Column(BigInteger, primary_key=True, index=True)
+    game_id         = Column(BigInteger, ForeignKey("games.id", ondelete="CASCADE"), nullable=False)
+    event_date      = Column(Date, nullable=False)
+    event_type      = Column(String(32))       # patch / dlc / controversy / sale / unknown
+    title           = Column(Text)
+    news_url        = Column(Text)
+    sentiment_delta = Column(Numeric(6, 4))    # 부정 비율 변화량
+    direction       = Column(String(32))       # negative_spike / positive_recovery
+    created_at      = Column(DateTime(timezone=True), default=datetime.utcnow)
+    __table_args__ = (
+        UniqueConstraint('game_id', 'event_date', 'event_type', name='uq_game_event_date_type'),
+    )

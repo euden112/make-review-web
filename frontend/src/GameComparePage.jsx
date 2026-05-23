@@ -4,14 +4,6 @@ import Navbar from './Navbar'
 
 const API_BASE = import.meta.env.VITE_API_BASE || ''
 
-const GAME_META = {
-  1: { rating: 4 },
-  2: { rating: 5 },
-  3: { rating: 3 },
-  4: { rating: 5 },
-  5: { rating: 3 },
-}
-
 const BUCKET_LABELS = { early: '초반', mid: '중반', late: '후반' }
 const SENTIMENT_COLORS = { positive: '#22c55e', negative: '#ef4444', mixed: '#f59e0b' }
 const SENTIMENT_LABELS = { positive: '긍정적', negative: '부정적', mixed: '중립' }
@@ -260,11 +252,13 @@ export default function GameComparePage({ isDark, toggleDark }) {
                     <p className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0] leading-tight">
                       {d?.game?.canonical_title || `게임 ${ids[i]}`}
                     </p>
-                    <div className="flex gap-0.5 mt-1">
-                      {[1,2,3,4,5].map(s => (
-                        <span key={s} className="text-sm" style={{ color: s <= (GAME_META[parseInt(ids[i])]?.rating || 3) ? '#ffb020' : '#d1d5db' }}>★</span>
-                      ))}
-                    </div>
+                    {d?.game?.rating != null && (
+                      <div className="flex gap-0.5 mt-1">
+                        {[1,2,3,4,5].map(s => (
+                          <span key={s} className="text-sm" style={{ color: s <= Math.round(d.game.rating) ? '#ffb020' : '#d1d5db' }}>★</span>
+                        ))}
+                      </div>
+                    )}
                     {d?.summary?.sentiment_overall && <SentimentChip value={d.summary.sentiment_overall} />}
                   </div>
                 </div>

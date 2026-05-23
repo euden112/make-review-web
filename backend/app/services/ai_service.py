@@ -25,7 +25,8 @@ from app.models.domain import (
     PlaytimeAnalysis, CriticSummary, UserSummary,
 )
 from app.core.redis_client import (
-    invalidate_summary_cache, invalidate_playtime_cache, invalidate_critic_cache, get_redis_cache,
+    invalidate_summary_cache, invalidate_playtime_cache, invalidate_critic_cache,
+    invalidate_user_summary_cache, get_redis_cache,
 )
 from ai_module.cache.redis_cache import RedisCache
 from app.core.database import AsyncSessionLocal
@@ -533,6 +534,7 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
             await invalidate_summary_cache(game_id, cursor_language_code)
             await invalidate_playtime_cache(game_id)
             await invalidate_critic_cache(game_id)
+            await invalidate_user_summary_cache(game_id)
 
         except Exception as e:
             await db.rollback()
