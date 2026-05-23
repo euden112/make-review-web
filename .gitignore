@@ -9,3 +9,12 @@ __pycache__/
 # Virtual environments
 .venv/
 venv/
+
+# 크롤링 결과 데이터 (로컬 전용)
+crawling/output/*
+!crawling/output/.gitkeep
+crawling/metacritic/metacritic_inspect_result.json
+crawling/metacritic/*.backup_*.py
+
+# cloudflared 설치파일
+*.deb

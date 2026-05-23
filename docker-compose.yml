@@ -2,6 +2,7 @@ services:
   postgres:
     image: postgres:15-alpine
     container_name: capstone_postgres
+    restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: password
@@ -17,6 +18,8 @@ services:
       - ./database/06_migration_sprint3_m003.sql:/docker-entrypoint-initdb.d/06_migration_sprint3_m003.sql
       - ./database/07_migration_sprint3_m005.sql:/docker-entrypoint-initdb.d/07_migration_sprint3_m005.sql
       - ./database/08_migration_sprint4.sql:/docker-entrypoint-initdb.d/08_migration_sprint4.sql
+      - ./database/09_migration_sprint4_fixes.sql:/docker-entrypoint-initdb.d/09_migration_sprint4_fixes.sql
+      - ./database/10_migration_sprint6_fixes.sql:/docker-entrypoint-initdb.d/10_migration_sprint6_fixes.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s
@@ -26,6 +29,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: capstone_redis
+    restart: unless-stopped
     ports:
       - "6379:6379"
     volumes:
@@ -39,31 +43,26 @@ services:
   ollama:
     image: ollama/ollama:latest
     container_name: capstone_ollama
+    restart: unless-stopped
     ports:
       - "11434:11434"
     volumes:
       - ollama_data:/root/.ollama
     environment:
       - OLLAMA_HOST=0.0.0.0:11434
-    # Note: Ollama requires significant resources. 
-    # You may need to adjust docker memory settings.
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
 
   backend:
-    image: python:3.11-slim
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     container_name: capstone_backend
+    restart: unless-stopped
     working_dir: /app
     ports:
       - "8000:8000"
     volumes:
       - ./backend:/app
-      - .:/workspace
+      - ./ai-pipeline:/workspace/ai-pipeline
     environment:
       - DATABASE_URL=postgresql+asyncpg://postgres:password@postgres:5432/review_db
       - REDIS_URL=redis://redis:6379/0
@@ -74,8 +73,7 @@ services:
       - LOCAL_MAP_MODEL=gemma3:4b
       - GROQ_API_KEY=${GROQ_API_KEY}
       - GROQ_MODEL=${GROQ_MODEL:-meta-llama/llama-4-scout-17b-16e-instruct}
-      - PYTHONPATH=/workspace/backend:/workspace/ai-pipeline
-    command: sh -c "pip install -r requirements.txt && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+      - PYTHONPATH=/app:/workspace/ai-pipeline
     depends_on:
       postgres:
         condition: service_healthy
@@ -89,11 +87,9 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
     container_name: capstone_frontend
+    restart: unless-stopped
     ports:
-      - "5173:5173"
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
+      - "80:80"
     depends_on:
       - backend
 
@@ -101,9 +97,8 @@ services:
     image: adminer
     restart: always
     ports:
-      - 8080:8080
+      - "8888:8080"
 
-        
 volumes:
   postgres_data:
   redis_data:

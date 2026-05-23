@@ -36,16 +36,17 @@ async def receive_metacritic_data(payload: Dict[str, MetacriticPayload], db: Asy
 
     for slug, game_data in payload.items():
         # 1. Game Upsert
+        game_list_id = game_data.meta.game_list_id
+        normalized_key = str(game_list_id) if game_list_id is not None else slug
         canonical_title = slug.replace("-", " ").title()
         stmt = insert(Game).values(
-            canonical_title=canonical_title, 
-            normalized_title=slug, 
+            canonical_title=canonical_title,
+            normalized_title=normalized_key,
             updated_at=datetime.utcnow()
         )
         stmt = stmt.on_conflict_do_update(
             index_elements=['normalized_title'],
             set_=dict(
-                canonical_title=stmt.excluded.canonical_title, 
                 updated_at=datetime.utcnow()
             )
         ).returning(Game.id)
@@ -53,9 +54,9 @@ async def receive_metacritic_data(payload: Dict[str, MetacriticPayload], db: Asy
 
         # 2. GamePlatformMap Upsert
         map_stmt = insert(GamePlatformMap).values(
-            game_id=game_id, 
-            platform_id=platform_id, 
-            external_game_id=slug, 
+            game_id=game_id,
+            platform_id=platform_id,
+            external_game_id=slug,
             crawled_at=datetime.utcnow(),
             platform_meta_json=game_data.meta.model_dump(),
             updated_at=datetime.utcnow()
@@ -153,16 +154,18 @@ async def receive_steam_data(payload: Dict[str, SteamPayload], db: AsyncSession 
 
     for slug, game_data in payload.items():
         # 1. Game Upsert
-        canonical_title = slug.replace("-", " ").title()
+        game_list_id = game_data.meta.game_list_id
+        normalized_key = str(game_list_id) if game_list_id is not None else slug
+        canonical_title = game_data.meta.name_ko or slug.replace("-", " ").title()
         stmt = insert(Game).values(
-            canonical_title=canonical_title, 
-            normalized_title=slug, 
+            canonical_title=canonical_title,
+            normalized_title=normalized_key,
             updated_at=datetime.utcnow()
         )
         stmt = stmt.on_conflict_do_update(
             index_elements=['normalized_title'],
             set_=dict(
-                canonical_title=stmt.excluded.canonical_title, 
+                canonical_title=stmt.excluded.canonical_title,
                 updated_at=datetime.utcnow()
             )
         ).returning(Game.id)
