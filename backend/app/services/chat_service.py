@@ -1,6 +1,6 @@
 import os
 import logging
-import httpx
+from groq import AsyncGroq, APITimeoutError, APIStatusError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import and_
@@ -62,35 +62,31 @@ async def get_recommendation(
     messages: list[dict],
     db: AsyncSession,
 ) -> str:
-    ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-    model = os.getenv("OLLAMA_CHAT_MODEL") or os.getenv("LOCAL_MAP_MODEL", "gemma3:4b")
+    api_key = os.getenv("GROQ_API_KEY", "")
+    model = os.getenv("GROQ_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
+
+    if not api_key:
+        raise ValueError("GROQ_API_KEY가 설정되지 않았습니다.")
 
     game_catalog = await build_game_catalog(db)
     system_prompt = SYSTEM_PROMPT_TEMPLATE.format(game_catalog=game_catalog)
 
     trimmed = messages[-MAX_HISTORY_MESSAGES:]
 
-    payload = {
-        "model": model,
-        "messages": [{"role": "system", "content": system_prompt}] + trimmed,
-        "stream": False,
-    }
+    client = AsyncGroq(api_key=api_key)
+    try:
+        response = await client.chat.completions.create(
+            model=model,
+            messages=[{"role": "system", "content": system_prompt}] + trimmed,
+            temperature=0.7,
+        )
+    except APITimeoutError as e:
+        raise TimeoutError("AI 모델 응답 시간이 초과됐습니다.") from e
+    except APIStatusError as e:
+        raise ConnectionError(f"AI 모델 서버 오류: {e.status_code}") from e
 
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        try:
-            response = await client.post(
-                f"{ollama_base_url}/api/chat",
-                json=payload,
-            )
-            response.raise_for_status()
-        except httpx.TimeoutException as e:
-            raise TimeoutError("AI 모델 응답 시간이 초과됐습니다.") from e
-        except httpx.HTTPStatusError as e:
-            raise ConnectionError(f"AI 모델 서버 오류: {e.response.status_code}") from e
-
-        data = response.json()
-        content = data.get("message", {}).get("content")
-        if not content:
-            logger.error("Ollama 응답에 message.content 없음. 원본: %s", data)
-            raise ValueError(f"Ollama 응답 형식 오류: {data}")
-        return content
+    content = response.choices[0].message.content
+    if not content:
+        logger.error("Groq 응답에 content 없음")
+        raise ValueError("AI 모델 응답 형식이 올바르지 않습니다.")
+    return content

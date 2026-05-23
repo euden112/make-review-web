@@ -137,8 +137,8 @@ async def get_unified_summary(
 
     result = _serialize_summary(summary, job, compact=compact)
 
-    await set_summary_cache(game_id, summary_type, result)
     logger.info("cache_miss game_id=%s summary_type=%s", game_id, summary_type)
+    await set_summary_cache(game_id, summary_type, result)
 
     return result
 
