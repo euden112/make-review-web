@@ -107,25 +107,18 @@ class ExternalReview(Base):
 # [AI 요약 파이프라인 관련 테이블]
 # ==============================================================================
 
-# 수정됨(Sprint 3): GameSummaryCursor 구조가 Sprint 3에서 확장되었습니다.
-# - summary_type 필드가 추가되어 unified/regional 구분을 명시적으로 기록합니다.
 class GameSummaryCursor(Base):
-    """파이프라인 상태 추적 커서 (게임별·모드별·언어별)
-    
-    Sprint 3: 요약 생성 진행 상황 기록
-    - (game_id, language_code) PK 유지 (backward compatibility)
-    - summary_type: 구분 메타 필드 (추가 정보, PK에 미포함)
+    """파이프라인 상태 추적 커서 (게임별)
+
+    - (game_id, language_code) PK
+    - summary_type: 구분 메타 필드
     - last_summarized_review_id: 증분 파이프라인용 (다음 조회 시작점)
     - last_summary_version: 현재 요약본 버전 (중복 생성 방지)
-    
-    PK 설계 (m005까지 유지):
-    - language_code="unified": unified 모드 커서
-    - language_code="ko": regional 모드 커서 (한국어)
     """
     __tablename__ = "game_summary_cursor"
     game_id = Column(BigInteger, ForeignKey("games.id"), primary_key=True)
     language_code = Column(String(10), primary_key=True)  # 기존 PK 유지 ('unified' | 언어코드)
-    summary_type = Column(String(16), nullable=False, default="unified")  # Sprint 3: 'unified' | 'regional'
+    summary_type = Column(String(16), nullable=False, default="unified")
     last_summarized_review_id = Column(BigInteger, ForeignKey("external_reviews.id"))
     last_summary_version = Column(Integer, nullable=False, default=0)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow)
@@ -165,6 +158,7 @@ class ReviewSummaryJob(Base):
     hallucination_score = Column(Numeric(4, 3))     # 인용 review_id 존재 비율
     sentiment_consistency = Column(Integer)          # label vs score 범위 일치 (0|1)
     anchor_deviation = Column(Numeric(4, 3))         # |AI score - steam_ratio| / 100
+    failure_reasons_json = Column(JSONB)              # chunk별 실패 사유 카운트 {timeout: 0, parse_error: 0, format_invalid: 0, call_failed: 0}
     error_message = Column(Text)
     started_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     ended_at = Column(DateTime(timezone=True))
@@ -182,26 +176,22 @@ class ReviewSummaryChunk(Base):
         UniqueConstraint('job_id', 'chunk_no', name='uq_summary_chunk'),
     )
 
-# 수정됨(Sprint 3): GameReviewSummary에 summary_type/review_language 및 품질 지표들이 추가되었습니다.
 class GameReviewSummary(Base):
     """게임 리뷰 AI 요약본 저장
 
     조회 로직:
     - Unified 요약: summary_type='unified' AND review_language IS NULL AND is_current=TRUE
-    - Regional 요약: summary_type='regional' AND review_language='en' AND is_current=TRUE
-
-    고유성: Partial Index 2개 (uq_game_summary_version_unified / uq_game_summary_version_regional)
-    API 응답: _serialize_summary()에서 language_code 가상 필드 자동 생성 (역호환)
     """
     __tablename__ = "game_review_summaries"
     id = Column(BigInteger, primary_key=True, index=True)
     game_id = Column(BigInteger, ForeignKey("games.id"), nullable=False)
-    # Sprint 3: 요약 모드 구분 필드
-    summary_type = Column(String(16), nullable=False, default="unified")  # 'unified' | 'regional'
-    review_language = Column(String(10), nullable=True)                    # NULL (unified) | 'en'/'ko'/'zh' (regional)
+    summary_type = Column(String(16), nullable=False, default="unified")
+    review_language = Column(String(10), nullable=True)
     job_id = Column(BigInteger, ForeignKey("review_summary_jobs.id"))
+    job = relationship("ReviewSummaryJob", lazy="select")
     summary_version = Column(Integer, nullable=False)
     summary_text = Column(Text, nullable=False)
+    one_liner = Column(Text, nullable=True)
     representative_reviews_json = Column(JSONB)
     sentiment_overall = Column(String(16))
     sentiment_score = Column(Numeric(5, 2))
@@ -297,4 +287,27 @@ class CriticSummary(Base):
     updated_at      = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
     __table_args__ = (
         UniqueConstraint('game_id', name='uq_critic_summary_game'),
+    )
+
+
+class UserSummary(Base):
+    """유저 리뷰 AI 요약 저장 (B안: unified body 폐지 후 신설)
+
+    user 청크(비-critic) 기반으로만 생성되어 평론가 톤·논조와 독립.
+    마이그레이션: 13_migration_user_summary_split.sql
+    """
+    __tablename__ = "user_summaries"
+    id              = Column(BigInteger, primary_key=True, index=True)
+    game_id         = Column(BigInteger, ForeignKey("games.id"), nullable=False)
+    summary         = Column(Text)
+    sentiment       = Column(String(16))
+    score           = Column(Numeric(5, 2))
+    pros            = Column(JSONB)
+    cons            = Column(JSONB)
+    keywords        = Column(JSONB)
+    review_count    = Column(Integer)
+    created_at      = Column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at      = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+    __table_args__ = (
+        UniqueConstraint('game_id', name='uq_user_summary_game'),
     )

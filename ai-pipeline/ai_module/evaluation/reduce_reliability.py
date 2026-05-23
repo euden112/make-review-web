@@ -49,10 +49,11 @@ def compute_reduce_reliability(
     if ai_result.sentiment_score is not None and ai_result.sentiment_overall is not None:
         score = float(ai_result.sentiment_score)
         label = ai_result.sentiment_overall
+        # Thresholds match the Reduce system prompt: positive>=60, negative<=45, mixed 40-65
         consistent = (
-            (label == "positive" and score >= 65)
-            or (label == "mixed" and 35 <= score < 65)
-            or (label == "negative" and score < 35)
+            (label == "positive" and score >= 60)
+            or (label == "mixed" and 40 <= score <= 65)
+            or (label == "negative" and score <= 45)
         )
         sentiment_consistency = 1 if consistent else 0
     else:

@@ -18,8 +18,10 @@ class SteamReview(BaseModel):
 # 2. 게임 한 개당 같이 딸려오는 스팀 통계 정보 구조를 정의합니다.
 class SteamMeta(BaseModel):
     game_id: str = Field(description="스팀 앱 ID 또는 게임명")
-    total_positive: int = Field(description="총 긍정 리뷰 수")
-    total_negative: int = Field(description="총 부정 리뷰 수")
+    game_list_id: Optional[int] = Field(default=None, description="game_list.json 기준 게임 고유 ID")
+    name_ko: Optional[str] = Field(default=None, description="게임 이름 (Steam API 반환값)")
+    total_positive: int = Field(default=0, description="총 긍정 리뷰 수")
+    total_negative: int = Field(default=0, description="총 부정 리뷰 수")
     crawled_at: str
     cover_image: Optional[str] = Field(default=None, description="게임 커버 이미지 URL (library_600x900.jpg)")
     hero_image: Optional[str] = Field(default=None, description="게임 히어로 이미지 URL (library_hero.jpg 또는 header.jpg)")

@@ -22,9 +22,11 @@ from sqlalchemy import and_, func
 from app.models.domain import (
     ExternalReview, GameSummaryCursor, ReviewSummaryJob,
     GameReviewSummary, Platform, ReviewType,
-    PlaytimeAnalysis, CriticSummary,
+    PlaytimeAnalysis, CriticSummary, UserSummary,
 )
-from app.core.redis_client import invalidate_summary_cache, get_redis_cache
+from app.core.redis_client import (
+    invalidate_summary_cache, invalidate_playtime_cache, invalidate_critic_cache, get_redis_cache,
+)
 from ai_module.cache.redis_cache import RedisCache
 from app.core.database import AsyncSessionLocal
 
@@ -46,33 +48,6 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
-
-
-def _strip_redundant_leading_sentence(one_liner: str | None, full_text: str | None) -> str:
-    base = " ".join((one_liner or "").split()).strip()
-    text = (full_text or "").strip()
-    if not base or not text:
-        return text
-
-    if text.startswith(base):
-        return text[len(base):].lstrip(" 。.\n\r\t:-—") or text
-
-    first_sentence_end = next((idx for idx, ch in enumerate(text) if ch in ".!?。！？"), None)
-    if first_sentence_end is None:
-        return text
-
-    first_sentence = " ".join(text[:first_sentence_end + 1].split()).strip()
-    if first_sentence == base:
-        return text[first_sentence_end + 1:].lstrip(" 。.\n\r\t:-—") or text
-
-    return text
-
-
-def _truncate_review_quote(text: str | None, max_length: int = 180) -> str:
-    cleaned = " ".join((text or "").split()).strip()
-    if len(cleaned) <= max_length:
-        return cleaned
-    return cleaned[: max_length - 1].rstrip() + "…"
 
 
 def _select_platform_representative_reviews(
@@ -113,31 +88,19 @@ def _select_platform_representative_reviews(
         selected.append({
             "source": "steam",
             "review_id": getattr(review, "id", None),
-            "quote": _truncate_review_quote(getattr(review, "review_text_clean", None)),
-            "reason": (
-                f"Steam 플랫폼에서 helpful_count {int(getattr(review, 'helpful_count', 0) or 0)}"
-                f" / playtime {float(getattr(review, 'playtime_hours', 0) or 0):.0f}h 기준 대표 리뷰"
-            ),
         })
 
     for review in meta_candidates:
-        normalized_score = getattr(review, "normalized_score_100", None)
-        normalized_score_text = f"{float(normalized_score):.0f}" if normalized_score is not None else "0"
         selected.append({
             "source": "metacritic",
             "review_id": getattr(review, "id", None),
-            "quote": _truncate_review_quote(getattr(review, "review_text_clean", None)),
-            "reason": (
-                f"Metacritic 플랫폼에서 score {normalized_score_text}"
-                f" / helpful_count {int(getattr(review, 'helpful_count', 0) or 0)} 기준 대표 리뷰"
-            ),
         })
 
     return selected
 
 
 async def get_pipeline_tasks(game_id: int, db) -> list[tuple[str, str | None]]:
-    """Sprint 4: unified 1회만 실행. regional 파이프라인 제거."""
+    """unified 1회만 실행."""
     return [("unified", None)]
 
 
@@ -211,8 +174,35 @@ async def _upsert_critic_summary(db, game_id: int, ai_result: FinalSummary) -> N
         db.add(CriticSummary(**fields))
 
 
+async def _upsert_user_summary(db, game_id: int, ai_result: FinalSummary) -> None:
+    """user_summaries 테이블에 upsert (B안)."""
+    if ai_result.user is None:
+        return
+
+    existing = (await db.execute(
+        select(UserSummary).where(UserSummary.game_id == game_id)
+    )).scalar_one_or_none()
+
+    fields = {
+        "game_id": game_id,
+        "summary": ai_result.user.summary,
+        "sentiment": ai_result.user.sentiment_overall,
+        "score": ai_result.user.sentiment_score,
+        "pros": ai_result.user.pros,
+        "cons": ai_result.user.cons,
+        "keywords": ai_result.user.keywords,
+        "updated_at": datetime.utcnow(),
+    }
+
+    if existing:
+        for k, v in fields.items():
+            setattr(existing, k, v)
+    else:
+        db.add(UserSummary(**fields))
+
+
 async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | None = None, force: bool = False):
-    """AI 요약 파이프라인 실행 (Sprint 4: unified 전용, regional 제거)."""
+    """AI 요약 파이프라인 실행 (unified 전용)."""
     cursor_language_code = "unified"
     review_language = None
 
@@ -296,20 +286,9 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
             if not summary_reviews:
                 return
 
-            # 4. 신뢰도 지표용
-            total_reviews_in_db = await db.scalar(
-                select(func.count(ExternalReview.id)).where(
-                    ExternalReview.game_id == game_id,
-                    ExternalReview.is_deleted == False,
-                )
-            )
-            new_count_since_last = await db.scalar(
-                select(func.count(ExternalReview.id)).where(
-                    ExternalReview.game_id == game_id,
-                    ExternalReview.id > last_review_id,
-                    ExternalReview.is_deleted == False,
-                )
-            )
+            # 4. 신뢰도 지표용 — 이미 로드된 리스트에서 계산 (별도 COUNT 쿼리 불필요)
+            total_reviews_in_db = len(summary_reviews)
+            new_count_since_last = len(new_reviews)
 
             batch_from_review_id   = min(r.id for r in new_reviews)
             new_max_review_id      = max(r.id for r in new_reviews)
@@ -411,7 +390,7 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
                 metacritic_ratio=(meta_pos, meta_mix, meta_neg),
                 cache=RedisCache(get_redis_cache()),
                 ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
-                local_model_name=os.getenv("LOCAL_MAP_MODEL", "gemma3:4b"),
+                local_model_name=os.getenv("LOCAL_MAP_MODEL", "qwen2.5:1.5b"),
                 reduce_api_key=os.getenv("GROQ_API_KEY", ""),
                 reduce_model_name=os.getenv("GROQ_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct"),
                 prior_summary_text=prior_summary_text,
@@ -427,6 +406,9 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
             job.map_output_tokens   = sum(getattr(r, "output_tokens", 0) for r in map_results)
             job.reduce_input_tokens  = getattr(ai_result, "input_tokens", 0)
             job.reduce_output_tokens = getattr(ai_result, "output_tokens", 0)
+            # Chunk별 실패 통계 — run_map_stage가 첫 번째 결과에 부착
+            if map_results and hasattr(map_results[0], "failure_stats"):
+                job.failure_reasons_json = map_results[0].failure_stats
 
             # 11. DB 버전 결정
             latest_summary_version = (await db.execute(
@@ -455,9 +437,10 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
                 else None
             )
 
-            clean_full_text = _strip_redundant_leading_sentence(ai_result.one_liner, ai_result.full_text)
+            # B안: unified 본문 폐지 — summary_text는 None으로 저장.
+            # 본문은 user_summaries.summary / critic_summaries.summary로 분리.
             representative_reviews = _select_platform_representative_reviews(
-                new_reviews,
+                summary_reviews,
                 steam_pid,
                 meta_pid,
                 limit_per_platform=3,
@@ -469,7 +452,8 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
                 review_language=review_language,
                 job_id=job.id,
                 summary_version=new_version,
-                summary_text=f"**{ai_result.one_liner}**\n\n{clean_full_text}",
+                summary_text=None,
+                one_liner=ai_result.one_liner,
                 sentiment_overall=ai_result.sentiment_overall,
                 sentiment_score=ai_result.sentiment_score,
                 aspect_sentiment_json=ai_result.aspect_scores,
@@ -493,6 +477,7 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
             # 13. Sprint 4: playtime_analyses / critic_summaries 저장
             await _upsert_playtime_analysis(db, game_id, ai_result, playtime_buckets)
             await _upsert_critic_summary(db, game_id, ai_result)
+            await _upsert_user_summary(db, game_id, ai_result)
 
             # 14. 신뢰도 평가
             if _HAS_GEMINI_RELIABILITY:
@@ -509,9 +494,19 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
             # 15. 임베딩 유사도
             if _HAS_SEMANTIC_SIMILARITY:
                 selected_texts = [r.review_text_clean for r in summary_reviews[:50] if r.review_text_clean]
+                synthesized_summary = "\n".join(
+                    part for part in [
+                        ai_result.one_liner,
+                        "\n".join(ai_result.pros or []),
+                        "\n".join(ai_result.cons or []),
+                        ai_result.user.summary if ai_result.user else "",
+                        ai_result.critic.summary if ai_result.critic else "",
+                    ]
+                    if part
+                )
                 loop = asyncio.get_running_loop()
                 similarity = await loop.run_in_executor(
-                    None, compute_semantic_similarity, selected_texts, ai_result.full_text,
+                    None, compute_semantic_similarity, selected_texts, synthesized_summary,
                 )
                 new_summary.semantic_similarity_score = similarity
 
@@ -536,6 +531,8 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
             logger.info("ai pipeline finished: game_id=%s job_id=%s", game_id, job.id)
 
             await invalidate_summary_cache(game_id, cursor_language_code)
+            await invalidate_playtime_cache(game_id)
+            await invalidate_critic_cache(game_id)
 
         except Exception as e:
             await db.rollback()

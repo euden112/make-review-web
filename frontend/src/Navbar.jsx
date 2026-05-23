@@ -13,12 +13,20 @@ function Navbar({ isDark, toggleDark }) {
         <span>게임 리뷰</span>
       </div>
 
-      <button
-        onClick={toggleDark}
-        className="bg-gray-100 dark:bg-gray-700 border-none rounded-lg px-3 py-2 cursor-pointer text-lg"
-      >
-        {isDark ? '☀️' : '🌙'}
-      </button>
+      <div className="flex items-center gap-3">
+        <span
+          onClick={() => navigate('/')}
+          className="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 cursor-pointer transition-colors"
+        >
+          게임 목록
+        </span>
+        <button
+          onClick={toggleDark}
+          className="bg-gray-100 dark:bg-gray-700 border-none rounded-lg px-3 py-2 cursor-pointer text-lg"
+        >
+          {isDark ? '☀️' : '🌙'}
+        </button>
+      </div>
     </nav>
   )
 }

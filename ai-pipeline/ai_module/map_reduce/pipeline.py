@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -28,6 +29,81 @@ class _NullAsyncCache:
 
     async def set(self, key: str, value: str, ttl_sec: int = 0) -> None:
         return None
+
+
+_QUOTE_KEYWORDS = (
+    "그래픽", "비주얼", "조작", "조작감", "최적화", "성능", "콘텐츠",
+    "스토리", "가격", "가성비", "전투", "버그", "프레임", "사운드",
+    "graphics", "visual", "controls", "control", "optimization",
+    "performance", "content", "story", "value", "price", "combat",
+    "bug", "fps", "frame", "crash",
+)
+
+
+def _extract_dense_snippet(text: str, max_chars: int = 250) -> str:
+    """리뷰 텍스트에서 aspect 키워드 밀집 구간을 추출."""
+    cleaned = (text or "").replace("\n", " ").strip()
+    if not cleaned:
+        return ""
+
+    sentences = re.split(r"(?<=[.!?。!?])\s+", cleaned)
+    scored: list[tuple[int, int, str]] = []
+    for idx, s in enumerate(sentences):
+        s_trim = s.strip()
+        if not (30 <= len(s_trim) <= 200):
+            continue
+        score = sum(1 for kw in _QUOTE_KEYWORDS if kw.lower() in s_trim.lower())
+        if score > 0:
+            scored.append((score, idx, s_trim))
+
+    scored.sort(key=lambda t: (-t[0], t[1]))
+
+    picked: list[str] = []
+    total = 0
+    for _, _, s in scored:
+        if total + len(s) + 1 > max_chars:
+            break
+        picked.append(s)
+        total += len(s) + 1
+
+    if picked:
+        return " ".join(picked)
+    return cleaned[:max_chars].rstrip()
+
+
+def _select_representative_quotes(
+    tagged: list[ReviewRow],
+    n_per_polarity: int = 3,
+    n_critic: int = 2,
+    max_chars: int = 250,
+) -> list[str]:
+    """긍정/부정 유저 리뷰 + 비평가 리뷰에서 밀집 추출 인용을 생성."""
+    user_rows = [r for r in tagged if r.reviewer_type == "user"]
+    critics = [r for r in tagged if r.reviewer_type == "critic"]
+
+    def _filter_and_sort(rows: list[ReviewRow]) -> list[ReviewRow]:
+        return sorted(
+            [r for r in rows if 50 <= len(r.review_text_clean or "") <= 800],
+            key=lambda r: r.helpful_count or 0,
+            reverse=True,
+        )
+
+    pos = _filter_and_sort([r for r in user_rows if r.is_recommended is True])[:n_per_polarity]
+    neg = _filter_and_sort([r for r in user_rows if r.is_recommended is False])[:n_per_polarity]
+    crit = _filter_and_sort(critics)[:n_critic]
+
+    quotes: list[str] = []
+    for r in pos + neg + crit:
+        snippet = _extract_dense_snippet(r.review_text_clean or "", max_chars=max_chars)
+        if not snippet:
+            continue
+        polarity = (
+            "+" if r.is_recommended is True else
+            "-" if r.is_recommended is False else
+            "C"
+        )
+        quotes.append(f"[{polarity}] {snippet}")
+    return quotes
 
 
 def _normalize_platform_code(row: Any) -> str:
@@ -93,7 +169,7 @@ def _group_map_outputs_by_tags(
     id_to_type   = {row.id: row.reviewer_type   for row in tagged_rows}
 
     groups: dict[str, list[str]] = {
-        "all": [], "early": [], "mid": [], "late": [], "critic": []
+        "all": [], "early": [], "mid": [], "late": [], "critic": [], "user": []
     }
 
     for result in map_results:
@@ -114,6 +190,9 @@ def _group_map_outputs_by_tags(
 
         if "critic" in types_in_chunk:
             groups["critic"].append(summary_text)
+        # user 그룹은 critic이 아닌 리뷰가 하나라도 포함된 청크 = 비-critic 타입 존재
+        if any(t != "critic" for t in types_in_chunk):
+            groups["user"].append(summary_text)
 
     return groups
 
@@ -122,42 +201,32 @@ def _ensure_bucket_coverage(
     tagged: list[ReviewRow],
     all_steam: list[ReviewRow],
     buckets: PlaytimeBuckets,
-    min_per_bucket: int = 10,  # 20 → 10 (playtime 데이터 부족 대응)
+    min_per_bucket: int = 20,
 ) -> list[ReviewRow]:
-    """quality_score 편향으로 인해 early/mid 버킷이 부족할 경우 전체 풀에서 보완 선택."""
-    import logging
-    logger = logging.getLogger(__name__)
-    
-    existing_ids = {r.id for r in tagged}
+    existing_ids = {row.id for row in tagged}
     all_steam_tagged = tag_reviews(all_steam, buckets)
     result = list(tagged)
-    
-    # 디버깅: 버킷별 분포 로깅
-    bucket_counts = {}
-    for bucket_name in ("early", "mid", "late"):
-        bucket_counts[bucket_name] = len([r for r in tagged if r.playtime_bucket == bucket_name])
-    logger.info("bucket coverage before: early=%d mid=%d late=%d", 
-                bucket_counts.get("early", 0), 
-                bucket_counts.get("mid", 0), 
-                bucket_counts.get("late", 0))
 
     for bucket_name in ("early", "mid", "late"):
-        in_bucket = [r for r in tagged if r.playtime_bucket == bucket_name]
+        in_bucket = [row for row in result if row.playtime_bucket == bucket_name]
         if len(in_bucket) >= min_per_bucket:
             continue
+
         candidates = sorted(
-            [r for r in all_steam_tagged if r.playtime_bucket == bucket_name and r.id not in existing_ids],
+            [
+                row for row in all_steam_tagged
+                if row.playtime_bucket == bucket_name and row.id not in existing_ids
+            ],
             key=quality_score,
             reverse=True,
         )
         needed = min_per_bucket - len(in_bucket)
         to_add = candidates[:needed]
         result.extend(to_add)
-        existing_ids.update(r.id for r in to_add)
-        logger.info("bucket coverage added: bucket=%s added=%d total=%d", 
-                    bucket_name, len(to_add), len(in_bucket) + len(to_add))
+        existing_ids.update(row.id for row in to_add)
 
     return result
+
 
 
 async def run_hybrid_summary_pipeline(
@@ -177,8 +246,6 @@ async def run_hybrid_summary_pipeline(
     prior_summary_text: str | None = None,
     map_runner: MapRunner | None = None,
     reduce_runner: ReduceRunner | None = None,
-    # 하위 호환 파라미터 (무시됨, regional 파이프라인 제거)
-    regional: bool = False,
 ) -> tuple[list[MapResult], FinalSummary, Any]:
     normalized_reviews = _normalize_reviews(all_reviews, language_code)
     if not normalized_reviews:
@@ -207,17 +274,16 @@ async def run_hybrid_summary_pipeline(
     all_steam_reviews = [r for r in normalized_reviews if r.platform_code == "steam"]
     buckets = compute_playtime_buckets(all_steam_reviews if len(all_steam_reviews) >= MIN_REVIEWS_PER_BUCKET else selected)
 
-    # quality_score가 playtime에 편향되어 early/mid 버킷이 부족할 수 있으므로 보완 선택
     tagged = tag_reviews(selected, buckets)
     if buckets is not None:
-        tagged = _ensure_bucket_coverage(tagged, all_steam_reviews, buckets, min_per_bucket=20)
+        tagged = _ensure_bucket_coverage(tagged, all_steam_reviews, buckets)
 
     chunks = chunk_reviews_by_chars(
         [
             (review.id, review.review_text_clean, review.helpful_count, review.playtime_hours)
             for review in tagged
         ],
-        max_chars=5500,
+        max_chars=None,  # chunker가 OLLAMA_NUM_CTX 환경변수로 안전 한계 결정
     )
 
     map_func = map_runner or run_map_stage
@@ -228,16 +294,13 @@ async def run_hybrid_summary_pipeline(
         language_code=language_code,
         chunks=chunks,
         model_name=local_model_name,
-        prompt_version="v1",
+        prompt_version="v2",
         cache=cache or _NullAsyncCache(),
         ollama_base_url=ollama_base_url,
     )
 
-    # Sprint 4: Map 출력을 그룹별로 분류
     grouped_summaries = _group_map_outputs_by_tags(map_results, tagged)
-
-    if prior_summary_text:
-        grouped_summaries["all"].insert(0, f"[previous_summary]\n{prior_summary_text[:1200]}")
+    representative_quotes = _select_representative_quotes(tagged)
 
     final = await reduce_func(
         api_key=reduce_api_key,
@@ -246,6 +309,8 @@ async def run_hybrid_summary_pipeline(
         grouped_summaries=grouped_summaries,
         score_anchors=score_anchors,
         category_frequency=category_frequency,
+        prior_summary_text=prior_summary_text,
+        representative_quotes=representative_quotes,
     )
 
     return map_results, final, buckets
