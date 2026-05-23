@@ -191,7 +191,7 @@ def _docker_compose_cmd() -> list[str]:
 
 
 def start_docker():
-    cmd = _docker_compose_cmd() + ["up", "-d"]
+    cmd = _docker_compose_cmd() + ["up", "-d", "--build"]
     result = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
     if result.returncode != 0:
         abort(f"docker compose 실행 실패:\n{result.stderr[-600:]}")
@@ -1114,6 +1114,8 @@ def main():
     show_review_counts("적재 완료 후 리뷰 수")
     if not args.skip_metacritic and not (args.test and args.scenario == "regression"):
         verify_metacritic_ingestion(target_games, assertions=args.test)
+    if not args.skip_price_refresh:
+        run_price_refresher_once()
 
     # ── STEP 7: 게임 ID 조회 ──────────────────────────────────────────────────
     step(7, "DB 게임 목록 확인")

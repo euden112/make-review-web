@@ -81,6 +81,54 @@ HEADERS = {
         "Chrome/124.0.0.0 Safari/537.36"
     )
 }
+GAME_LIST_PATH = Path(__file__).resolve().parent.parent / "game_list.json"
+
+FALLBACK_GAMES = {
+    "grand-theft-auto-v": {
+        "id": None,
+        "metacritic_slug": "grand-theft-auto-v",
+        "name": "Grand Theft Auto V",
+    },
+    "elden-ring": {
+        "id": None,
+        "metacritic_slug": "elden-ring",
+        "name": "ELDEN RING",
+    },
+}
+
+def _entry_match_values(entry: dict) -> set[str]:
+    values = {
+        str(entry.get("metacritic_slug", "")).lower(),
+        str(entry.get("steam_slug", "")).lower(),
+        str(entry.get("name", "")).lower(),
+    }
+    return {v for v in values if v}
+
+def load_game_entries(requested_games: list[str] | None) -> list[dict]:
+    requested = {g.strip().lower() for g in (requested_games or GAME_TITLES) if g.strip()}
+    entries: list[dict] = []
+    if GAME_LIST_PATH.exists():
+        with GAME_LIST_PATH.open(encoding="utf-8") as f:
+            entries = [
+                entry for entry in json.load(f)
+                if entry.get("metacritic_slug") and _entry_match_values(entry) & requested
+            ]
+
+    matched = set()
+    for entry in entries:
+        matched.update(_entry_match_values(entry) & requested)
+
+    for slug in sorted(requested - matched):
+        fallback = FALLBACK_GAMES.get(slug)
+        if fallback:
+            entries.append(fallback)
+            matched.update(_entry_match_values(fallback) & requested)
+
+    missing = requested - matched
+    if missing:
+        print(f"[WARN] unmatched games: {', '.join(sorted(missing))}")
+
+    return entries
 
 # ============================================================
 # 필터 결과 데이터 클래스
@@ -395,7 +443,12 @@ async def main():
     parser.add_argument("--games", nargs="+", metavar="SLUG", help="크롤링할 게임 슬러그 (기본: 전체)")
     args = parser.parse_args()
 
-    game_titles = [g for g in GAME_TITLES if not args.games or g in args.games]
+    game_entries = load_game_entries(args.games)
+    if not game_entries:
+        print("[metacritic] 크롤링할 게임이 없습니다.")
+        return
+    game_titles = [entry["metacritic_slug"] for entry in game_entries]
+    entry_by_slug = {entry["metacritic_slug"]: entry for entry in game_entries}
 
     timestamp = datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')
     base_dir = Path(__file__).resolve().parent
@@ -433,6 +486,7 @@ async def main():
         await browser.close()
 
     for game, reviews in results:
+        entry = entry_by_slug.get(game, {})
         all_output[game] = {
             "meta": {
                 "game"           : game,
@@ -446,6 +500,7 @@ async def main():
                 "total"          : len(reviews),
                 "critic_count"   : sum(1 for r in reviews if r["type"] == "critic"),
                 "user_count"     : sum(1 for r in reviews if r["type"] == "user"),
+                "game_list_id"   : entry.get("id"),
             },
             "reviews": reviews,
         }

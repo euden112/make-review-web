@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy import func, desc, and_
+from sqlalchemy import func, desc, and_, update
 
 from app.schemas.metacritic import MetacriticPayload
 from app.schemas.steam import SteamPayload
@@ -39,6 +39,49 @@ async def get_reference_data(db: AsyncSession):
     review_types = {rt.type_code: rt.id for rt in (await db.execute(select(ReviewType))).scalars().all()}
     return platforms, review_types
 
+def _game_list_id(meta) -> int | None:
+    return getattr(meta, "game_list_id", None)
+
+async def _find_game_id_by_game_list_id(db: AsyncSession, game_list_id: int | None) -> int | None:
+    if game_list_id is None:
+        return None
+
+    stmt = (
+        select(GamePlatformMap.game_id)
+        .where(GamePlatformMap.platform_meta_json["game_list_id"].astext == str(game_list_id))
+        .limit(1)
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+async def _upsert_game(
+    db: AsyncSession,
+    slug: str,
+    canonical_title: str,
+    meta,
+    update_title: bool,
+) -> int:
+    game_id = await _find_game_id_by_game_list_id(db, _game_list_id(meta))
+    if game_id is not None:
+        values = {"updated_at": datetime.utcnow()}
+        if update_title:
+            values["canonical_title"] = canonical_title
+        await db.execute(update(Game).where(Game.id == game_id).values(**values))
+        return game_id
+
+    stmt = insert(Game).values(
+        canonical_title=canonical_title,
+        normalized_title=slug,
+        updated_at=datetime.utcnow()
+    )
+    update_values = {"updated_at": datetime.utcnow()}
+    if update_title:
+        update_values["canonical_title"] = stmt.excluded.canonical_title
+    stmt = stmt.on_conflict_do_update(
+        index_elements=['normalized_title'],
+        set_=update_values
+    ).returning(Game.id)
+    return (await db.execute(stmt)).scalar_one()
+
 @router.post("/metacritic")
 async def receive_metacritic_data(payload: Dict[str, MetacriticPayload], db: AsyncSession = Depends(get_db)):
     platforms, review_types = await get_reference_data(db)
@@ -65,21 +108,8 @@ async def receive_metacritic_data(payload: Dict[str, MetacriticPayload], db: Asy
             continue
 
         # 1. Game Upsert
-        game_list_id = game_data.meta.game_list_id
-        normalized_key = str(game_list_id) if game_list_id is not None else slug
         canonical_title = slug.replace("-", " ").title()
-        stmt = insert(Game).values(
-            canonical_title=canonical_title,
-            normalized_title=normalized_key,
-            updated_at=datetime.utcnow()
-        )
-        stmt = stmt.on_conflict_do_update(
-            index_elements=['normalized_title'],
-            set_=dict(
-                updated_at=datetime.utcnow()
-            )
-        ).returning(Game.id)
-        game_id = (await db.execute(stmt)).scalar_one()
+        game_id = await _upsert_game(db, slug, canonical_title, game_data.meta, update_title=False)
 
         # 2. GamePlatformMap Upsert
         map_stmt = insert(GamePlatformMap).values(
@@ -215,22 +245,8 @@ async def receive_steam_data(payload: Dict[str, SteamPayload], db: AsyncSession 
 
     for slug, game_data in payload.items():
         # 1. Game Upsert
-        game_list_id = game_data.meta.game_list_id
-        normalized_key = str(game_list_id) if game_list_id is not None else slug
         canonical_title = game_data.meta.name_ko or slug.replace("-", " ").title()
-        stmt = insert(Game).values(
-            canonical_title=canonical_title,
-            normalized_title=normalized_key,
-            updated_at=datetime.utcnow()
-        )
-        stmt = stmt.on_conflict_do_update(
-            index_elements=['normalized_title'],
-            set_=dict(
-                canonical_title=stmt.excluded.canonical_title,
-                updated_at=datetime.utcnow()
-            )
-        ).returning(Game.id)
-        game_id = (await db.execute(stmt)).scalar_one()
+        game_id = await _upsert_game(db, slug, canonical_title, game_data.meta, update_title=True)
 
         # 2. GamePlatformMap Upsert
         app_id = game_data.meta.game_id

@@ -13,6 +13,7 @@ from ai_module.map_reduce.sampler import (
     stratified_select_reviews,
     compute_playtime_buckets,
     tag_reviews,
+    quality_score,
     MIN_REVIEWS_PER_BUCKET,
     MIN_CRITIC_REVIEWS,
 )
@@ -196,6 +197,37 @@ def _group_map_outputs_by_tags(
     return groups
 
 
+def _ensure_bucket_coverage(
+    tagged: list[ReviewRow],
+    all_steam: list[ReviewRow],
+    buckets: PlaytimeBuckets,
+    min_per_bucket: int = 20,
+) -> list[ReviewRow]:
+    existing_ids = {row.id for row in tagged}
+    all_steam_tagged = tag_reviews(all_steam, buckets)
+    result = list(tagged)
+
+    for bucket_name in ("early", "mid", "late"):
+        in_bucket = [row for row in result if row.playtime_bucket == bucket_name]
+        if len(in_bucket) >= min_per_bucket:
+            continue
+
+        candidates = sorted(
+            [
+                row for row in all_steam_tagged
+                if row.playtime_bucket == bucket_name and row.id not in existing_ids
+            ],
+            key=quality_score,
+            reverse=True,
+        )
+        needed = min_per_bucket - len(in_bucket)
+        to_add = candidates[:needed]
+        result.extend(to_add)
+        existing_ids.update(row.id for row in to_add)
+
+    return result
+
+
 
 async def run_hybrid_summary_pipeline(
     *,
@@ -243,6 +275,8 @@ async def run_hybrid_summary_pipeline(
     buckets = compute_playtime_buckets(all_steam_reviews if len(all_steam_reviews) >= MIN_REVIEWS_PER_BUCKET else selected)
 
     tagged = tag_reviews(selected, buckets)
+    if buckets is not None:
+        tagged = _ensure_bucket_coverage(tagged, all_steam_reviews, buckets)
 
     chunks = chunk_reviews_by_chars(
         [

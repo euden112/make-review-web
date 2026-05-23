@@ -12,9 +12,17 @@ import requests
 import json
 import time
 import random
+import argparse
+import sys
 from pathlib import Path
 from dataclasses import dataclass, field
 from datetime import datetime
+
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
 
 # ============================================================
 # 설정
@@ -29,6 +37,21 @@ REVIEW_API_BASE = "https://store.steampowered.com/appreviews"
 GAME_LIST_PATH  = Path(__file__).resolve().parent.parent / "game_list.json"
 OUTPUT_DIR      = Path(__file__).resolve().parent.parent / "output"
 OUT_FILE        = OUTPUT_DIR / "steam.json"
+
+FALLBACK_GAMES = {
+    "grand-theft-auto-v": {
+        "steam_app_id": "271590",
+        "steam_slug": "grand-theft-auto-v",
+        "metacritic_slug": "grand-theft-auto-v",
+        "name": "Grand Theft Auto V",
+    },
+    "elden-ring": {
+        "steam_app_id": "1245620",
+        "steam_slug": "elden-ring",
+        "metacritic_slug": "elden-ring",
+        "name": "ELDEN RING",
+    },
+}
 
 # 한국어 카테고리 키워드
 GAME_CATEGORIES: dict[str, list[str]] = {
@@ -372,6 +395,15 @@ def collect_game(slug: str, app_id: str, name: str, game_list_id: int | None = N
 # ============================================================
 
 def main():
+    parser = argparse.ArgumentParser(description="Steam review crawler")
+    parser.add_argument(
+        "--games",
+        nargs="*",
+        default=None,
+        help="Limit crawl to matching steam_slug, metacritic_slug, generated slug, or name",
+    )
+    args = parser.parse_args()
+
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     existing_data: dict = {}
@@ -380,6 +412,48 @@ def main():
             existing_data = json.load(f)
 
     entries = load_game_list()
+    if args.games:
+        requested = {g.strip().lower() for g in args.games if g.strip()}
+        entries = [
+            entry for entry in entries
+            if (
+                str(entry.get("steam_slug", "")).lower() in requested
+                or str(entry.get("metacritic_slug", "")).lower() in requested
+                or make_slug(str(entry.get("name", ""))).lower() in requested
+                or str(entry.get("name", "")).lower() in requested
+            )
+        ]
+        matched = {
+            value
+            for entry in entries
+            for value in (
+                str(entry.get("steam_slug", "")).lower(),
+                str(entry.get("metacritic_slug", "")).lower(),
+                make_slug(str(entry.get("name", ""))).lower(),
+                str(entry.get("name", "")).lower(),
+            )
+        }
+        for slug in sorted(requested - matched):
+            fallback = FALLBACK_GAMES.get(slug)
+            if fallback:
+                entries.append(fallback)
+                matched.update(
+                    str(fallback.get(key, "")).lower()
+                    for key in ("steam_slug", "metacritic_slug", "name")
+                )
+        missing = requested - {
+            value
+            for entry in entries
+            for value in (
+                str(entry.get("steam_slug", "")).lower(),
+                str(entry.get("metacritic_slug", "")).lower(),
+                make_slug(str(entry.get("name", ""))).lower(),
+                str(entry.get("name", "")).lower(),
+            )
+        }
+        if missing:
+            print(f"[WARN] unmatched games: {', '.join(sorted(missing))}")
+
     if not entries:
         return
 

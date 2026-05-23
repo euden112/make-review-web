@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import Navbar from './Navbar'
 
-const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8000'
+const API_BASE = import.meta.env.VITE_API_BASE || ''
 
 const CATEGORY_LABELS = {
   graphics: '그래픽',
@@ -174,7 +174,7 @@ function ReviewCard({ review, translation, translating }) {
 
   const displayText = showOriginal ? quote : (translation || quote)
   const hasTranslation = !!translation && translation !== quote
-  const isLong = displayText.length > 420
+  const isLong = displayText.length > 120
 
   return (
     <div className="rounded-lg border border-gray-200 dark:border-[#3a3a5e] bg-gray-50 dark:bg-[#2a2a3e] p-4">

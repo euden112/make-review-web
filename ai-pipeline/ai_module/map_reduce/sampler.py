@@ -158,7 +158,18 @@ def allocate(total: int, ratios: dict[str, float]) -> dict[str, int]:
 def quality_score(row: ReviewRow) -> float:
     playtime = float(row.playtime_hours or 0.0)
     helpful = float(row.helpful_count or 0)
-    return (0.5 * (playtime + 1.0) ** 0.5) + (1.2 * (helpful + 1.0) ** 0.5)
+
+    playtime = min(playtime, 500.0)
+    if playtime < 1.0:
+        playtime_score = 0.3
+    elif playtime < 10.0:
+        playtime_score = 0.5 * (playtime + 1.0) ** 0.5
+    elif playtime < 100.0:
+        playtime_score = 0.8 * (playtime + 1.0) ** 0.5
+    else:
+        playtime_score = 0.6 * (playtime + 1.0) ** 0.5
+
+    return playtime_score + (1.2 * (helpful + 1.0) ** 0.5)
 
 
 def _apply_language_filter(rows: Sequence[ReviewRow]) -> list[ReviewRow]:
@@ -318,4 +329,13 @@ def stratified_select_reviews(
         len(meta_low) + len(meta_mid) + len(meta_high),
     )
 
-    return selected
+    if len(selected) < total_target:
+        used_ids = {row.id for row in selected}
+        fallback = sorted(
+            [row for row in filtered_rows if row.id not in used_ids],
+            key=quality_score,
+            reverse=True,
+        )
+        selected.extend(fallback[: total_target - len(selected)])
+
+    return selected[:total_target]

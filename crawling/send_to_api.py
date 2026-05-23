@@ -1,122 +1,213 @@
 """
-Review Sender (Steam / Metacritic 통합)
-사용법:
-  python send_to_api.py steam
-  python send_to_api.py metacritic
+Review Sender (Steam / Metacritic)
+
+Supports both crawler output formats currently used in this repository:
+- crawling/output/{platform}.json
+- crawling/{platform}/*_reviews_raw_*.json
 """
 
-import asyncio
-import json
+from __future__ import annotations
+
 import argparse
+import asyncio
 import glob
+import json
 import os
 import sys
 from pathlib import Path
+from typing import Any
+
 import httpx
 
-BASE_DIR = Path(__file__).resolve().parent
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
 
-# ============================================================
-# 플랫폼별 설정
-# ============================================================
+BASE_DIR = Path(__file__).resolve().parent
+TIMEOUT = 60
+
 CONFIGS = {
     "steam": {
-        "api_url":    "http://localhost:8000/api/v1/reviews/steam",
+        "api_path": "/api/v1/reviews/steam",
+        "merged_file": BASE_DIR / "output" / "steam.json",
+        "raw_pattern": BASE_DIR / "steam" / "*_reviews_raw_*.json",
     },
     "metacritic": {
-        "api_url":    "http://localhost:8000/api/v1/reviews/metacritic",
+        "api_path": "/api/v1/reviews/metacritic",
+        "merged_file": BASE_DIR / "output" / "metacritic.json",
+        "raw_pattern": BASE_DIR / "metacritic" / "*_reviews_raw_*.json",
     },
 }
-TIMEOUT = 30
-# ============================================================
 
 
-def _count_reviews(data) -> int:
-    if isinstance(data, dict):
-        return sum(
-            len(game_data.get("reviews") or [])
-            for game_data in data.values()
-            if isinstance(game_data, dict)
-        )
-    return 0
+def _count_reviews(data: Any) -> int:
+    if not isinstance(data, dict):
+        return 0
+    return sum(
+        len(game_data.get("reviews") or [])
+        for game_data in data.values()
+        if isinstance(game_data, dict)
+    )
 
 
-async def send(platform: str) -> int:
-    config = CONFIGS[platform]
-    api_url    = config["api_url"]
-
-    # 1. 타임스탬프가 포함된 최신 결과 파일을 동적으로 찾습니다.
-    search_pattern = str(BASE_DIR / platform / "*_reviews_raw_*.json")
-    file_list = glob.glob(search_pattern)
-
-    if not file_list:
-        print(f"[{platform}] 전송할 데이터 파일을 찾을 수 없습니다.")
-        return 1
-
-    input_file = max(file_list, key=os.path.getctime)
-
-    with open(input_file, "r", encoding="utf-8") as f:
+def _load_json(path: Path) -> dict[str, Any]:
+    with path.open("r", encoding="utf-8") as f:
         data = json.load(f)
+    return data if isinstance(data, dict) else {}
 
+
+def _save_json(path: Path, data: dict[str, Any]) -> None:
+    if not data:
+        path.unlink(missing_ok=True)
+        return
+    with path.open("w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def _find_input(platform: str) -> tuple[Path | None, str]:
+    config = CONFIGS[platform]
+    merged_file: Path = config["merged_file"]
+    if merged_file.exists():
+        return merged_file, "merged"
+
+    files = [Path(p) for p in glob.glob(str(config["raw_pattern"]))]
+    if files:
+        return max(files, key=os.path.getctime), "raw"
+    return None, "missing"
+
+
+async def _post_payload(client: httpx.AsyncClient, api_url: str, payload: dict[str, Any]) -> httpx.Response:
+    return await client.post(api_url, json=payload, timeout=TIMEOUT)
+
+
+def _response_detail(response: httpx.Response) -> Any:
+    try:
+        return response.json()
+    except ValueError:
+        return response.text[:500]
+
+
+def _accepted_response(response: httpx.Response) -> bool:
+    if response.status_code not in (200, 201):
+        return False
+    detail = _response_detail(response)
+    if isinstance(detail, dict) and detail.get("status") == "partial":
+        return False
+    return True
+
+
+def _api_url(platform: str, host: str) -> str:
+    return host.rstrip("/") + CONFIGS[platform]["api_path"]
+
+
+async def _send_raw(platform: str, path: Path, api_url: str, keep: bool) -> int:
+    data = _load_json(path)
     review_count = _count_reviews(data)
     if review_count == 0:
-        print(f"[{platform}] 전송 중단: 리뷰가 0건입니다.")
+        print(f"[{platform}] send aborted: no reviews in {path}")
         return 1
 
     print("=" * 55)
-    print(f"  플랫폼    : {platform}")
-    print(f"  입력 파일 : {input_file}")
-    print(f"  전송 주소 : {api_url}")
-    print(f"  게임 수   : {len(data)}개")
-    print(f"  리뷰 수   : {review_count}개")
+    print(f"  platform : {platform}")
+    print(f"  input    : {path}")
+    print(f"  endpoint : {api_url}")
+    print(f"  games    : {len(data)}")
+    print(f"  reviews  : {review_count}")
     print("=" * 55)
 
     async with httpx.AsyncClient() as client:
-        try:
-            response = await client.post(
-                api_url,
-                json=data,
-                timeout=TIMEOUT,
-            )
-            print(f"\n  전송 완료")
-            print(f"  상태 코드 : {response.status_code}")
+        response = await _post_payload(client, api_url, data)
+
+    print(f"  status   : {response.status_code}")
+    print(f"  response : {_response_detail(response)}")
+
+    if _accepted_response(response):
+        if keep:
+            print(f"  kept     : {path}")
+            return 0
+        path.unlink(missing_ok=True)
+        print(f"  deleted  : {path}")
+        return 0
+    print("  kept     : response was not a complete success")
+    return 1
+
+
+async def _send_merged(platform: str, path: Path, api_url: str, keep: bool) -> int:
+    data = _load_json(path)
+    review_count = _count_reviews(data)
+    if review_count == 0:
+        print(f"[{platform}] send aborted: no reviews in {path}")
+        return 1
+
+    print("=" * 55)
+    print(f"  platform : {platform}")
+    print(f"  input    : {path}")
+    print(f"  endpoint : {api_url}")
+    print(f"  games    : {len(data)}")
+    print(f"  reviews  : {review_count}")
+    print(f"  mode     : per-game retryable")
+    print("=" * 55)
+
+    success = 0
+    failed = 0
+    async with httpx.AsyncClient() as client:
+        for slug in list(data.keys()):
+            payload = {slug: data[slug]}
             try:
-                response_body = response.json()
-            except ValueError:
-                response_body = response.text
-            print(f"  응답      : {response_body}")
+                response = await _post_payload(client, api_url, payload)
+            except (httpx.ConnectError, httpx.TimeoutException) as e:
+                print(f"  [FAIL] {slug}: {type(e).__name__}")
+                failed += 1
+                continue
 
-            # 2. 전송 성공 시(200, 201) 원본 파일을 삭제합니다.
-            if response.status_code in (200, 201):
-                os.remove(input_file)
-                print(f"  원본 파일 삭제 완료: {input_file}")
-                return 0
+            if _accepted_response(response):
+                print(f"  [OK {response.status_code}] {slug}")
+                success += 1
+                if not keep:
+                    del data[slug]
+                    _save_json(path, data)
             else:
-                print(f"  전송 실패 (상태 코드: {response.status_code}). 복구를 위해 원본 파일을 보존합니다.")
-                return 1
+                print(f"  [FAIL {response.status_code}] {slug}: {_response_detail(response)}")
+                failed += 1
 
-        except httpx.ConnectError:
-            print(f"\n  서버에 연결할 수 없습니다.")
-            print(f"  FastAPI 서버가 실행 중인지 확인하세요.")
-            print(f"  서버 주소: {api_url}")
-            return 1
+    print("=" * 55)
+    print(f"  complete : {success} ok / {failed} failed")
+    if failed:
+        print("  failed games remain in the input file for retry.")
+    print("=" * 55)
+    return 0 if failed == 0 else 1
 
-        except httpx.TimeoutException:
-            print(f"\n  전송 시간 초과 ({TIMEOUT}초)")
-            return 1
 
-        except Exception as e:
-            print(f"\n  전송 실패: {e}")
-            return 1
+async def send(platform: str, host: str, keep: bool = False) -> int:
+    api_url = _api_url(platform, host)
+    path, mode = _find_input(platform)
+    if path is None:
+        print(f"[{platform}] no data file found")
+        return 1
+
+    try:
+        if mode == "merged":
+            return await _send_merged(platform, path, api_url, keep=keep)
+        return await _send_raw(platform, path, api_url, keep=keep)
+    except httpx.ConnectError:
+        print(f"[{platform}] cannot connect to API server: {api_url}")
+        return 1
+    except httpx.TimeoutException:
+        print(f"[{platform}] send timed out after {TIMEOUT}s")
+        return 1
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Review Sender")
+    parser = argparse.ArgumentParser(description="Send crawler JSON to backend API")
+    parser.add_argument("platform", choices=["steam", "metacritic"])
     parser.add_argument(
-        "platform",
-        choices=["steam", "metacritic"],
-        help="전송할 플랫폼을 선택하세요: steam 또는 metacritic",
+        "--host",
+        default="http://localhost:8000",
+        help="backend API host (default: http://localhost:8000)",
     )
+    parser.add_argument("--keep", action="store_true", help="keep successfully sent merged entries")
     args = parser.parse_args()
 
-    sys.exit(asyncio.run(send(args.platform)))
+    sys.exit(asyncio.run(send(args.platform, host=args.host, keep=args.keep)))
