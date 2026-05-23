@@ -140,8 +140,8 @@ async def get_unified_summary(
     review_text_map = await _fetch_representative_review_texts(db, summary.representative_reviews_json)
     result = _serialize_summary(summary, summary.job, compact=compact, review_text_map=review_text_map)
 
-    await set_summary_cache(game_id, summary_type, result)
     logger.info("cache_miss game_id=%s summary_type=%s", game_id, summary_type)
+    await set_summary_cache(game_id, summary_type, result)
 
     return result
 

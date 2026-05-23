@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import GameListPage from './GameListPage'
 import GameDetailPage from './GameDetailPage'
+import ChatBot from './ChatBot'
 import GameComparePage from './GameComparePage'
 
 function App() {
@@ -30,6 +31,7 @@ function App() {
         <Route path="/games/:id" element={<GameDetailPage isDark={isDark} toggleDark={toggleDark} />} />
         <Route path="/compare" element={<GameComparePage isDark={isDark} toggleDark={toggleDark} />} />
       </Routes>
+      <ChatBot isDark={isDark} />
     </BrowserRouter>
   )
 }
