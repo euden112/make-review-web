@@ -159,15 +159,19 @@ def quality_score(row: ReviewRow) -> float:
     playtime = float(row.playtime_hours or 0.0)
     helpful = float(row.helpful_count or 0)
 
+    # 이상치 처리
     playtime = min(playtime, 500.0)
-    if playtime < 1.0:
-        playtime_score = 0.3
-    elif playtime < 10.0:
+
+    # playtime_bucket 태그 기반 가중치
+    bucket = row.playtime_bucket  # early / mid / late / unknown
+    if bucket == "early":
+        playtime_score = 0.4 * (playtime + 1.0) ** 0.5
+    elif bucket == "mid":
+        playtime_score = 0.7 * (playtime + 1.0) ** 0.5
+    elif bucket == "late":
         playtime_score = 0.5 * (playtime + 1.0) ** 0.5
-    elif playtime < 100.0:
-        playtime_score = 0.8 * (playtime + 1.0) ** 0.5
-    else:
-        playtime_score = 0.6 * (playtime + 1.0) ** 0.5
+    else:  # unknown (playtime 없는 경우)
+        playtime_score = 0.3 * (playtime + 1.0) ** 0.5
 
     return playtime_score + (1.2 * (helpful + 1.0) ** 0.5)
 
