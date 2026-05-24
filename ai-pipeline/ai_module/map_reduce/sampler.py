@@ -263,6 +263,9 @@ def stratified_select_reviews(
 
     # 플레이타임 버킷을 계산해 버킷별로 균형 있게 선택
     buckets = compute_playtime_buckets(filtered_rows)
+    filtered_rows = tag_reviews(filtered_rows, buckets)
+    steam_rows = [row for row in filtered_rows if row.platform_code == STEAM_PLATFORM_CODE]
+    metacritic_rows = [row for row in filtered_rows if row.platform_code == METACRITIC_PLATFORM_CODE]
     if buckets is None:
         # 플레이타임 정보 부족 시 기존 방식 유지
         steam_pos = sorted(
