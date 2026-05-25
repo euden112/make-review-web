@@ -407,9 +407,15 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
             job.map_output_tokens   = sum(getattr(r, "output_tokens", 0) for r in map_results)
             job.reduce_input_tokens  = getattr(ai_result, "input_tokens", 0)
             job.reduce_output_tokens = getattr(ai_result, "output_tokens", 0)
-            # Chunk별 실패 통계 — run_map_stage가 첫 번째 결과에 부착
-            if map_results and hasattr(map_results[0], "failure_stats"):
-                job.failure_reasons_json = map_results[0].failure_stats
+            # Chunk별 실패 통계와 기능별 Reduce 사용량을 같은 JSON 필드에 기록
+            failure_reasons: dict = {}
+            if map_results and getattr(map_results[0], "failure_stats", None):
+                failure_reasons.update(map_results[0].failure_stats or {})
+            reduce_usage = getattr(ai_result, "reduce_usage", None)
+            if reduce_usage:
+                failure_reasons["reduce_usage"] = reduce_usage
+            if failure_reasons:
+                job.failure_reasons_json = failure_reasons
 
             # 11. DB 버전 결정
             latest_summary_version = (await db.execute(

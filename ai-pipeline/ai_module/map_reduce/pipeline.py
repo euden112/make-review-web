@@ -6,7 +6,8 @@ from typing import Any
 
 from ai_module.map_reduce.chunker import chunk_reviews_by_chars
 from ai_module.map_reduce.map_local import run_map_stage, MapResult
-from ai_module.map_reduce.reduce_api import FinalSummary, run_reduce_stage
+from ai_module.map_reduce.map_schema import dumps_map_payload, safe_parse_json_object
+from ai_module.map_reduce.reduce_api import FinalSummary, run_feature_reduce_stage
 from ai_module.map_reduce.sampler import (
     ReviewRow,
     PlaytimeBuckets,
@@ -172,6 +173,64 @@ def _group_map_outputs_by_tags(
         "all": [], "early": [], "mid": [], "late": [], "critic": [], "user": []
     }
 
+    def _filter_summary(summary_text: str, allowed_ids: set[int]) -> str | None:
+        if not allowed_ids:
+            return None
+        try:
+            payload = safe_parse_json_object(summary_text)
+        except Exception:
+            return summary_text
+
+        review_ids = [
+            int(rid) for rid in payload.get("review_ids", [])
+            if int(rid) in allowed_ids
+        ]
+        if not review_ids:
+            return None
+
+        evidence_items = [
+            item for item in payload.get("evidence_items", [])
+            if isinstance(item, dict)
+            and int(item.get("review_id", -1)) in allowed_ids
+        ]
+        if not evidence_items:
+            return None
+
+        payload["review_ids"] = review_ids
+        payload["evidence_items"] = evidence_items
+        payload["quote_candidates"] = [
+            item for item in payload.get("quote_candidates", [])
+            if isinstance(item, dict)
+            and int(item.get("review_id", -1)) in allowed_ids
+        ]
+
+        aspects = payload.get("aspects", {})
+        if isinstance(aspects, dict):
+            filtered_aspects = {}
+            for key, value in aspects.items():
+                if not isinstance(value, dict):
+                    continue
+                evidence_ids = [
+                    int(rid) for rid in value.get("evidence_ids", [])
+                    if int(rid) in allowed_ids
+                ]
+                if evidence_ids:
+                    filtered_value = dict(value)
+                    filtered_value["evidence_ids"] = evidence_ids
+                    filtered_aspects[key] = filtered_value
+            payload["aspects"] = filtered_aspects
+
+        critic_signals = payload.get("critic_signals", {})
+        if isinstance(critic_signals, dict):
+            critic_signals = dict(critic_signals)
+            critic_signals["evidence_ids"] = [
+                int(rid) for rid in critic_signals.get("evidence_ids", [])
+                if int(rid) in allowed_ids
+            ]
+            payload["critic_signals"] = critic_signals
+
+        return dumps_map_payload(payload)
+
     for result in map_results:
         summary_text = result.summary
         review_ids: list[int] = getattr(result, "review_ids", [])
@@ -186,13 +245,22 @@ def _group_map_outputs_by_tags(
 
         for bucket in ("early", "mid", "late"):
             if bucket in buckets_in_chunk:
-                groups[bucket].append(summary_text)
+                bucket_ids = {rid for rid in review_ids if id_to_bucket.get(rid, "unknown") == bucket}
+                filtered = _filter_summary(summary_text, bucket_ids)
+                if filtered is not None:
+                    groups[bucket].append(filtered)
 
         if "critic" in types_in_chunk:
-            groups["critic"].append(summary_text)
+            critic_ids = {rid for rid in review_ids if id_to_type.get(rid, "user") == "critic"}
+            filtered = _filter_summary(summary_text, critic_ids)
+            if filtered is not None:
+                groups["critic"].append(filtered)
         # user 그룹은 critic이 아닌 리뷰가 하나라도 포함된 청크 = 비-critic 타입 존재
         if any(t != "critic" for t in types_in_chunk):
-            groups["user"].append(summary_text)
+            user_ids = {rid for rid in review_ids if id_to_type.get(rid, "user") != "critic"}
+            filtered = _filter_summary(summary_text, user_ids)
+            if filtered is not None:
+                groups["user"].append(filtered)
 
     return groups
 
@@ -228,6 +296,19 @@ def _ensure_bucket_coverage(
     return result
 
 
+def _has_playtime_bucket_coverage(
+    tagged: list[ReviewRow],
+    min_per_bucket: int = 20,
+) -> bool:
+    counts = {"early": 0, "mid": 0, "late": 0}
+    for row in tagged:
+        if row.platform_code != "steam":
+            continue
+        if row.playtime_bucket in counts:
+            counts[row.playtime_bucket] += 1
+    return all(count >= min_per_bucket for count in counts.values())
+
+
 
 async def run_hybrid_summary_pipeline(
     *,
@@ -252,7 +333,6 @@ async def run_hybrid_summary_pipeline(
         return [], FinalSummary(
             one_liner="요약 가능한 리뷰가 없습니다.",
             aspect_scores={},
-            representative_reviews=[],
             full_text="요약 가능한 리뷰가 없습니다.",
         ), None
 
@@ -287,19 +367,23 @@ async def run_hybrid_summary_pipeline(
     )
 
     map_func = map_runner or run_map_stage
-    reduce_func = reduce_runner or run_reduce_stage
+    reduce_func = reduce_runner or run_feature_reduce_stage
 
     map_results = await map_func(
         game_id=game_id,
         language_code=language_code,
         chunks=chunks,
         model_name=local_model_name,
-        prompt_version="v2",
+        prompt_version="json_v2_llm_map",
         cache=cache or _NullAsyncCache(),
         ollama_base_url=ollama_base_url,
     )
 
     grouped_summaries = _group_map_outputs_by_tags(map_results, tagged)
+    if buckets is None or not _has_playtime_bucket_coverage(tagged):
+        grouped_summaries["early"] = []
+        grouped_summaries["mid"] = []
+        grouped_summaries["late"] = []
     representative_quotes = _select_representative_quotes(tagged)
 
     final = await reduce_func(

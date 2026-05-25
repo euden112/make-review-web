@@ -1,7 +1,8 @@
 from ai_module.map_reduce.pipeline import run_hybrid_summary_pipeline
-from ai_module.map_reduce.reduce_api import run_reduce_stage
+from ai_module.map_reduce.reduce_api import run_feature_reduce_stage, run_reduce_stage
 
 __all__ = [
 	"run_hybrid_summary_pipeline",
+	"run_feature_reduce_stage",
 	"run_reduce_stage",
 ]

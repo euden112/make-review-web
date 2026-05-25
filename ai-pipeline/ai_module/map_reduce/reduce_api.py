@@ -56,6 +56,7 @@ class FinalSummary:
     # 메타
     input_tokens: int = 0
     output_tokens: int = 0
+    reduce_usage: dict[str, Any] = field(default_factory=dict)
     error_code: str | None = None
     is_retryable: bool | None = None
 
@@ -131,6 +132,12 @@ def _to_string_list(value: Any) -> list[str]:
     return [str(item).strip() for item in value if str(item).strip()]
 
 
+def _summary_text(value: Any) -> str:
+    if isinstance(value, list):
+        return " ".join(str(item).strip() for item in value if str(item).strip())
+    return str(value or "").strip()
+
+
 def _normalize_sentiment_overall(value: Any) -> str | None:
     text = str(value).strip().lower()
     if text in {"positive", "mixed", "negative"}:
@@ -149,7 +156,7 @@ def _normalize_sentiment_score(value: Any) -> float | None:
 def _parse_bucket(data: Any) -> BucketSummary | None:
     if not isinstance(data, dict):
         return None
-    summary_str = str(data.get("summary", "")).strip()
+    summary_str = _summary_text(data.get("summary", ""))
     if not summary_str:
         return None
     return BucketSummary(
@@ -216,6 +223,367 @@ async def _generate_reduce_response(
         response_format={"type": "json_object"},
         temperature=0.2,
     )
+
+
+FEATURE_QUALITY_RULES = """
+Quality rules:
+- Avoid vague group claims such as "users praised combat" unless concrete evidence follows.
+- Ground natural-language fields in evidence_items or representative quotes.
+- Good sentences include at least three of: aspect, concrete situation, evaluation feeling, source.
+- Do not invent Metacritic user review details from score anchors.
+- Use score anchors only to calibrate tone and sentiment scores.
+- In Korean output, prefer concrete review details over abstract category labels.
+- Bad Korean: "유저들은 난이도를 칭찬했다", "콘텐츠가 다양하다", "의견이 분분하다".
+- Good Korean: "한 리뷰는 불의 거인에서 같은 공격에 계속 맞아 분노했다고 했고, 다른 리뷰는 길잡이가 불친절해도 그 자유도 덕분에 난이도를 우회할 수 있다고 봤다."
+- Every summary must mention at least four concrete details from evidence_items unless fewer than four evidence items exist.
+- pros and cons must be self-contained review-grounded sentences, not short labels.
+""".strip()
+
+
+def _parse_map_payloads(items: list[str]) -> list[dict[str, Any]]:
+    from ai_module.map_reduce.map_schema import legacy_text_to_map_payload, normalize_map_payload, safe_parse_json_object
+
+    payloads: list[dict[str, Any]] = []
+    for idx, item in enumerate(items, 1):
+        try:
+            parsed = safe_parse_json_object(item)
+            review_ids = [int(v) for v in parsed.get("review_ids", []) if str(v).isdigit()]
+            parsed = normalize_map_payload(parsed, chunk_no=int(parsed.get("chunk_no") or idx), review_ids=review_ids)
+        except Exception:
+            parsed = legacy_text_to_map_payload(item, chunk_no=idx, review_ids=[idx])
+        payloads.append(parsed)
+    return payloads
+
+
+def _evidence_subset(payloads: list[dict[str, Any]], *, limit: int = 80) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    seen: set[tuple[Any, str, str]] = set()
+    for payload in payloads:
+        evidence = payload.get("evidence_items", [])
+        if not isinstance(evidence, list):
+            continue
+        for item in evidence:
+            if isinstance(item, dict):
+                detail = " ".join(str(item.get("detail", "")).split())[:180]
+                snippet = " ".join(str(item.get("snippet", "")).split())[:180]
+                if len(detail) < 12 or len(snippet) < 12:
+                    continue
+                key = (item.get("review_id"), str(item.get("aspect", "")), detail.lower())
+                if key in seen:
+                    continue
+                seen.add(key)
+                rows.append(
+                    {
+                        "review_id": item.get("review_id"),
+                        "source": item.get("source"),
+                        "aspect": item.get("aspect"),
+                        "polarity": item.get("polarity"),
+                        "detail": detail,
+                        "snippet": snippet,
+                    }
+                )
+    polarity_rank = {"negative": 0, "positive": 1, "mixed": 2}
+    rows.sort(key=lambda item: (polarity_rank.get(str(item.get("polarity")), 3), str(item.get("aspect", "")), int(item.get("review_id") or 0)))
+    return rows[:limit]
+
+
+def _signal_subset(payloads: list[dict[str, Any]], key: str) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for payload in payloads:
+        value = payload.get(key)
+        if isinstance(value, dict):
+            result.append(value)
+    return result
+
+
+def _json_block(title: str, data: Any, max_chars: int = 12000) -> str:
+    text = json.dumps(data, ensure_ascii=False)
+    if len(text) > max_chars:
+        text = text[:max_chars] + "...(truncated)"
+    return f"[{title}]\n{text}"
+
+
+def _build_feature_prompt(
+    *,
+    feature: str,
+    language_code: str,
+    payloads: list[dict[str, Any]],
+    output_contract: dict[str, Any],
+    score_anchors: dict[str, float | None] | None = None,
+    category_frequency: list[tuple[str, int, float]] | None = None,
+    representative_quotes: list[str] | None = None,
+    extra: dict[str, Any] | None = None,
+    evidence_limit: int = 80,
+) -> str:
+    strict_requirements = {
+        "summary_style": [
+            "Write Korean natural-language fields as dense evidence synthesis.",
+            "Do not start with generic genre framing unless followed by concrete review detail in the same sentence.",
+            "Use review-grounded details such as named boss/area, crash/cutscene, control issue, repeated farming, playtime condition, or quoted feeling.",
+            "Avoid unsupported generalizations like 'players have various experiences'.",
+        ],
+        "minimum_detail": {
+            "summary": "At least 6 Korean sentences for user/final context when enough evidence exists; each sentence should include concrete evidence detail.",
+            "pros": "Each item must include a concrete situation or quoted feeling from evidence.",
+            "cons": "Each item must include a concrete failure mode, frustration condition, or quoted complaint from evidence.",
+        },
+        "grounding_format": "When natural, include review_id in parentheses like (review_id=12) so grounding can be audited.",
+    }
+    sections = [
+        f"feature={feature}",
+        f"language={language_code}",
+        FEATURE_QUALITY_RULES,
+        _json_block("strict_requirements", strict_requirements, 5000),
+        _json_block("output_contract", output_contract, 4000),
+        _json_block("evidence_items", _evidence_subset(payloads, limit=evidence_limit), 9000),
+    ]
+    if score_anchors:
+        sections.append(_json_block("score_anchors", score_anchors, 3000))
+    if category_frequency:
+        sections.append(_json_block("category_frequency", category_frequency, 5000))
+    if representative_quotes:
+        sections.append(_json_block("representative_quotes", representative_quotes[:6], 3000))
+    if extra:
+        sections.append(_json_block("extra_context", extra, 4500))
+    return "\n\n".join(sections)
+
+
+async def _run_feature_json(
+    *,
+    client: AsyncGroq,
+    model_name: str,
+    feature: str,
+    prompt: str,
+    timeout_sec: int,
+) -> tuple[dict[str, Any], dict[str, int]]:
+    system_prompt = (
+        "You are a game review synthesis engine. Return JSON only. "
+        "Every natural-language field must be grounded in the supplied evidence. "
+        "When language=ko, write detailed Korean sentences using concrete review evidence, not vague category summaries."
+    )
+    response = await asyncio.wait_for(
+        _generate_reduce_response(client, model_name, system_prompt, prompt),
+        timeout=timeout_sec,
+    )
+    raw_text = (response.choices[0].message.content or "").strip()
+    parsed = _safe_parse_json(raw_text)
+    usage = {
+        "requests": 1,
+        "input_tokens": int(response.usage.prompt_tokens or 0),
+        "output_tokens": int(response.usage.completion_tokens or 0),
+        "retry": 0,
+    }
+    logger.info(
+        "feature reduce completed: feature=%s input_tokens=%d output_tokens=%d chars=%d",
+        feature,
+        usage["input_tokens"],
+        usage["output_tokens"],
+        len(raw_text),
+    )
+    return parsed, usage
+
+
+def _bucket_to_dict(bucket: BucketSummary | None) -> dict[str, Any] | None:
+    if bucket is None:
+        return None
+    return {
+        "summary": bucket.summary,
+        "sentiment_overall": bucket.sentiment_overall,
+        "sentiment_score": bucket.sentiment_score,
+        "pros": bucket.pros,
+        "cons": bucket.cons,
+        "keywords": bucket.keywords,
+    }
+
+
+def _parse_feature_bucket(data: Any) -> BucketSummary | None:
+    return _parse_bucket(data)
+
+
+def _has_min_evidence(payloads: list[dict[str, Any]], minimum: int = 5) -> bool:
+    return len(_evidence_subset(payloads, limit=minimum)) >= minimum
+
+
+async def run_feature_reduce_stage(
+    *,
+    api_key: str,
+    model_name: str,
+    language_code: str,
+    grouped_summaries: dict[str, list[str]],
+    timeout_sec: int = 180,
+    score_anchors: dict[str, float | None] | None = None,
+    category_frequency: list[tuple[str, int, float]] | None = None,
+    prior_summary_text: str | None = None,
+    representative_quotes: list[str] | None = None,
+    map_summaries: list[str] | None = None,
+) -> FinalSummary:
+    if map_summaries is not None and not grouped_summaries:
+        grouped_summaries = {"all": map_summaries}
+
+    client = AsyncGroq(api_key=api_key)
+    user_payloads = _parse_map_payloads(grouped_summaries.get("user") or grouped_summaries.get("all", []))
+    critic_payloads = _parse_map_payloads(grouped_summaries.get("critic", []))
+    early_payloads = _parse_map_payloads(grouped_summaries.get("early", []))
+    mid_payloads = _parse_map_payloads(grouped_summaries.get("mid", []))
+    late_payloads = _parse_map_payloads(grouped_summaries.get("late", []))
+
+    usage: dict[str, Any] = {}
+    try:
+        user_contract = {
+            "summary": "6-9 detailed Korean sentences; include at least 4 concrete evidence details and review_id anchors when possible",
+            "sentiment_overall": "positive|mixed|negative",
+            "sentiment_score": "0..100",
+            "pros": "5-7 concrete evidence-backed Korean strings with situation/detail, not labels",
+            "cons": "4-6 concrete evidence-backed Korean strings with failure mode or frustration detail",
+            "keywords": "8-12 evidence-backed topics; include specific terms like boss, area, crash, pathfinding when present",
+            "recommended_for": "3-5 evidence-backed player types with concrete reason",
+            "caution_for": "3-5 evidence-backed caveats with concrete reason",
+        }
+        user_data, usage["user"] = await _run_feature_json(
+            client=client,
+            model_name=model_name,
+            feature="user",
+            timeout_sec=timeout_sec,
+            prompt=_build_feature_prompt(
+                feature="user",
+                language_code=language_code,
+                payloads=user_payloads,
+                output_contract=user_contract,
+                score_anchors=score_anchors,
+                category_frequency=category_frequency,
+                representative_quotes=representative_quotes,
+                evidence_limit=24,
+            ),
+        )
+
+        critic_data: dict[str, Any] | None = None
+        if critic_payloads:
+            critic_contract = {
+                "summary": "6-8 Korean sentences about critic evaluation criteria and concrete praise/criticism",
+                "sentiment_overall": "positive|mixed|negative",
+                "sentiment_score": "0..100",
+                "pros": "4-6 strings",
+                "cons": "3-5 strings",
+                "keywords": "6-10 strings",
+                "evaluation_criteria": "4-6 strings",
+            }
+            critic_data, usage["critic"] = await _run_feature_json(
+                client=client,
+                model_name=model_name,
+                feature="critic",
+                timeout_sec=timeout_sec,
+                prompt=_build_feature_prompt(
+                    feature="critic",
+                    language_code=language_code,
+                    payloads=critic_payloads,
+                    output_contract=critic_contract,
+                    score_anchors=score_anchors,
+                    evidence_limit=20,
+                ),
+            )
+
+        playtime_contract = {
+            "early": "object with 3-4 sentence summary/pros/cons/keywords or null",
+            "mid": "object with 3-4 sentence summary/pros/cons/keywords or null",
+            "late": "object with 3-4 sentence summary/pros/cons/keywords or null",
+        }
+        valid_playtime_buckets = {
+            "early": _has_min_evidence(early_payloads),
+            "mid": _has_min_evidence(mid_payloads),
+            "late": _has_min_evidence(late_payloads),
+        }
+        playtime_payloads = []
+        if valid_playtime_buckets["early"]:
+            playtime_payloads.extend(early_payloads)
+        if valid_playtime_buckets["mid"]:
+            playtime_payloads.extend(mid_payloads)
+        if valid_playtime_buckets["late"]:
+            playtime_payloads.extend(late_payloads)
+        playtime_data: dict[str, Any] = {}
+        if sum(1 for is_valid in valid_playtime_buckets.values() if is_valid) >= 2:
+            playtime_data, usage["playtime"] = await _run_feature_json(
+                client=client,
+                model_name=model_name,
+                feature="playtime",
+                timeout_sec=timeout_sec,
+                prompt=_build_feature_prompt(
+                    feature="playtime",
+                    language_code=language_code,
+                    payloads=[],
+                    output_contract=playtime_contract,
+                    extra={
+                        "valid_buckets": valid_playtime_buckets,
+                        "early_evidence": _evidence_subset(early_payloads, limit=8) if valid_playtime_buckets["early"] else [],
+                        "mid_evidence": _evidence_subset(mid_payloads, limit=8) if valid_playtime_buckets["mid"] else [],
+                        "late_evidence": _evidence_subset(late_payloads, limit=8) if valid_playtime_buckets["late"] else [],
+                    },
+                    evidence_limit=0,
+                ),
+            )
+
+        final_contract = {
+            "one_liner": "one Korean sentence under 100 chars with a concrete evidence-backed tradeoff",
+            "aspect_scores": "4-7 evidence-backed aspect labels and scores",
+            "sentiment_overall": "positive|mixed|negative",
+            "sentiment_score": "0..100",
+            "pros": "5-7 concrete evidence-backed Korean strings with situation/detail, not labels",
+            "cons": "4-6 concrete evidence-backed Korean strings with failure mode or frustration detail",
+            "keywords": "8-12 evidence-backed topics; prefer specific evidence topics over broad genre labels",
+        }
+        final_data, usage["final"] = await _run_feature_json(
+            client=client,
+            model_name=model_name,
+            feature="final",
+            timeout_sec=timeout_sec,
+            prompt=_build_feature_prompt(
+                feature="final",
+                language_code=language_code,
+                payloads=user_payloads + critic_payloads,
+                output_contract=final_contract,
+                score_anchors=score_anchors,
+                category_frequency=category_frequency,
+                representative_quotes=representative_quotes,
+                evidence_limit=10,
+                extra={
+                    "user_summary": user_data,
+                    "critic_summary": critic_data,
+                    "playtime_summary": playtime_data,
+                    "prior_summary_text": prior_summary_text[:1200] if prior_summary_text else None,
+                },
+            ),
+        )
+
+        input_tokens = sum(int(item.get("input_tokens", 0) or 0) for item in usage.values())
+        output_tokens = sum(int(item.get("output_tokens", 0) or 0) for item in usage.values())
+
+        return FinalSummary(
+            one_liner=str(final_data.get("one_liner", "")),
+            aspect_scores=final_data.get("aspect_scores", {}) if isinstance(final_data.get("aspect_scores"), dict) else {},
+            full_text="",
+            sentiment_overall=_normalize_sentiment_overall(final_data.get("sentiment_overall")),
+            sentiment_score=_normalize_sentiment_score(final_data.get("sentiment_score")),
+            pros=_to_string_list(final_data.get("pros", [])),
+            cons=_to_string_list(final_data.get("cons", [])),
+            keywords=_to_string_list(final_data.get("keywords", [])),
+            playtime_early=_parse_feature_bucket(playtime_data.get("early") if isinstance(playtime_data, dict) else None),
+            playtime_mid=_parse_feature_bucket(playtime_data.get("mid") if isinstance(playtime_data, dict) else None),
+            playtime_late=_parse_feature_bucket(playtime_data.get("late") if isinstance(playtime_data, dict) else None),
+            critic=_parse_feature_bucket(critic_data),
+            user=_parse_feature_bucket(user_data),
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            reduce_usage=usage,
+        )
+    except Exception as exc:
+        error_code, is_retryable = classify_reduce_error(exc)
+        logger.warning("feature reduce failed: code=%s retryable=%s error=%s", error_code, is_retryable, exc)
+        return FinalSummary(
+            one_liner="요약 생성 중 오류가 발생했습니다.",
+            aspect_scores={},
+            error_code=error_code,
+            is_retryable=is_retryable,
+            reduce_usage=usage,
+        )
 
 
 def _build_user_prompt(
