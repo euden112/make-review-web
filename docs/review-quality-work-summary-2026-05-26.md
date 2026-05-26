@@ -211,6 +211,12 @@ docker compose exec backend python /workspace/ai-pipeline/dry_quality_run.py --g
 - 미친불 엔딩 컷신 후 강제종료
 - PC판 데이터 손실/로드 실패
 
+주의:
+
+- 위 항목은 dry test 당시 내부 evidence 구체성 확인용 예시다.
+- 공개 사용자 화면에는 특정 보스명, 후반 지역명, 엔딩명처럼 스포일러가 될 수 있는 고유명사를 그대로 노출하지 않는다.
+- 공개 출력에서는 "후반부 대형 보스전", "특정 중반 지역", "특정 엔딩 연출 이후"처럼 경험 유형과 영향만 남기는 redaction이 필요하다.
+
 ### Grand Theft Auto V
 
 | 항목 | 결과 |

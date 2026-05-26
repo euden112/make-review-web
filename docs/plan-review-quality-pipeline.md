@@ -11,7 +11,9 @@
 
 목표는 Map 출력은 JSON으로 구조화하고, Reduce는 단일 프롬프트가 아니라 기능별 파이프라인으로 나누어 요약 품질을 높이는 것이다. 단, 하루 50개 게임 처리 목표와 외부 LLM 한도를 넘지 않아야 한다.
 
-여기서 말하는 품질 향상은 "Metacritic 유저들은 전투를 칭찬했다"처럼 범주만 말하는 일반론이 아니다. 실제 유저가 남긴 리뷰의 구체 표현과 장면 단서를 요약에 남기는 것이 목표다. 예를 들어 "전투가 좋다"가 아니라 "보스전 BGM이 긴박감을 끌어올리고, 패턴을 피하며 반격하는 순간의 몰입감이 강하다"처럼 원문 리뷰에서 확인 가능한 디테일을 반영해야 한다.
+여기서 말하는 품질 향상은 "Metacritic 유저들은 전투를 칭찬했다"처럼 범주만 말하는 일반론이 아니다. 실제 유저가 남긴 리뷰의 구체 표현과 경험 조건을 요약에 남기는 것이 목표다. 다만 구체성을 확보한다는 이유로 특정 보스명, 후반 지역명, 엔딩명, 반전, 캐릭터 사망, 퀘스트 결말처럼 미경험자에게 스포일러가 될 수 있는 정보를 공개 출력에 그대로 노출해서는 안 된다.
+
+예를 들어 "전투가 좋다"는 너무 일반적이지만, "불의 거인 보스전에서 반복 사망했다"는 스포일러 위험이 있다. 공개 요약에서는 "후반부 대형 보스전에서 반복 실패가 누적되며 피로감을 느꼈다는 반응이 있다"처럼 원문 리뷰의 경험을 보존하되 고유명사와 사건 결말을 추상화해야 한다.
 
 따라서 새 파이프라인의 품질 기준은 다음이다.
 
@@ -19,8 +21,28 @@
 - pros/cons/keywords/aspect score는 가능한 한 원문 snippet 또는 Map JSON의 `evidence_items`와 연결한다.
 - LLM이 "있을 법한 장점"을 꾸며내지 못하도록 score anchor는 톤 보정에만 쓰고, 구체 문장 근거는 원문 리뷰에서 가져온다.
 - 최종 문장은 짧은 인용 복사가 아니라 여러 원문 근거를 압축해 자연어로 재서술한다.
+- 공개 출력은 스포일러 안전성을 만족해야 한다. 특정 보스명, 엔딩명, 후반 지역명, 반전, 캐릭터 사망, 퀘스트 결말은 내부 evidence에는 보존할 수 있지만 `summary`, `pros`, `cons`, `keywords`, `one_liner`, `recommended_for`, `caution_for`, `evaluation_criteria`에는 그대로 노출하지 않는다.
 
 이 품질 기준은 특정 요약에만 적용하지 않는다. `user_summaries`, `critic_summaries`, `playtime_analyses`, `game_review_summaries`에 저장되는 모든 자연어 출력이 같은 기준을 만족해야 한다. `summary` 본문뿐 아니라 `pros`, `cons`, `keywords`, `aspect_scores.label`, `one_liner`, `recommended_for`, `caution_for`, `evaluation_criteria`도 실제 리뷰 근거 없이 일반론으로 채우면 실패로 본다.
+
+### 1-1. 스포일러 안전 구체성 기준
+
+새 기준은 **내부 근거 보존**과 **공개 출력 안전화**를 분리한다.
+
+| 계층 | 허용 | 금지/주의 |
+|---|---|---|
+| Map internal evidence | 원문 snippet, review_id, 구체 명칭 보존 가능 | LLM이 원문에 없는 명칭을 새로 생성하면 실패 |
+| Reduce 입력 | 가능하면 `public_detail` 또는 redacted detail 우선 사용 | raw spoiler detail을 그대로 최종 문장에 복사하지 않음 |
+| 공개 출력 | 경험 유형, 플레이 조건, 불만/만족 이유, 영향 설명 | 특정 보스명, 엔딩명, 반전, 캐릭터 사망, 후반 지역명, 퀘스트 결말 |
+
+표현 기준:
+
+| 나쁜 표현 | 이유 | 좋은 표현 |
+|---|---|---|
+| "불의 거인 보스전에서 반복 사망했다." | 특정 보스명 노출 | "후반부 대형 보스전에서 반복 실패로 피로감을 느꼈다는 반응이 있다." |
+| "미친불 엔딩 컷신 후 강제종료가 발생했다." | 특정 엔딩명 노출 | "특정 엔딩 연출 이후 강제 종료를 겪었다는 보고가 있다." |
+| "레아 루카리아 NPC/보스 버그가 있다." | 지역명과 진행 요소 노출 | "특정 중반 지역의 NPC/보스 진행 관련 버그 경험이 보고된다." |
+| "보스전이 어렵다." | 너무 일반적 | "패턴 학습을 요구하는 고난도 전투에서 반복 실패와 성취감이 함께 언급된다." |
 
 ## 2. 현재 구조 요약
 
@@ -259,7 +281,9 @@ IDS:
       "source": "steam_user",
       "aspect": "sound",
       "polarity": "positive",
-      "detail": "boss fight music heightens tension during combat",
+      "detail": "late-game boss music heightens tension during repeated dodging and counterattacks",
+      "public_detail": "후반부 고난도 전투의 음악과 패턴 회피가 긴장감을 높인다는 반응",
+      "spoiler_risk": "medium",
       "snippet": "..."
     }
   ],
@@ -276,12 +300,15 @@ IDS:
 - `evidence_items[].review_id`는 실제 chunk review_ids 안에 있어야 한다.
 - `evidence_items[].detail`은 "combat is good" 같은 범주형 평가가 아니라 원문에서 확인 가능한 구체 단서여야 한다.
 - `evidence_items[].snippet`은 원문에서 가져온 짧은 구간이어야 하며, LLM이 새로 지어낸 문장을 넣지 않는다.
+- `evidence_items[].detail`과 `snippet`에는 내부 검증을 위해 원문 수준의 구체성이 남을 수 있다. 단, 공개 출력에 사용할 때는 `public_detail` 또는 redacted 표현을 우선한다.
+- `public_detail`은 스포일러 고유명사를 제거하되 경험 조건, 문제 유형, 감정 영향은 유지해야 한다.
+- `spoiler_risk`는 `none|low|medium|high` 중 하나로 기록한다. 특정 보스명, 엔딩명, 후반 지역명, 반전, 캐릭터 사망, 퀘스트 결말이 포함되면 최소 `medium`, 결말/반전/사망은 `high`로 본다.
 - JSON parse 실패 시 Map 1회 재시도.
 - 재시도 실패 시 해당 chunk는 drop하되 `failure_reasons_json.map_json_invalid`에 기록한다.
 
 캐시 키는 로컬 LLM Map 기본 경로 전환 이후 `prompt_version="json_v2_llm_map"`로 분리한다. 기존 deterministic-primary 캐시와 섞이면 Map 성공률과 품질 측정이 왜곡되므로 같은 캐시 버전을 재사용하지 않는다.
 
-Map 단계의 핵심 산출물은 `summary`가 아니라 `evidence_items`다. Reduce가 좋은 문장을 만들려면 "전투", "음악", "난이도" 같은 라벨만으로는 부족하다. 각 chunk에서 실제 리뷰가 말한 구체 상황, 감각, 불만 조건을 작은 evidence 단위로 보존해야 한다.
+Map 단계의 핵심 산출물은 `summary`가 아니라 `evidence_items`다. Reduce가 좋은 문장을 만들려면 "전투", "음악", "난이도" 같은 라벨만으로는 부족하다. 각 chunk에서 실제 리뷰가 말한 구체 상황, 감각, 불만 조건을 작은 evidence 단위로 보존해야 한다. 다만 공개 출력은 raw detail을 그대로 복사하지 않고 스포일러 안전 표현으로 압축해야 한다.
 
 ### 7-1. Dry-Run 반영 보완
 
@@ -321,7 +348,7 @@ Map 단계의 핵심 산출물은 `summary`가 아니라 `evidence_items`다. Re
 - Map 단계는 deterministic primary가 아니라 로컬 Ollama 기본 경로로 동작한다.
 - `qwen2.5:1.5b`가 schema를 벗어나거나 JSON을 일부 잘라도 review_id 기반 repair로 LLM 선택 결과를 복구한다.
 - dry-run 기준 두 게임 모두 `llm_success_rate=1.0`, `fallback_rate=0.0`으로 1게임/5게임 확대 전 Map 게이트를 통과했다.
-- Reduce 출력은 `불의 거인`, `미친불 엔딩 컷신 후 강제종료`, `NPC가 차를 벽에 박아 퀘스트 진행 불가`, `카지노 제한`처럼 실제 리뷰 근거를 포함한다.
+- Reduce 출력은 실제 리뷰 근거를 포함하되, 공개 문장에서는 스포일러 고유명사를 추상화해야 한다. 예를 들어 내부 evidence가 특정 보스명이나 엔딩명을 포함하더라도 공개 출력은 "후반부 대형 보스전", "특정 엔딩 연출 이후 강제 종료"처럼 표현한다.
 - Playtime bucket coverage가 부족한 경우 playtime reduce를 호출하지 않아 요청 수와 토큰 사용량을 줄인다.
 - `dry_quality_run.py --assert-gates`는 Map 성공률, deterministic fallback, Reduce 토큰/요청, 오류 여부, 출력의 review_id 근거 수를 자동 판정한다.
 
@@ -662,6 +689,36 @@ Metacritic user review를 실제로 지원하려면 `reviewer_type`이 `user|cri
 13. 5게임 dry-run으로 실제 평균 토큰과 품질 기준 통과율 측정
 14. 측정값으로 이 문서의 추정치를 갱신
 
+### 10-1. 스포일러 안전성 반영 체크리스트
+
+스포일러 안전 기준을 코드에 반영할 때는 다음 파일/함수를 수정한다.
+
+| 영역 | 파일/함수 | 수정 내용 |
+|---|---|---|
+| Map 프롬프트 | `ai-pipeline/ai_module/map_reduce/map_local.py` `_build_map_prompt()` | `evidence_items` schema에 `public_detail`, `spoiler_risk`, 필요 시 `spoiler_terms`를 추가한다. `detail/snippet`은 내부 검증용 원문 근거, `public_detail`은 공개 출력용 redacted 표현임을 명시한다. |
+| Map retry 프롬프트 | `map_local.py` `_build_map_retry_prompt()` | retry 출력에서도 `public_detail`과 `spoiler_risk`를 유지하도록 요구한다. retry가 candidate를 복사하더라도 공개용 redaction 필드는 누락하지 않는다. |
+| Map schema normalize | `ai-pipeline/ai_module/map_reduce/map_schema.py` `normalize_map_payload()` | `public_detail`, `spoiler_risk`, `spoiler_terms`를 정규화한다. `spoiler_risk`는 `none|low|medium|high`만 허용하고, `public_detail`이 없으면 `detail`을 안전하게 redaction하거나 fallback 규칙을 적용한다. |
+| deterministic fallback | `map_schema.py` `legacy_text_to_map_payload()` | deterministic candidate에도 `public_detail`, `spoiler_risk` 기본값을 채운다. 키워드 기반으로 엔딩/최종 보스/반전/사망/후반부 등은 `medium` 이상으로 표시한다. |
+| LLM repair | `map_schema.py` `repair_llm_payload_with_candidate()`, `repair_llm_text_with_candidate_ids()` | repair 과정에서 candidate의 `public_detail`, `spoiler_risk`, `spoiler_terms`를 잃지 않는다. LLM 출력에 raw spoiler detail만 있고 public detail이 없으면 candidate 기반 redaction을 적용한다. |
+| Reduce 입력 압축 | `ai-pipeline/ai_module/map_reduce/reduce_api.py` `_evidence_subset()` | Reduce에는 `detail`보다 `public_detail`을 우선 전달한다. `spoiler_risk=medium|high`인 evidence는 raw `snippet`을 그대로 넘기지 않거나 redacted snippet만 넘긴다. |
+| Reduce 프롬프트 | `reduce_api.py` `FEATURE_QUALITY_RULES`, `_build_feature_prompt()` | `named boss/area` 같은 문구를 제거한다. 대신 경험 유형, 진행 구간, 실패 조건, 감정 영향, 기술 증상처럼 스포일러 안전한 구체성을 요구한다. |
+| 출력 계약 | `reduce_api.py` user/critic/playtime/final `output_contract` | summary/pros/cons/keywords/recommended_for/caution_for/evaluation_criteria가 스포일러 고유명사를 직접 노출하지 말아야 한다는 조건을 추가한다. |
+| dry-run gate | `ai-pipeline/dry_quality_run.py` | `--assert-gates`에 공개 출력 스포일러 금지어 검사를 추가한다. 금지어는 단순 문자열뿐 아니라 `spoiler_risk=high` evidence의 raw term이 출력에 재등장하는지도 검사한다. |
+| 단위 테스트 | `ai-pipeline/test_map_reduce_quality.py` | `public_detail` 보존, `spoiler_risk` 정규화, Reduce 입력 redaction, 공개 출력 금지어 gate를 테스트한다. |
+
+금지어/gate의 기본 예시는 다음이다.
+
+```text
+엔딩, 최종 보스, 마지막 보스, 반전, 죽음, 사망, 배신, 정체, 후반부,
+ending, final boss, last boss, plot twist, dies, death, betrayal, true identity
+```
+
+주의:
+
+- 금지어만으로 스포일러를 완전히 판정할 수는 없다. 따라서 gate는 1차 안전장치이고, 최종 품질 평가는 샘플 출력 리뷰를 병행한다.
+- "후반부" 자체는 제품 판단에 필요한 진행 구간 표현으로 허용할 수 있다. 다만 특정 후반 지역명, 엔딩명, 보스명과 결합하면 실패로 본다.
+- 내부 evidence에서 스포일러 용어를 제거하면 review_id 근거 검증력이 약해진다. 원문 evidence는 보존하고, Reduce 입력과 공개 출력에서 redaction한다.
+
 구현 중 주의:
 
 - `tag_reviews()`가 Metacritic 전체를 critic으로 보는 현재 계약을 변경할지 여부를 먼저 결정한다.
@@ -685,7 +742,9 @@ Metacritic user review를 실제로 지원하려면 `reviewer_type`이 `user|cri
 - pros/cons/recommended_for/caution_for/evaluation_criteria/aspect_scores.label 중 최소 70%는 대응되는 evidence id, source, 또는 category stat 근거가 있어야 한다.
 - `keywords`는 단순 빈도어가 아니라 실제 리뷰 근거가 있는 topic이어야 하며, 상위 keyword의 절반 이상은 `evidence_items.aspect` 또는 `category_frequency`와 연결되어야 한다.
 - "유저들은 X를 칭찬했다", "평론가들은 Y를 비판했다", "후반부 평가는 엇갈린다"처럼 detail 없는 문장이 연속되면 품질 실패로 본다.
-- 좋은 문장은 aspect명, 구체 상황, 평가 감각, 근거 source 중 최소 3가지를 포함해야 한다. 이 기준은 user, critic, playtime, final의 모든 자연어 필드에 적용한다.
+- 좋은 문장은 aspect명, 스포일러 안전화된 구체 상황, 평가 감각, 근거 source 중 최소 3가지를 포함해야 한다. 이 기준은 user, critic, playtime, final의 모든 자연어 필드에 적용한다.
+- 공개 출력에 특정 보스명, 엔딩명, 반전, 캐릭터 사망, 후반 지역명, 퀘스트 결말이 그대로 포함되면 품질 실패로 본다.
+- 스포일러 위험 evidence를 완전히 버리지는 않는다. 내부 집계와 품질 검증에는 사용하되, 공개 문장에서는 경험 유형과 영향으로 추상화한다.
 
 운영 기준:
 
@@ -714,6 +773,7 @@ Metacritic user review를 실제로 지원하려면 `reviewer_type`이 `user|cri
 | Reduce 단일 프롬프트 폐지 | 8장에서 user, critic, playtime, final composer 4개 기능별 Reduce로 분리 |
 | 요약 품질 최대화 | 기능별 입력을 분리하고, 대표 quote/evidence id/aspect 근거를 단계별로 유지 |
 | 실제 리뷰 기반의 구체 요약 | 1장, 7장, 8-5장, 11장에서 원문 snippet과 `evidence_items` 기반의 상세 근거 보존을 품질 기준으로 정의 |
+| 스포일러 안전 구체성 | 1-1장과 11장에서 내부 evidence 보존과 공개 출력 redaction을 분리하고, 특정 보스명/엔딩명/후반 지역명/반전/캐릭터 사망/퀘스트 결말 노출을 실패 기준으로 정의 |
 | 현재 main 품질 장치 보존 | 2-1장에서 언어 필터, fallback, bucket coverage, score anchor, category stats, 대표 인용을 유지 조건으로 정의 |
 | 일일 요청 횟수 트레이드오프 | 5장에서 1회, 4회, 5~6회 Reduce 대안을 비교 |
 | 일일 토큰 사용량 트레이드오프 | 4장과 5장에서 Reduce API 기준 490K/day 품질 최대화안, 430K/day 안정 운영안, 9.8K~12K 고품질안을 비교 |
