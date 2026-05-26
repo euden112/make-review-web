@@ -23,9 +23,12 @@ from ai_module.map_reduce.map_schema import (
 from ai_module.map_reduce.reduce_api import (
     FinalSummary,
     _evidence_subset,
+    _fallback_one_liner_from_evidence,
     _fallback_natural_items_from_evidence,
     _has_min_evidence,
+    _fallback_user_summary_from_evidence,
     _parse_feature_bucket,
+    _review_based_sentence,
     _sanitize_public_list,
     _sanitize_grounded_text,
 )
@@ -431,6 +434,7 @@ def test_sanitize_public_list_drops_misaligned_anchor_and_fallback_fills() -> No
     assert sanitized == ["후반부 길찾기에서 3시간 헤매며 피로감을 느꼈습니다 (review_id=75)."]
     assert any("review_id=6" in item for item in filled)
     assert not any("라는 반응이 있습니다" in item for item in filled)
+    assert not any("리뷰에서는 '" in item for item in filled)
 
 
 def test_mixed_evidence_can_fill_cons_when_negative_terms_are_sparse() -> None:
@@ -455,8 +459,204 @@ def test_mixed_evidence_can_fill_cons_when_negative_terms_are_sparse() -> None:
     )
 
     assert len(filled) == 2
-    assert all("주의할 지점" in item for item in filled)
+    assert any("불편" in item or "불만" in item or "주의" in item for item in filled)
     assert all("review_id=" in item for item in filled)
+    assert all("라고 표현하며" not in item for item in filled)
+
+
+def test_mixed_positive_evidence_can_fill_pros_without_ungrounded_aspect_label() -> None:
+    filled = _fallback_natural_items_from_evidence(
+        [
+            {
+                "review_id": 153,
+                "aspect": "multiplayer",
+                "polarity": "mixed",
+                "public_detail": "싱글만 해도 재밌게 즐겼지만 운전 중 대사가 거슬렸다는 반응",
+                "detail": "싱글만 해도 재밌게 즐겼지만 운전 중 대사가 거슬렸다는 반응",
+                "snippet": "싱글만 해도 재밌게 즐겼지만 운전 중 대사가 거슬렸다는 반응",
+            }
+        ],
+        polarities=("mixed",),
+        existing=[],
+        limit=1,
+        sentence_polarity="positive",
+    )
+
+    assert len(filled) == 1
+    assert "멀티플레이 측면" not in filled[0]
+    assert "라는 점이" not in filled[0]
+    assert "review_id=153" in filled[0]
+
+
+def test_negative_terms_are_not_promoted_to_pros() -> None:
+    filled = _fallback_natural_items_from_evidence(
+        [
+            {
+                "review_id": 129,
+                "aspect": "content",
+                "polarity": "positive",
+                "public_detail": "NPC 오류로 퀘스트 진행이 안됨그래서 게임이 재미가 없어짐",
+                "detail": "NPC 오류로 퀘스트 진행이 안됨그래서 게임이 재미가 없어짐",
+                "snippet": "NPC 오류로 퀘스트 진행이 안됨그래서 게임이 재미가 없어짐",
+            }
+        ],
+        polarities=("positive",),
+        existing=[],
+        limit=1,
+    )
+
+    assert filled == []
+
+
+def test_positive_mixed_evidence_is_not_used_as_con() -> None:
+    filled = _fallback_natural_items_from_evidence(
+        [
+            {
+                "review_id": 139,
+                "aspect": "content",
+                "polarity": "mixed",
+                "public_detail": "시간도 빨리 가고 재밌어서 스트레스도 풀렸다는 반응",
+                "detail": "시간도 빨리 가고 재밌어서 스트레스도 풀렸다는 반응",
+                "snippet": "시간도 빨리 가고 재밌어서 스트레스도 풀렸다는 반응",
+            }
+        ],
+        polarities=("mixed",),
+        existing=[],
+        limit=1,
+    )
+
+    assert filled == []
+
+
+def test_when_always_is_not_treated_as_complaint() -> None:
+    filled = _fallback_natural_items_from_evidence(
+        [
+            {
+                "review_id": 147,
+                "aspect": "content",
+                "polarity": "mixed",
+                "public_detail": "돈은 언제나 옳다는 식으로 보상이 주는 쾌감을 강조한 반응",
+                "detail": "돈은 언제나 옳다는 식으로 보상이 주는 쾌감을 강조한 반응",
+                "snippet": "돈은 언제나 옳다는 식으로 보상이 주는 쾌감을 강조한 반응",
+            }
+        ],
+        polarities=("mixed",),
+        existing=[],
+        limit=1,
+    )
+
+    assert filled == []
+
+
+def test_mixed_evidence_uses_positive_clause_for_pros() -> None:
+    filled = _fallback_natural_items_from_evidence(
+        [
+            {
+                "review_id": 124,
+                "aspect": "multiplayer",
+                "polarity": "mixed",
+                "public_detail": "낮은 사양에서도 대충 가능은 하니까 접근성은 좋지만 친구가 없으면 불편한 게임",
+                "detail": "낮은 사양에서도 대충 가능은 하니까 접근성은 좋지만 친구가 없으면 불편한 게임",
+                "snippet": "낮은 사양에서도 대충 가능은 하니까 접근성은 좋지만 친구가 없으면 불편한 게임",
+            }
+        ],
+        polarities=("mixed",),
+        existing=[],
+        limit=1,
+        sentence_polarity="positive",
+    )
+
+    assert len(filled) == 1
+    assert "낮은 사양" in filled[0]
+    assert "불편" not in filled[0]
+    assert "라는 점이" not in filled[0]
+
+
+def test_evidence_sentences_are_public_summary_not_raw_quote_fragments() -> None:
+    pros = _fallback_natural_items_from_evidence(
+        [
+            {
+                "review_id": 6,
+                "aspect": "content",
+                "polarity": "positive",
+                "public_detail": "ㅈㄴ재밌다 소울라이크 처음입문했는데 스트레스도 받았지만 소울라이크만에 전투방식을 익힌순간 ㅈㄴ재밌다",
+                "detail": "ㅈㄴ재밌다 소울라이크 처음입문했는데 스트레스도 받았지만 소울라이크만에 전투방식을 익힌순간 ㅈㄴ재밌다",
+                "snippet": "ㅈㄴ재밌다 소울라이크 처음입문했는데 스트레스도 받았지만 소울라이크만에 전투방식을 익힌순간 ㅈㄴ재밌다",
+            }
+        ],
+        polarities=("positive",),
+        existing=[],
+        limit=1,
+    )
+    cons = _fallback_natural_items_from_evidence(
+        [
+            {
+                "review_id": 129,
+                "aspect": "content",
+                "polarity": "negative",
+                "public_detail": "NPC 오류 좀 고쳐 주면 안됨 30만 달러 미션있는데 NPC 자기 차를 벽에 계속 박아서 퀘스트 진행이 안됨",
+                "detail": "NPC 오류 좀 고쳐 주면 안됨 30만 달러 미션있는데 NPC 자기 차를 벽에 계속 박아서 퀘스트 진행이 안됨",
+                "snippet": "NPC 오류 좀 고쳐 주면 안됨 30만 달러 미션있는데 NPC 자기 차를 벽에 계속 박아서 퀘스트 진행이 안됨",
+            }
+        ],
+        polarities=("negative",),
+        existing=[],
+        limit=1,
+    )
+
+    assert pros == ["전투 방식을 익힌 뒤 회피와 반격 흐름이 재미있어졌다는 반응이 있습니다 (review_id=6)."]
+    assert cons == ["NPC 오류로 퀘스트 진행이 막힌다는 불만이 있습니다 (review_id=129)."]
+
+
+def test_short_positive_reactions_are_normalized_to_public_summary() -> None:
+    filled = _fallback_natural_items_from_evidence(
+        [
+            {
+                "review_id": 18,
+                "aspect": "content",
+                "polarity": "positive",
+                "public_detail": "4시간해도 재밌는 엘든링",
+                "detail": "4시간해도 재밌는 엘든링",
+                "snippet": "4시간해도 재밌는 엘든링",
+            },
+            {
+                "review_id": 20,
+                "aspect": "content",
+                "polarity": "positive",
+                "public_detail": "성장하는 것은 결국 나였다",
+                "detail": "성장하는 것은 결국 나였다",
+                "snippet": "성장하는 것은 결국 나였다",
+            },
+        ],
+        polarities=("positive",),
+        existing=[],
+        limit=2,
+    )
+
+    assert filled == [
+        "초반 몇 시간만으로도 재미를 느꼈다는 반응이 있습니다 (review_id=18).",
+        "반복 도전 속에서 플레이어가 성장한다는 반응이 있습니다 (review_id=20).",
+    ]
+
+
+def test_negative_public_sentence_uses_raw_before_compaction_for_rules() -> None:
+    filled = _fallback_natural_items_from_evidence(
+        [
+            {
+                "review_id": 124,
+                "aspect": "multiplayer",
+                "polarity": "mixed",
+                "public_detail": "그냥 묻지도 말고 따지지도 말고 그냥 사세요 똥컴으로도 대충 가능은 하니까 솔직히 이 겜말고는 할게 없어요 그대신 친구가 없으면 불편한 게임",
+                "detail": "그냥 묻지도 말고 따지지도 말고 그냥 사세요 똥컴으로도 대충 가능은 하니까 솔직히 이 겜말고는 할게 없어요 그대신 친구가 없으면 불편한 게임",
+                "snippet": "그냥 묻지도 말고 따지지도 말고 그냥 사세요 똥컴으로도 대충 가능은 하니까 솔직히 이 겜말고는 할게 없어요 그대신 친구가 없으면 불편한 게임",
+            }
+        ],
+        polarities=("mixed",),
+        existing=[],
+        limit=1,
+    )
+
+    assert filled == ["친구 없이 진행하면 온라인 플레이가 불편하다는 반응이 있습니다 (review_id=124)."]
 
 
 def test_sanitize_grounded_text_drops_vague_public_sentence() -> None:
@@ -471,6 +671,286 @@ def test_sanitize_grounded_text_drops_vague_public_sentence() -> None:
     assert "대부분" not in sanitized
     assert "전반적인 품질" not in sanitized
     assert "review_id=6" in sanitized
+
+
+def test_sanitize_grounded_text_drops_player_generalizations() -> None:
+    sanitized = _sanitize_grounded_text(
+        "다양한 플레이어들이 게임의 난이도에 대해 의견도 분분합니다. 콘텐츠 측면의 재미 경험이 핵심 장점으로 남았습니다 (review_id=6).",
+        {6: "전투 방식을 익히면 재미가 커진다"},
+    )
+
+    assert sanitized == ""
+
+
+def test_sanitize_public_text_normalizes_difficulty_to_progression_barrier() -> None:
+    sanitized = _sanitize_grounded_text(
+        "일부 플레이어는 보스 난이도 때문에 진행 장벽는 부담스럽고 진행 장벽를 넘기 어렵다고 했습니다 (review_id=39).",
+        {39: "보스가 어려워 부담을 느꼈다"},
+    )
+
+    assert "난이도" not in sanitized
+    assert "진행 장벽" in sanitized
+    assert "근거 플레이어" not in sanitized
+    assert "근거 리뷰어" not in sanitized
+    assert "진행 장벽는" not in sanitized
+    assert "진행 장벽를" not in sanitized
+    assert "진행 장벽은" in sanitized
+    assert "진행 장벽을" in sanitized
+
+
+def test_review_based_sentence_prefers_optimization_over_generic_praise() -> None:
+    sentence = _review_based_sentence(
+        "13년이 지나도 갓겜이고 최적화와 현실성이 좋다는 반응",
+        polarity="positive",
+    )
+
+    assert sentence == "최적화와 현실감이 좋다는 반응이 있습니다"
+
+
+def test_review_based_sentence_normalizes_positive_mixed_details() -> None:
+    assert (
+        _review_based_sentence("소울라이크 게임임을 고려할 때 전투 스타일의 자유도가 굉장하다.", polarity="positive")
+        == "전투 스타일의 자유도가 높다는 반응이 있습니다"
+    )
+    assert (
+        _review_based_sentence("소울 입문으로 제일 좋은 소울류게임인듯", polarity="positive")
+        == "소울류 입문작으로 접근하기 좋다는 반응이 있습니다"
+    )
+    assert (
+        _review_based_sentence("그래도 난 니가 좋다", polarity="positive")
+        == "문제가 있어도 게임 자체는 좋다는 반응이 있습니다"
+    )
+    assert (
+        _review_based_sentence("너무 재미있어요 해보세요", polarity="positive")
+        == "직접 해보라고 권할 만큼 재미있다는 반응이 있습니다"
+    )
+    assert (
+        _review_based_sentence("플스로 재밌게 했어서 PC판도 구매해서 150시간 가량 열심히 했습니다", polarity="positive")
+        == "콘솔에서 재미있게 플레이한 뒤 PC판도 오래 즐겼다는 반응이 있습니다"
+    )
+
+
+def test_sanitize_public_text_removes_slur_and_bad_particles() -> None:
+    sanitized = _sanitize_grounded_text(
+        "후반부 핵심 요소가 ㅈ같아서 진행 장벽와 길 찾기가 부담스럽습니다 (review_id=29).",
+        {29: "후반부 핵심 요소가 불합리해서 길 찾기가 부담스럽다"},
+    )
+
+    assert "ㅈ같" not in sanitized
+    assert "진행 장벽와" not in sanitized
+    assert "진행 장벽과" in sanitized
+
+
+def test_fallback_one_liner_skips_positive_item_with_negative_detail() -> None:
+    one_liner = _fallback_one_liner_from_evidence(
+        [
+            {
+                "review_id": 29,
+                "polarity": "positive",
+                "public_detail": "재밌게 하다가 후반부 핵심 요소가 ㅈ같아서 접음. 불합리하면 패턴이라도 재밌던가",
+            },
+            {
+                "review_id": 57,
+                "polarity": "mixed",
+                "public_detail": "인생게임 top10 에 들어가는 게임",
+            },
+        ]
+    )
+
+    assert "review_id=29" not in one_liner
+    assert "오래 기억할 만큼 강한 만족감" in one_liner
+
+
+def test_positive_clause_rejects_rhetorical_complaints_for_pros() -> None:
+    filled = _fallback_natural_items_from_evidence(
+        [
+            {
+                "review_id": 29,
+                "polarity": "positive",
+                "public_detail": "재밌게 하다가 후반부 핵심 요소가 ㅈ같아서 접음. 불합리하면 패턴이라도 재밌던가",
+            },
+            {
+                "review_id": 57,
+                "polarity": "mixed",
+                "public_detail": "인생게임 top10 에 들어가는 게임",
+            },
+        ],
+        polarities=("positive",),
+        existing=[],
+        limit=3,
+    )
+
+    assert all("review_id=29" not in item for item in filled)
+
+
+def test_positive_clause_rejects_anger_recommendation_for_pros() -> None:
+    filled = _fallback_natural_items_from_evidence(
+        [
+            {
+                "review_id": 7,
+                "polarity": "positive",
+                "public_detail": "추천함 일반적인 오픈월드 게임이 아닌 열받음을 느끼고 싶으면 굳이 사라",
+            }
+        ],
+        polarities=("positive",),
+        existing=[],
+        limit=3,
+    )
+
+    assert filled == []
+
+
+def test_negative_sentence_compresses_rhetorical_complaint() -> None:
+    sentence = _review_based_sentence(
+        "재밌게 하다가 후반부 핵심 요소가 ㅈ같아서 접음 불합리하면 패턴이라도 재밌던가",
+        polarity="negative",
+    )
+
+    assert sentence == "후반부 진행이 불합리하게 느껴져 중단했다는 반응이 있습니다"
+
+
+def test_review_based_sentence_drops_meme_marker_detail() -> None:
+    assert _review_based_sentence("아아 이 앞 엘든링 있으라 매우매우 재미있는", polarity="positive") == ""
+
+
+def test_negative_sentence_compresses_loss_of_interest() -> None:
+    sentence = _review_based_sentence(
+        "꾹 참고 해보려고 해도 도저히 다음날 되면 게임 키기가 싫을 만큼 재미없는 게임이었습니다.",
+        polarity="negative",
+    )
+
+    assert sentence == "계속 참고 플레이하려 해도 다시 켜기 싫을 만큼 흥미가 떨어졌다는 불만이 있습니다"
+
+
+def test_unknown_negative_sentence_does_not_emit_raw_template() -> None:
+    sentence = _review_based_sentence("표현이 애매한 짧은 불만", polarity="negative")
+
+    assert sentence == ""
+    assert "주의할 지점" not in sentence
+
+
+def test_fallback_user_summary_is_evidence_sentences() -> None:
+    summary = _fallback_user_summary_from_evidence(
+        [
+            {
+                "review_id": 6,
+                "polarity": "positive",
+                "public_detail": "전투방식을 익힌순간 매우 재밌고 클리어까지 이어졌다",
+            },
+            {
+                "review_id": 57,
+                "polarity": "mixed",
+                "public_detail": "인생게임 top10 에 들어가는 게임",
+            },
+            {
+                "review_id": 75,
+                "polarity": "negative",
+                "public_detail": "후반부 핵심 요소에서 3시간동안 길찾았었어요",
+            },
+        ],
+        limit=3,
+    )
+
+    assert "전반적으로" not in summary
+    assert "review_id=6" in summary
+    assert "review_id=75" in summary
+
+
+def test_anchor_alignment_allows_spacing_variants() -> None:
+    result = {
+        "map_quality": {"llm_success_rate": 1.0, "fallback_rate": 0.0},
+        "reduce_usage_total": {"requests": 2, "input_tokens": 1000, "output_tokens": 500},
+        "one_liner": "근거가 있는 요약 (review_id=75)",
+        "user_summary": "길 찾기에 오래 걸려 피로감을 느꼈다는 반응이 있습니다 (review_id=75).",
+        "pros": [
+            "전투 방식을 익히면 회피와 반격 흐름이 재미있어집니다 (review_id=6).",
+            "자유도 덕분에 진행 장벽을 우회할 수 있다는 반응이 있습니다 (review_id=12).",
+            "초반 전투 리듬을 익힌 뒤 재미가 커진다는 반응이 있습니다 (review_id=6).",
+        ],
+        "cons": [
+            "길 찾기에 오래 걸려 피로감을 느꼈다는 반응이 있습니다 (review_id=75).",
+            "PC 버전 강제종료 버그로 진행이 끊겼다는 불만이 있습니다 (review_id=66).",
+        ],
+        "keywords": [],
+        "error_code": None,
+        "sample_evidence": [],
+        "_evidence_index": {
+            6: "전투 방식을 익힌순간 재미있다",
+            12: "자유도 덕분에 난이도를 우회할 수 있다",
+            66: "강제종료 버그가 있다",
+            75: "후반부 길찾기 3시간 힘들었다",
+        },
+    }
+
+    gates = _gate_results(result, reduce_token_budget=9800, map_success_threshold=0.8)
+
+    assert gates["checks"]["review_id_anchors_match_evidence"]
+
+
+def test_anchor_alignment_catches_expanded_grounding_terms() -> None:
+    result = {
+        "map_quality": {"llm_success_rate": 1.0, "fallback_rate": 0.0},
+        "reduce_usage_total": {"requests": 2, "input_tokens": 1000, "output_tokens": 500},
+        "one_liner": "근거가 있는 요약 (review_id=57)",
+        "user_summary": "빌드가 갖춰지면 소울류 입문작처럼 클리어할 수 있다는 반응입니다 (review_id=75).",
+        "pros": [
+            "전투 방식을 익히면 회피와 반격 흐름이 재미있어집니다 (review_id=6).",
+            "자유도 덕분에 진행 장벽을 우회할 수 있다는 반응이 있습니다 (review_id=12).",
+            "초반 전투 리듬을 익힌 뒤 재미가 커진다는 반응이 있습니다 (review_id=6).",
+        ],
+        "cons": [
+            "길 찾기에 오래 걸려 피로감을 느꼈다는 반응이 있습니다 (review_id=75).",
+            "PC 버전 강제종료 버그로 진행이 끊겼다는 불만이 있습니다 (review_id=66).",
+        ],
+        "keywords": [],
+        "error_code": None,
+        "sample_evidence": [],
+        "_evidence_index": {
+            6: "전투 방식을 익힌순간 재미있다",
+            12: "자유도 덕분에 난이도를 우회할 수 있다",
+            57: "인생게임 top10 에 들어가는 게임",
+            66: "강제종료 버그가 있다",
+            75: "후반부 길찾기 3시간 힘들었다",
+        },
+    }
+
+    gates = _gate_results(result, reduce_token_budget=9800, map_success_threshold=0.8)
+
+    assert not gates["checks"]["review_id_anchors_match_evidence"]
+
+
+def test_anchor_alignment_catches_playtime_area_mismatch() -> None:
+    result = {
+        "map_quality": {"llm_success_rate": 1.0, "fallback_rate": 0.0},
+        "reduce_usage_total": {"requests": 2, "input_tokens": 1000, "output_tokens": 500},
+        "one_liner": "근거가 있는 요약 (review_id=57)",
+        "user_summary": "10시간 정도 플레이했지만 아직도 림그레이브에서 헤매고 있다는 반응입니다 (review_id=45).",
+        "pros": [
+            "전투 방식을 익히면 회피와 반격 흐름이 재미있어집니다 (review_id=6).",
+            "자유도 덕분에 진행 장벽을 우회할 수 있다는 반응이 있습니다 (review_id=12).",
+            "초반 전투 리듬을 익힌 뒤 재미가 커진다는 반응이 있습니다 (review_id=6).",
+        ],
+        "cons": [
+            "길 찾기에 오래 걸려 피로감을 느꼈다는 반응이 있습니다 (review_id=75).",
+            "PC 버전 강제종료 버그로 진행이 끊겼다는 불만이 있습니다 (review_id=66).",
+        ],
+        "keywords": [],
+        "error_code": None,
+        "sample_evidence": [],
+        "_evidence_index": {
+            6: "전투 방식을 익힌순간 재미있다",
+            12: "자유도 덕분에 난이도를 우회할 수 있다",
+            41: "10시간정도했고 아직도 림그레이브에서 놀고 있다",
+            45: "소울 입문으로 제일 좋은 게임",
+            57: "인생게임 top10 에 들어가는 게임",
+            66: "강제종료 버그가 있다",
+            75: "후반부 길찾기 3시간 힘들었다",
+        },
+    }
+
+    gates = _gate_results(result, reduce_token_budget=9800, map_success_threshold=0.8)
+
+    assert not gates["checks"]["review_id_anchors_match_evidence"]
 
 
 def test_sanitize_grounded_text_removes_reviewer_labels_and_drops_all_vague() -> None:

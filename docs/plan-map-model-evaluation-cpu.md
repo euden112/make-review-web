@@ -370,3 +370,18 @@ python demo.py --test --scenario all --reset-volumes --force --timeout 900 --ver
 현 시점에서 `qwen2.5:1.5b`는 여전히 안전한 baseline이다. 하지만 최신 `json_v2_llm_map` 파이프라인에서는 `qwen3.5:2b`, `qwen3.5:4b`, `phi4-mini:3.8b`가 실질적인 개선 후보로 보인다.
 
 모델 교체는 단일 샘플 응답이나 일반 벤치마크가 아니라, 현재 DB와 `dry_quality_run.py --assert-gates` 기준으로 결정해야 한다. 특히 CPU 환경에서는 품질 개선이 있어도 chunk 처리 시간이 배치 운영 한계를 넘으면 기본값으로 채택하지 않는다.
+
+## 12. 2026-05-27 CPU 모델 확인 결과
+
+이번 보완 과정에서 CPU 환경의 Map 모델 교체 가능성을 먼저 확인했다.
+
+- `qwen3.5:2b`는 1게임 36리뷰 dry-run에서 40분 제한 안에 완료되지 않았다.
+- 같은 모델은 1게임 6리뷰 축소 smoke에서도 20분 제한 안에 완료되지 않았고, Ollama 컨테이너가 높은 CPU 사용 상태로 오래 남아 재시작이 필요했다.
+- `qwen3:1.7b`도 smoke 확인에서 실질적인 개선 후보로 확정하지 못했다.
+- 따라서 현재 CPU 환경의 기본 Map 모델은 `qwen2.5:1.5b`로 유지한다.
+
+결론:
+
+- 큰 모델로 교체하는 방식은 현재 CPU 배치 조건에서 우선순위가 낮다.
+- Map 단계의 핵심 기획은 유지한다. 즉, 로컬 Ollama LLM이 evidence JSON 후보를 만들고, deterministic extractor는 후보 생성, 검증, repair, fallback에만 사용한다.
+- 단기 개선은 `qwen2.5:1.5b` 기준 prompt, repair, public sentence normalization, dry-run gate 강화로 진행한다.

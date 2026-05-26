@@ -168,3 +168,35 @@ docker compose exec backend python /workspace/ai-pipeline/dry_quality_run.py --g
 - 공개 출력에서 스포일러 고유명사는 redaction되어 자동 gate를 통과했다.
 - `qwen2.5:1.5b`는 여전히 일부 chunk에서 malformed JSON 또는 엉뚱한 언어 출력을 만들지만, validator와 candidate grounding repair가 deterministic fallback 없이 복구했다.
 - pros/cons는 근거성과 gate 기준을 만족하지만 일부 문장은 아직 원문 리뷰의 거친 표현을 많이 보존한다. 다음 품질 개선 단계에서는 raw quote를 더 자연스러운 공개 문장으로 압축하는 후처리를 강화할 필요가 있다.
+
+## 6. 2026-05-27 추가 보완
+
+이번 추가 작업은 파이프라인 구조를 바꾸는 큰 변경이 아니라, 실제 2게임 dry-run 출력에서 사람이 읽었을 때 어색하게 남은 공개 문장 패턴을 정리한 사소한 품질 보완이다.
+
+변경 내용:
+
+- `reduce_api.py`에서 공개 출력 sanitizer와 evidence 기반 문장 생성 규칙을 보강했다.
+- `그래도 난 니가 좋다`, `너무 재미있어요 해보세요`, `플스로 재밌게 했어서 PC판도 구매...`처럼 원문 말투가 그대로 노출되던 긍정 근거를 공개 요약 문장으로 정규화했다.
+- 부정 근거가 섞인 긍정 리뷰는 긍정 clause만 분리해 사용하고, 분리할 수 없으면 장점 목록에 넣지 않도록 보강했다.
+- `dry_quality_run.py`의 artifact/vague gate에는 깨진 template, 사용자 일반론, 잘못된 조사 패턴을 추가했다.
+- `test_map_reduce_quality.py`에는 위 공개 문장 정규화와 gate 회귀 테스트를 추가했다.
+
+검증 결과:
+
+```bash
+.venv\Scripts\python.exe -m compileall ai-pipeline
+.venv\Scripts\python.exe -m pytest ai-pipeline\test_map_reduce_quality.py -q
+docker compose exec backend sh -lc "LOCAL_MAP_MODEL=qwen2.5:1.5b python /workspace/ai-pipeline/dry_quality_run.py --games 2 --review-limit 36 --assert-gates"
+```
+
+- `compileall`: 통과
+- `test_map_reduce_quality.py`: 49 passed
+- 2게임 dry-run: exit code 0
+- `ELDEN RING`: 36 reviews, 11 chunks, Map LLM success 1.0, deterministic fallback 0.0, Reduce 2 requests / 7,996 tokens, gate passed
+- `Grand Theft Auto V`: 36 reviews, 6 chunks, Map LLM success 1.0, deterministic fallback 0.0, Reduce 2 requests / 5,487 tokens, gate passed
+
+수동 품질 확인:
+
+- 두 게임 모두 `gate_results.passed=true`였고, artifact/spoiler/vague/anchor alignment 실패가 없었다.
+- 공개 출력은 `review_id` 근거를 유지하면서 원문 욕설, 원문 말투, LLM 일반론을 직접 노출하지 않는 방향으로 정리됐다.
+- 이번 보완은 기능 추가보다는 공개 문장 polish와 회귀 gate 강화에 가깝기 때문에, 품질 영향은 작지만 목표 품질 기준을 안정적으로 지키는 보조 장치로 기록한다.

@@ -147,7 +147,7 @@ def _public_output_segments(result: dict[str, Any]) -> list[str]:
 
 
 def _artifact_hits(text: str) -> list[str]:
-    patterns = ("```", "BEGIN", "END", ".pin", "json{", "</", "<|", "�")
+    patterns = ("```", "BEGIN", "END", ".pin", "json{", "</", "<|", "�", "는 주의할 지점", ".는 주의")
     hits = [pattern for pattern in patterns if pattern in text]
     if re.search(r"(?:리뷰어|reviewer)\s*\d+", text, flags=re.I):
         hits.append("reviewer_label")
@@ -184,24 +184,44 @@ def _vague_output_hits(text: str) -> list[str]:
         "다양한 콘텐츠",
         "어려울 수 있습니다",
         "일부 사용자",
+        "일부 리뷰어",
+        "일부 플레이어",
         "긍정적인 평가",
         "부정적인 평가",
         "다양한 사용자",
+        "다양한 플레이어",
         "높은 평가",
         "대체로",
         "대부분",
         "일부 사례",
         "전반적인 품질",
         "많은 리뷰어",
+        "많은 플레이어",
+        "플레이어들은",
+        "유저들은",
+        "의 플레이어들",
         "호평를",
         "불만를",
+        "문제가 많은같은",
         "의견이 분분",
+        "의견도 분분",
         "긍정과 불만이 함께",
         "근거 리뷰는",
+        "근거 리뷰어",
+        "근거 플레이어",
+        "측면의",
+        "경험이 핵심",
+        "진행 장벽는",
+        "진행 장벽를",
+        "진행 장벽가",
+        "진행 장벽와",
         "review_id 미제공",
         "review_id=미제공",
         "근거 ID 없음",
         "대표적인 따옴문",
+        "콘텐츠 측면의",
+        "그래픽 측면의",
+        "사운드 측면의",
     )
     return [pattern for pattern in patterns if pattern in text]
 
@@ -223,7 +243,16 @@ def _weak_list_items(result: dict[str, Any]) -> list[str]:
             if not text:
                 continue
             has_anchor = bool(re.search(r"(?:review_id\s*=\s*\d+|리뷰\s*ID\s*=\s*\d+)", text))
-            if len(text) < 35 or len(text) > 180 or not has_anchor or re.search(r"([가-힣A-Za-z])\1{5,}", text):
+            quote_like = (
+                "리뷰에서는 '" in text
+                or "라고 표현하며" in text
+                or "라는 점이" in text
+                or "점이 장점" in text
+                or "점이 주의" in text
+                or "플레이 경험에서는" in text
+                or "해당 리뷰에서는" in text
+            )
+            if len(text) < 35 or len(text) > 180 or not has_anchor or quote_like or re.search(r"([가-힣A-Za-z])\1{5,}", text):
                 weak.append(f"{key}:{text[:80]}")
     return weak
 
@@ -264,7 +293,12 @@ def _anchor_alignment_failures(result: dict[str, Any]) -> list[str]:
         if not anchor_ids:
             continue
         for term in terms:
-            if not any(term.lower() in str(evidence_index.get(review_id, "")) for review_id in anchor_ids):
+            normalized_term = re.sub(r"\s+", "", term.lower())
+            if not any(
+                term.lower() in str(evidence_index.get(review_id, ""))
+                or normalized_term in re.sub(r"\s+", "", str(evidence_index.get(review_id, "")).lower())
+                for review_id in anchor_ids
+            ):
                 failures.append(f"term_unanchored={term}:anchors={anchor_ids}")
     return failures
 
