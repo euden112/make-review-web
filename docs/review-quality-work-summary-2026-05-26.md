@@ -335,3 +335,36 @@ docker compose exec backend python /workspace/ai-pipeline/dry_quality_run.py --g
 - 게임당 Reduce token budget 9,800 이하
 - 현재 DB의 모든 리뷰 보유 게임 dry test 통과
 
+## 10. 2026-05-27 추가 보완 및 재검증
+
+이후 실제 2게임 dry-run 결과를 Codex가 직접 읽어보며 확인한 결과, 자동 gate는 통과했지만 일부 공개 문장이 원문 말투를 너무 직접 보존하는 문제가 남아 있었다. 이 문제는 구조 변경이 필요한 큰 결함은 아니며, 공개 문장 polish와 회귀 gate 강화 수준의 사소한 품질 보완으로 처리했다.
+
+보완 내용:
+
+- Reduce 공개 출력 sanitizer와 evidence 기반 문장 생성 규칙을 강화했다.
+- 원문 욕설, 비속어, 어색한 조사, "유저들은/플레이어들은"식 일반론, 깨진 template 문장을 gate에서 더 잘 잡도록 했다.
+- `그래도 난 니가 좋다`, `너무 재미있어요 해보세요`, `플스로 재밌게 했어서 PC판도 구매...`처럼 실제 리뷰 근거는 있지만 공개 출력으로는 어색한 문장을 자연스러운 요약 문장으로 정규화했다.
+- 부정 근거가 섞인 긍정 리뷰는 긍정 clause만 분리해 장점에 쓰고, 분리할 수 없으면 장점 목록에서 제외하도록 했다.
+
+재검증:
+
+```bash
+.venv\Scripts\python.exe -m compileall ai-pipeline
+.venv\Scripts\python.exe -m pytest ai-pipeline\test_map_reduce_quality.py -q
+docker compose exec backend sh -lc "LOCAL_MAP_MODEL=qwen2.5:1.5b python /workspace/ai-pipeline/dry_quality_run.py --games 2 --review-limit 36 --assert-gates"
+```
+
+결과:
+
+- `compileall`: 통과
+- `test_map_reduce_quality.py`: 49 passed
+- `ELDEN RING`: 36 reviews, 11 chunks, Map LLM success 1.0, deterministic fallback 0.0, Reduce 2 requests / 7,996 tokens, gate passed
+- `Grand Theft Auto V`: 36 reviews, 6 chunks, Map LLM success 1.0, deterministic fallback 0.0, Reduce 2 requests / 5,487 tokens, gate passed
+
+수동 품질 판단:
+
+- 두 게임의 최종 공개 출력은 `review_id` 근거를 유지했다.
+- 자동 gate 기준으로 artifact, spoiler leak, vague output, weak pros/cons, anchor mismatch가 없었다.
+- Codex가 출력 문장을 직접 읽었을 때, "Metacritic 유저들은 전투를 칭찬했다" 수준의 일반론이 아니라 실제 리뷰의 경험 조건을 요약한 문장으로 개선되었다.
+- 현재 DB에는 검증 가능한 게임이 2개뿐이므로 5게임 검증은 추가 게임 데이터가 확보된 뒤 다시 수행해야 한다. 현재 기준에서는 문서의 "5게임 미만이면 현재 DB의 모든 게임 검증" 조건을 충족했다.
+
