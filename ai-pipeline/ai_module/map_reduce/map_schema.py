@@ -17,6 +17,54 @@ ALLOWED_ASPECTS = {
     "bugs",
 }
 
+SPOILER_TERM_PATTERNS = {
+    "final_boss": (
+        "final boss",
+        "last boss",
+        "elden beast",
+        "malenia",
+        "radahn",
+        "fire giant",
+        "godrick",
+        "margit",
+        "maliketh",
+        "최종 보스",
+        "최종보스",
+        "막보",
+        "말레니아",
+        "라단",
+        "불의 거인",
+        "불거인",
+        "고드릭",
+        "드릭이형",
+        "멀기트",
+        "말리케스",
+        "엘데의 짐승",
+        "쌍둥이 가고일",
+        "미켈라",
+    ),
+    "ending": ("ending", "true ending", "bad ending", "frenzied flame", "엔딩", "진엔딩", "배드엔딩", "미친불 엔딩"),
+    "twist": ("plot twist", "twist", "반전", "정체", "배신"),
+    "death": ("dies", "death of", "killed", "사망", "죽는다", "죽음"),
+    "late_area": (
+        "late-game area",
+        "endgame area",
+        "caelid",
+        "raya lucaria",
+        "leyndell",
+        "farum azula",
+        "후반 지역",
+        "후반부 지역",
+        "엔드게임 지역",
+        "케일리드",
+        "케일리드 신수탑",
+        "레아 루카리아",
+    ),
+    "quest_resolution": ("quest ending", "questline ending", "퀘스트 결말", "퀘스트 엔딩"),
+}
+
+SPOILER_RISKS = {"none", "low", "medium", "high"}
+
 
 def safe_parse_json_object(text: str) -> dict[str, Any]:
     raw = (text or "").strip()
@@ -74,6 +122,46 @@ def _normalize_polarity(value: Any) -> str:
     return "mixed"
 
 
+def _spoiler_terms_from_text(text: str) -> list[str]:
+    lower = (text or "").lower()
+    terms: list[str] = []
+    for patterns in SPOILER_TERM_PATTERNS.values():
+        for term in patterns:
+            if term.lower() in lower and term not in terms:
+                terms.append(term)
+    return terms
+
+
+def _normalize_spoiler_risk(value: Any, *, terms: list[str]) -> str:
+    text = str(value or "").strip().lower()
+    if text in SPOILER_RISKS:
+        return text
+    return "medium" if terms else "none"
+
+
+def _redact_spoiler_terms(text: str, terms: list[str]) -> str:
+    result = " ".join(str(text or "").split())
+    for term in sorted(terms, key=len, reverse=True):
+        if not term:
+            continue
+        result = re.sub(re.escape(term), "후반부 핵심 요소", result, flags=re.I)
+    return result
+
+
+def _public_detail_from_item(item: dict[str, Any], detail: str, snippet: str) -> tuple[str, str, list[str]]:
+    explicit_terms = _string_list(item.get("spoiler_terms"), max_items=8)
+    inferred_terms = _spoiler_terms_from_text(" ".join([detail, snippet]))
+    seen_terms = {term.lower() for term in explicit_terms}
+    terms = explicit_terms + [term for term in inferred_terms if term.lower() not in seen_terms]
+    risk = _normalize_spoiler_risk(item.get("spoiler_risk"), terms=terms)
+    public_detail = str(item.get("public_detail") or "").strip()
+    if not public_detail:
+        public_detail = _redact_spoiler_terms(detail, terms)
+    else:
+        public_detail = _redact_spoiler_terms(public_detail, terms)
+    return public_detail[:220], risk, terms[:8]
+
+
 def normalize_map_payload(
     payload: dict[str, Any],
     *,
@@ -118,6 +206,7 @@ def normalize_map_payload(
             snippet = str(item.get("snippet", "")).strip()
             if len(detail) < 12 or len(snippet) < 12:
                 continue
+            public_detail, spoiler_risk, spoiler_terms = _public_detail_from_item(item, detail, snippet)
             evidence_items.append(
                 {
                     "review_id": review_id,
@@ -125,6 +214,9 @@ def normalize_map_payload(
                     "aspect": aspect,
                     "polarity": _normalize_polarity(item.get("polarity")),
                     "detail": detail[:220],
+                    "public_detail": public_detail,
+                    "spoiler_risk": spoiler_risk,
+                    "spoiler_terms": spoiler_terms,
                     "snippet": snippet[:320],
                 }
             )
@@ -254,20 +346,26 @@ def legacy_text_to_map_payload(text: str, *, chunk_no: int, review_ids: list[int
     for review_id, body in _review_lines_from_chunk(text)[:8]:
         if review_id not in set(review_ids):
             continue
-        snippet = body[:320]
+        detail = body[:180]
+        snippet = body[:180]
+        terms = _spoiler_terms_from_text(body)
         evidence_items.append(
             {
                 "review_id": review_id,
                 "source": source,
                 "aspect": _guess_aspect(body),
                 "polarity": _guess_polarity(body),
-                "detail": body[:220],
+                "detail": detail,
+                "public_detail": _redact_spoiler_terms(detail, terms),
+                "spoiler_risk": "medium" if terms else "none",
+                "spoiler_terms": terms[:8],
                 "snippet": snippet,
             }
         )
     if not evidence_items and review_ids:
-        detail = " ".join((text or "").split())[:220]
+        detail = " ".join((text or "").split())[:180]
         if detail:
+            terms = _spoiler_terms_from_text(detail)
             evidence_items.append(
                 {
                     "review_id": review_ids[0],
@@ -275,7 +373,10 @@ def legacy_text_to_map_payload(text: str, *, chunk_no: int, review_ids: list[int
                     "aspect": _guess_aspect(detail),
                     "polarity": _guess_polarity(detail),
                     "detail": detail,
-                    "snippet": detail[:320],
+                    "public_detail": _redact_spoiler_terms(detail, terms),
+                    "spoiler_risk": "medium" if terms else "none",
+                    "spoiler_terms": terms[:8],
+                    "snippet": detail[:180],
                 }
             )
     return {
@@ -330,7 +431,66 @@ def _coerce_llm_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
         raw_items.extend(payload["items"])
     if isinstance(payload.get("review_id"), (int, str)):
         raw_items.append(payload)
+    if not raw_items and isinstance(payload.get("review_ids"), list):
+        raw_items.extend({"review_id": review_id} for review_id in payload["review_ids"])
     return [item for item in raw_items if isinstance(item, dict)]
+
+
+def _is_grounded_in_candidate(text: str, candidate_item: dict[str, Any]) -> bool:
+    normalized = " ".join(str(text or "").lower().split())
+    if len(normalized) < 12:
+        return False
+    candidate_text = " ".join(
+        str(candidate_item.get(key, "") or "")
+        for key in ("detail", "public_detail", "snippet")
+    )
+    candidate_normalized = " ".join(candidate_text.lower().split())
+    if not candidate_normalized:
+        return False
+    return normalized in candidate_normalized or candidate_normalized[:80] in normalized
+
+
+def ground_payload_with_candidate(
+    payload: dict[str, Any],
+    *,
+    candidate_payload: dict[str, Any],
+    chunk_no: int,
+    review_ids: list[int],
+) -> tuple[dict[str, Any], bool]:
+    candidate_by_id = _candidate_evidence_by_review_id(candidate_payload)
+    grounded = dict(payload)
+    evidence_items: list[dict[str, Any]] = []
+    changed = False
+    seen: set[tuple[int, str]] = set()
+    for item in payload.get("evidence_items", []):
+        if not isinstance(item, dict):
+            continue
+        try:
+            review_id = int(item.get("review_id"))
+        except (TypeError, ValueError):
+            continue
+        candidate_item = candidate_by_id.get(review_id)
+        if not candidate_item:
+            continue
+        snippet_grounded = _is_grounded_in_candidate(str(item.get("snippet", "")), candidate_item)
+        if not snippet_grounded:
+            replacement = dict(candidate_item)
+            replacement["aspect"] = item.get("aspect") if str(item.get("aspect", "")).lower() in ALLOWED_ASPECTS else candidate_item.get("aspect")
+            replacement["polarity"] = _normalize_polarity(item.get("polarity", candidate_item.get("polarity")))
+            item = replacement
+            changed = True
+        key = (review_id, str(item.get("aspect", "")))
+        if key in seen:
+            changed = True
+            continue
+        seen.add(key)
+        evidence_items.append(item)
+    if not evidence_items:
+        raise ValueError("grounded map payload has no usable evidence")
+    grounded["evidence_items"] = evidence_items
+    if changed:
+        grounded["warnings"] = _string_list(payload.get("warnings")) + ["llm_grounding_repaired"]
+    return normalize_map_payload(grounded, chunk_no=chunk_no, review_ids=review_ids), changed
 
 
 def repair_llm_payload_with_candidate(
@@ -346,7 +506,7 @@ def repair_llm_payload_with_candidate(
     candidate_order = _candidate_evidence_order(candidate_payload)
     evidence_items: list[dict[str, Any]] = []
     for idx, item in enumerate(_coerce_llm_items(payload)[:8]):
-        raw_id = item.get("review_id", item.get("id"))
+        raw_id = item.get("review_id", item.get("id", item.get("reviewer_id")))
         if raw_id is None and idx < len(candidate_order):
             raw_id = candidate_order[idx].get("review_id")
         try:
@@ -373,6 +533,17 @@ def repair_llm_payload_with_candidate(
         ).strip()
         if len(detail) < 12 or len(snippet) < 12:
             continue
+        public_detail = str(item.get("public_detail") or candidate_item.get("public_detail") or "").strip()
+        spoiler_terms = _string_list(item.get("spoiler_terms"), max_items=8) or _string_list(candidate_item.get("spoiler_terms"), max_items=8)
+        if not spoiler_terms:
+            spoiler_terms = _spoiler_terms_from_text(" ".join([detail, snippet]))
+        spoiler_risk = _normalize_spoiler_risk(
+            item.get("spoiler_risk", candidate_item.get("spoiler_risk")),
+            terms=spoiler_terms,
+        )
+        if not public_detail:
+            public_detail = candidate_item.get("public_detail") or detail
+        public_detail = _redact_spoiler_terms(str(public_detail), spoiler_terms)
         aspect = str(item.get("aspect", "")).strip().lower()
         if aspect not in ALLOWED_ASPECTS:
             aspect = _guess_aspect(detail)
@@ -384,6 +555,9 @@ def repair_llm_payload_with_candidate(
                 "aspect": aspect,
                 "polarity": _normalize_polarity(polarity) if polarity else _guess_polarity(detail),
                 "detail": detail[:220],
+                "public_detail": public_detail[:220],
+                "spoiler_risk": spoiler_risk,
+                "spoiler_terms": spoiler_terms[:8],
                 "snippet": snippet[:320],
             }
         )
@@ -407,7 +581,13 @@ def normalize_map_text_with_candidate(
 ) -> tuple[dict[str, Any], bool]:
     parsed = safe_parse_json_object(text)
     try:
-        return normalize_map_payload(parsed, chunk_no=chunk_no, review_ids=review_ids), False
+        normalized = normalize_map_payload(parsed, chunk_no=chunk_no, review_ids=review_ids)
+        return ground_payload_with_candidate(
+            normalized,
+            candidate_payload=candidate_payload,
+            chunk_no=chunk_no,
+            review_ids=review_ids,
+        )
     except Exception:
         return (
             repair_llm_payload_with_candidate(
@@ -430,7 +610,7 @@ def repair_llm_text_with_candidate_ids(
     allowed_ids = set(review_ids)
     candidate_by_id = _candidate_evidence_by_review_id(candidate_payload)
     found_ids: list[int] = []
-    for match in re.finditer(r'"(?:review_id|id)"\s*:\s*"?(\d+)"?', text or ""):
+    for match in re.finditer(r'"(?:review_id|id|reviewer_id)"\s*:\s*"?(\d+)"?', text or ""):
         review_id = int(match.group(1))
         if review_id in allowed_ids and review_id in candidate_by_id and review_id not in found_ids:
             found_ids.append(review_id)

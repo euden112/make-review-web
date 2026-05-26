@@ -26,7 +26,7 @@ def _resolve_max_chars(explicit: int | None) -> int:
             num_ctx = int(num_ctx_env)
             # JSON Map prompts include schema instructions plus deterministic candidates.
             # Keep raw chunks smaller so small local models can return complete JSON.
-            safe_input_tokens = max(num_ctx - 1400, 450)
+            safe_input_tokens = max(num_ctx - 1650, 320)
             return int(safe_input_tokens * _CHARS_PER_TOKEN)
         except ValueError:
             pass

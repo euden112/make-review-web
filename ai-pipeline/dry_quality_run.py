@@ -13,7 +13,8 @@ from sqlalchemy import desc, func, select
 from app.core.database import AsyncSessionLocal
 from app.models.domain import ExternalReview, Game, Platform
 from ai_module.map_reduce.pipeline import run_hybrid_summary_pipeline
-from ai_module.map_reduce.map_schema import safe_parse_json_object
+from ai_module.map_reduce.reduce_api import GROUNDING_TERMS
+from ai_module.map_reduce.map_schema import SPOILER_TERM_PATTERNS, safe_parse_json_object
 from ai_module.map_reduce.sampler import ReviewRow
 
 
@@ -122,6 +123,152 @@ def _grounding_reference_count(result: dict[str, Any]) -> int:
     return len(re.findall(r"(?:review_id\s*=|리뷰\s*ID\s*=)", text))
 
 
+def _public_output_text(result: dict[str, Any]) -> str:
+    values: list[str] = []
+    for key in ("one_liner", "user_summary"):
+        values.append(str(result.get(key) or ""))
+    for key in ("pros", "cons", "keywords"):
+        value = result.get(key)
+        if isinstance(value, list):
+            values.extend(str(item or "") for item in value)
+    return " ".join(values)
+
+
+def _public_output_segments(result: dict[str, Any]) -> list[str]:
+    segments: list[str] = []
+    for key in ("one_liner", "user_summary"):
+        text = str(result.get(key) or "")
+        segments.extend(part.strip() for part in re.split(r"(?<=[.!?。])\s+", text) if part.strip())
+    for key in ("pros", "cons"):
+        value = result.get(key)
+        if isinstance(value, list):
+            segments.extend(str(item or "").strip() for item in value if str(item or "").strip())
+    return segments
+
+
+def _artifact_hits(text: str) -> list[str]:
+    patterns = ("```", "BEGIN", "END", ".pin", "json{", "</", "<|", "�")
+    hits = [pattern for pattern in patterns if pattern in text]
+    if re.search(r"(?:리뷰어|reviewer)\s*\d+", text, flags=re.I):
+        hits.append("reviewer_label")
+    return hits
+
+
+def _spoiler_leaks(result: dict[str, Any]) -> list[str]:
+    text = _public_output_text(result).lower()
+    leaks: list[str] = []
+    for patterns in SPOILER_TERM_PATTERNS.values():
+        for term in patterns:
+            normalized = str(term or "").strip()
+            if normalized and normalized.lower() in text and normalized not in leaks:
+                leaks.append(normalized)
+    for item in result.get("sample_evidence") or []:
+        if not isinstance(item, dict):
+            continue
+        if item.get("spoiler_risk") not in {"medium", "high"}:
+            continue
+        terms = item.get("spoiler_terms")
+        if not isinstance(terms, list):
+            continue
+        for term in terms:
+            normalized = str(term or "").strip()
+            if normalized and normalized.lower() in text and normalized not in leaks:
+                leaks.append(normalized)
+    return leaks
+
+
+def _vague_output_hits(text: str) -> list[str]:
+    patterns = (
+        "다양한 경험",
+        "다양한 의견",
+        "다양한 콘텐츠",
+        "어려울 수 있습니다",
+        "일부 사용자",
+        "긍정적인 평가",
+        "부정적인 평가",
+        "다양한 사용자",
+        "높은 평가",
+        "대체로",
+        "대부분",
+        "일부 사례",
+        "전반적인 품질",
+        "많은 리뷰어",
+        "호평를",
+        "불만를",
+        "의견이 분분",
+        "긍정과 불만이 함께",
+        "근거 리뷰는",
+        "review_id 미제공",
+        "review_id=미제공",
+        "근거 ID 없음",
+        "대표적인 따옴문",
+    )
+    return [pattern for pattern in patterns if pattern in text]
+
+
+def _weak_list_items(result: dict[str, Any]) -> list[str]:
+    weak: list[str] = []
+    pros_count = len(result.get("pros") or []) if isinstance(result.get("pros"), list) else 0
+    cons_count = len(result.get("cons") or []) if isinstance(result.get("cons"), list) else 0
+    if pros_count < 3:
+        weak.append(f"pros_count:{pros_count}")
+    if cons_count < 2:
+        weak.append(f"cons_count:{cons_count}")
+    for key in ("pros", "cons"):
+        value = result.get(key)
+        if not isinstance(value, list):
+            continue
+        for item in value:
+            text = str(item or "").strip()
+            if not text:
+                continue
+            has_anchor = bool(re.search(r"(?:review_id\s*=\s*\d+|리뷰\s*ID\s*=\s*\d+)", text))
+            if len(text) < 35 or len(text) > 180 or not has_anchor or re.search(r"([가-힣A-Za-z])\1{5,}", text):
+                weak.append(f"{key}:{text[:80]}")
+    return weak
+
+
+def _evidence_index(map_results: list[Any]) -> dict[int, str]:
+    index: dict[int, str] = {}
+    for result in map_results:
+        try:
+            payload = safe_parse_json_object(result.summary)
+        except Exception:
+            continue
+        for item in payload.get("evidence_items", []):
+            if not isinstance(item, dict):
+                continue
+            try:
+                review_id = int(item.get("review_id"))
+            except (TypeError, ValueError):
+                continue
+            text = " ".join(str(item.get(key, "") or "") for key in ("detail", "public_detail", "snippet"))
+            index[review_id] = " ".join([index.get(review_id, ""), text]).lower()
+    return index
+
+
+def _anchor_alignment_failures(result: dict[str, Any]) -> list[str]:
+    evidence_index = result.get("_evidence_index")
+    if not isinstance(evidence_index, dict):
+        return []
+    failures: list[str] = []
+    for segment in _public_output_segments(result):
+        reviewer_refs = {int(match.group(1)) for match in re.finditer(r"(?:리뷰어|reviewer)\s*(\d+)", segment, flags=re.I)}
+        anchor_refs = {int(match.group(1)) for match in re.finditer(r"review_id\s*=\s*(\d+)", segment)}
+        if reviewer_refs and anchor_refs and not reviewer_refs.issubset(anchor_refs):
+            failures.append(f"reviewer_label_mismatch:{sorted(reviewer_refs)}!={sorted(anchor_refs)}")
+        terms = [term for term in GROUNDING_TERMS if term.lower() in segment.lower()]
+        if not terms:
+            continue
+        anchor_ids = [int(match.group(1)) for match in re.finditer(r"review_id\s*=\s*(\d+)", segment)]
+        if not anchor_ids:
+            continue
+        for term in terms:
+            if not any(term.lower() in str(evidence_index.get(review_id, "")) for review_id in anchor_ids):
+                failures.append(f"term_unanchored={term}:anchors={anchor_ids}")
+    return failures
+
+
 def _gate_results(
     result: dict[str, Any],
     *,
@@ -135,6 +282,12 @@ def _gate_results(
     fallback_rate = float(map_quality.get("fallback_rate", 1.0) or 0.0)
     llm_success_rate = float(map_quality.get("llm_success_rate", 0.0) or 0.0)
     grounding_refs = _grounding_reference_count(result)
+    public_text = _public_output_text(result)
+    artifact_hits = _artifact_hits(public_text)
+    spoiler_leaks = _spoiler_leaks(result)
+    vague_hits = _vague_output_hits(public_text)
+    weak_list_items = _weak_list_items(result)
+    anchor_failures = _anchor_alignment_failures(result)
 
     checks = {
         "map_llm_success": llm_success_rate >= map_success_threshold,
@@ -143,6 +296,11 @@ def _gate_results(
         "reduce_request_budget": reduce_requests <= 4,
         "reduce_no_error": result.get("error_code") is None,
         "grounded_output": grounding_refs >= 3,
+        "public_output_no_artifacts": not artifact_hits,
+        "public_output_no_spoiler_leaks": not spoiler_leaks,
+        "public_output_not_vague": not vague_hits,
+        "pros_cons_are_grounded_sentences": not weak_list_items,
+        "review_id_anchors_match_evidence": not anchor_failures,
     }
     return {
         "passed": all(checks.values()),
@@ -154,6 +312,11 @@ def _gate_results(
             "reduce_token_budget": reduce_token_budget,
             "reduce_requests": reduce_requests,
             "grounding_reference_count": grounding_refs,
+            "artifact_hits": artifact_hits,
+            "spoiler_leaks": spoiler_leaks,
+            "vague_output_hits": vague_hits,
+            "weak_list_items": weak_list_items,
+            "anchor_alignment_failures": anchor_failures,
         },
     }
 
@@ -174,6 +337,9 @@ def _sample_evidence(map_results: list[Any], limit: int = 8) -> list[dict[str, A
                     "aspect": item.get("aspect"),
                     "polarity": item.get("polarity"),
                     "detail": item.get("detail"),
+                    "public_detail": item.get("public_detail"),
+                    "spoiler_risk": item.get("spoiler_risk"),
+                    "spoiler_terms": item.get("spoiler_terms"),
                     "snippet": item.get("snippet"),
                 }
             )
@@ -251,6 +417,7 @@ async def run(args: argparse.Namespace) -> list[dict[str, Any]]:
                 "map_stats": stats,
                 "map_quality": _map_quality(stats, len(map_results)),
                 "sample_evidence": _sample_evidence(map_results),
+                "_evidence_index": _evidence_index(map_results),
                 "reduce_usage_total": _token_usage_total(reduce_usage),
                 "reduce_usage": reduce_usage,
                 "one_liner": final_summary.one_liner,
@@ -265,6 +432,7 @@ async def run(args: argparse.Namespace) -> list[dict[str, Any]]:
             reduce_token_budget=args.reduce_token_budget,
             map_success_threshold=args.map_success_threshold,
         )
+        result.pop("_evidence_index", None)
         results.append(result)
     return results
 

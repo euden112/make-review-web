@@ -6,7 +6,7 @@ from typing import Any
 
 from ai_module.map_reduce.chunker import chunk_reviews_by_chars
 from ai_module.map_reduce.map_local import run_map_stage, MapResult
-from ai_module.map_reduce.map_schema import dumps_map_payload, safe_parse_json_object
+from ai_module.map_reduce.map_schema import _redact_spoiler_terms, _spoiler_terms_from_text, dumps_map_payload, safe_parse_json_object
 from ai_module.map_reduce.reduce_api import FinalSummary, run_feature_reduce_stage
 from ai_module.map_reduce.sampler import (
     ReviewRow,
@@ -98,12 +98,14 @@ def _select_representative_quotes(
         snippet = _extract_dense_snippet(r.review_text_clean or "", max_chars=max_chars)
         if not snippet:
             continue
+        spoiler_terms = _spoiler_terms_from_text(snippet)
+        snippet = _redact_spoiler_terms(snippet, spoiler_terms)
         polarity = (
             "+" if r.is_recommended is True else
             "-" if r.is_recommended is False else
             "C"
         )
-        quotes.append(f"[{polarity}] {snippet}")
+        quotes.append(f"[{polarity} review_id={r.id}] {snippet}")
     return quotes
 
 
@@ -374,7 +376,7 @@ async def run_hybrid_summary_pipeline(
         language_code=language_code,
         chunks=chunks,
         model_name=local_model_name,
-        prompt_version="json_v2_llm_map",
+        prompt_version="json_v3_spoiler_safe_map",
         cache=cache or _NullAsyncCache(),
         ollama_base_url=ollama_base_url,
     )
