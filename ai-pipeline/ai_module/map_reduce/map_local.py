@@ -43,6 +43,7 @@ def _build_map_prompt(*, chunk_text: str, deterministic_candidate: str) -> str:
         "Keep output compact: max 6 evidence_items, max 3 quote_candidates, max 5 aspects.\n"
         "Each evidence item: {review_id,source,aspect,polarity,detail,public_detail,spoiler_risk,spoiler_terms,snippet}.\n"
         "detail must be specific and grounded. Bad: 'combat is good'. Good: 'boss music raises tension while dodging and countering'.\n"
+        "Write detail and public_detail in the SAME language as the review text. Never translate the review into another language (e.g. do not output Chinese for a Korean review).\n"
         "public_detail must keep the concrete experience but redact spoilers: no specific boss names, ending names, plot twists, character deaths, late-area names, or quest resolutions.\n"
         "spoiler_risk must be one of none, low, medium, high. spoiler_terms is an array of redacted raw terms.\n"
         "snippet must be copied from the review text, allowing only whitespace normalization.\n"
@@ -67,6 +68,7 @@ def _build_map_retry_prompt(*, deterministic_candidate: str) -> str:
         "Required keys: chunk_no, review_ids, source_mix, sentiment, aspects, playtime_signals, critic_signals, quote_candidates, evidence_items, warnings.\n"
         "Each evidence_items entry must keep review_id, source, aspect, polarity, detail, public_detail, spoiler_risk, spoiler_terms, snippet.\n"
         "public_detail must redact specific boss names, ending names, plot twists, character deaths, late-area names, or quest resolutions.\n"
+        "Write detail and public_detail in the SAME language as the review text. Never translate the review into another language.\n"
         "Return 4 to 6 evidence_items if available.\n\n"
         "[CANDIDATE_JSON]\n"
         f"{deterministic_candidate}"
@@ -122,6 +124,9 @@ async def summarize_chunk_with_ollama(
         "stream": False,
         "keep_alive": keep_alive,
         "format": "json",
+        # think는 /api/chat의 top-level 파라미터다. options 안에 두면 Ollama가 무시하므로
+        # thinking 모델(qwen3 등)에서 thinking이 비활성화되지 않는다. top-level로 둔다.
+        "think": False,
         "options": {
             "temperature": 0.2,
             "num_predict": num_predict,

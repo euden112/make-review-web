@@ -5,8 +5,17 @@ import asyncio
 import json
 import os
 import re
+import sys
 from decimal import Decimal
 from typing import Any
+
+# Windows 콘솔(cp949)에서 리뷰 본문/키워드의 이모지·유니코드(⭐ 등)를 JSON으로
+# 출력할 때 UnicodeEncodeError로 리포트 print가 죽는 것을 방지 — stdout/stderr를 UTF-8로 고정
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
 
 from sqlalchemy import desc, func, select
 

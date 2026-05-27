@@ -17,6 +17,10 @@ from ai_module.map_reduce.map_schema import SPOILER_TERM_PATTERNS, _redact_spoil
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
+# map_schema._redact_spoiler_terms가 스포일러 고유명사를 치환할 때 쓰는 placeholder.
+# 두 모듈이 동일 문자열을 공유해야 공개 문장 품질 가드가 일관되게 동작한다.
+REDACTION_PLACEHOLDER = "후반부 핵심 요소"
+
 GROUNDING_TERMS = (
     "강제종료",
     "데이터",
@@ -658,6 +662,8 @@ def _sanitize_public_text(text: str) -> str:
         "ㅈㄴ": "매우 ",
         "ㅈ같아서": "불합리하게 느껴져서",
         "ㅈ같": "불합리하게 느껴지",
+        "좆같아서": "불합리하게 느껴져서",
+        "좆같": "불합리하게 느껴지",
         "존나": "매우 ",
         "개같": "거칠게 느껴지",
         "병1신": "문제가 많은",
@@ -704,6 +710,8 @@ def _sanitize_public_text(text: str) -> str:
     }
     for src, dst in replacements.items():
         sanitized = sanitized.replace(src, dst)
+    # "일부 리뷰어들은"→"한 리뷰는들은" 같은 부분 치환 잔재 정리
+    sanitized = sanitized.replace("리뷰는들은", "리뷰는").replace("리뷰는들이", "리뷰는").replace("리뷰는들", "리뷰는")
     sanitized = sanitized.replace("호평를", "호평을").replace("불만를", "불만을")
     sanitized = (
         sanitized.replace("진행 장벽는", "진행 장벽은")
@@ -803,11 +811,17 @@ def _sanitize_grounded_text(text: Any, evidence_index: dict[int, str] | None = N
     if not segments:
         return sanitized
     kept: list[str] = []
+    seen_segments: set[str] = set()
     for segment in segments:
         if _is_vague_public_sentence(segment):
             continue
         if _segment_anchor_failures(segment, evidence_index):
             continue
+        # 동일/유사 문장 반복 제거 — LLM이 같은 지적을 여러 번 되풀이하는 경우 방지
+        seg_key = _sentence_body_key(segment)
+        if seg_key in seen_segments:
+            continue
+        seen_segments.add(seg_key)
         kept.append(segment)
     return " ".join(kept) if kept else ""
 
@@ -839,6 +853,17 @@ def _review_id_count(text: str) -> int:
     return len(re.findall(r"review_id\s*=\s*\d+", str(text or "")))
 
 
+def _sentence_body_key(text: str) -> str:
+    """review_id 앵커를 제거한 문장 본문 정규화 키.
+
+    룰 엔진/템플릿은 서로 다른 evidence(다른 review_id)를 같은 문장으로
+    환원할 수 있다. review_id로만 dedup하면 동일 텍스트가 중복 노출되므로,
+    앵커를 떼어낸 본문 기준으로도 중복을 제거한다.
+    """
+    body = re.sub(r"\s*\(review_id\s*=\s*\d+\)\s*\.?\s*$", "", str(text or "")).strip()
+    return " ".join(body.split())
+
+
 def _fallback_items_from_evidence(
     evidence_items: list[dict[str, Any]],
     *,
@@ -848,6 +873,7 @@ def _fallback_items_from_evidence(
 ) -> list[str]:
     result = list(existing)
     seen_ids = {int(match.group(1)) for text in result for match in re.finditer(r"review_id\s*=\s*(\d+)", text)}
+    seen_bodies = {_sentence_body_key(text) for text in result}
     for item in evidence_items:
         if str(item.get("polarity")) != polarity:
             continue
@@ -860,10 +886,16 @@ def _fallback_items_from_evidence(
         detail = _sanitize_public_text(str(item.get("detail") or item.get("snippet") or ""))
         if len(detail) < 18 or len(detail) > 170 or re.search(r"([가-힣A-Za-z])\1{5,}", detail):
             continue
+        if detail.count(REDACTION_PLACEHOLDER) >= 2:
+            continue
         sentence = f"{detail}라는 실제 리뷰 근거가 있습니다 (review_id={review_id})."
+        body = _sentence_body_key(sentence)
+        if body in seen_bodies:
+            continue
         if 35 <= len(sentence) <= 260:
             result.append(sentence)
             seen_ids.add(review_id)
+            seen_bodies.add(body)
         if len(result) >= limit:
             break
     return result
@@ -936,6 +968,11 @@ def _positive_clause(detail: str) -> str:
 def _is_low_quality_detail(detail: str) -> bool:
     normalized = " ".join(str(detail or "").split())
     if len(normalized) < 8:
+        return True
+    # 스포일러 redaction placeholder가 한 문장에 여러 번 들어가면 스포일러 과밀
+    # 원문이라 redaction 후에도 "후반부 핵심 요소 ... 후반부 핵심 요소 ..."처럼
+    # 깨진 문장이 된다. 공개 문장 후보에서 제외한다.
+    if normalized.count(REDACTION_PLACEHOLDER) >= 2:
         return True
     if any(term in normalized for term in CANDIDATE_REJECT_TERMS):
         return True
@@ -1086,6 +1123,7 @@ def _fallback_compact_items_from_evidence(
 ) -> list[str]:
     result = list(existing)
     seen_ids = {int(match.group(1)) for text in result for match in re.finditer(r"review_id\s*=\s*(\d+)", text)}
+    seen_bodies = {_sentence_body_key(text) for text in result}
     for item in evidence_items:
         if str(item.get("polarity")) not in polarities:
             continue
@@ -1103,12 +1141,18 @@ def _fallback_compact_items_from_evidence(
             continue
         if len(detail) < 18 or re.search(r"([가-힣A-Za-z])\1{5,}", detail):
             continue
+        if detail.count(REDACTION_PLACEHOLDER) >= 2:
+            continue
         if len(detail) > 110:
             detail = detail[:110].rstrip() + "..."
         sentence = f"{detail}라는 반응이 있습니다 (review_id={review_id})."
+        body = _sentence_body_key(sentence)
+        if body in seen_bodies:
+            continue
         if 35 <= len(sentence) <= 180:
             result.append(sentence)
             seen_ids.add(review_id)
+            seen_bodies.add(body)
         if len(result) >= limit:
             break
     return result
@@ -1142,6 +1186,7 @@ def _fallback_natural_items_from_evidence(
 ) -> list[str]:
     result = list(existing)
     seen_ids = {int(match.group(1)) for text in result for match in re.finditer(r"review_id\s*=\s*(\d+)", text)}
+    seen_bodies = {_sentence_body_key(text) for text in result}
     for item in evidence_items:
         item_polarity = str(item.get("polarity"))
         if item_polarity not in polarities:
@@ -1171,8 +1216,12 @@ def _fallback_natural_items_from_evidence(
         sentence = _evidence_sentence_v2(item, polarity=target_polarity, detail_override=detail_override)
         if sentence is None:
             continue
+        body = _sentence_body_key(sentence)
+        if body in seen_bodies:
+            continue
         result.append(sentence)
         seen_ids.add(review_id)
+        seen_bodies.add(body)
         if len(result) >= limit:
             break
     return result
@@ -1300,6 +1349,23 @@ def _sanitize_bucket(bucket: BucketSummary | None, evidence_index: dict[int, str
         cons=_sanitize_public_list(bucket.cons, evidence_index),
         keywords=_sanitize_keyword_list(bucket.keywords),
     )
+
+
+def _llm_summary_passes_gate(summary: str) -> bool:
+    """살균을 통과한 LLM 요약을 그대로 공개할 수 있는지 판정.
+
+    _sanitize_bucket이 이미 비속어·일반 스포일러 redaction과 vague/anchor 실패 문장
+    제거를 수행하고, reduce 입력은 스포일러 redaction된 public_detail이므로 여기서는
+    분량·언어·문장 수만 확인한다. 통과하면 비평가 요약처럼 LLM 산문을 유지하고,
+    실패하면 결정론적 템플릿 요약으로 fallback한다.
+    """
+    text = " ".join(str(summary or "").split())
+    if len(text) < 80:
+        return False
+    if re.search(r"[一-鿿]", text):  # 중국어 오염 detail이 요약에 새어든 경우
+        return False
+    sentences = [s for s in re.split(r"(?<=[.!?。])\s+", text) if s.strip()]
+    return len(sentences) >= 2
 
 
 def _has_min_evidence(payloads: list[dict[str, Any]], minimum: int = 5) -> bool:
@@ -1486,7 +1552,12 @@ async def run_feature_reduce_stage(
             one_liner = _sanitize_grounded_text(final_data.get("one_liner", ""), final_evidence_index)
         user_bucket = _sanitize_bucket(_parse_feature_bucket(user_data), final_evidence_index)
         fallback_user_summary = _fallback_user_summary_from_evidence(final_evidence_items)
-        if user_bucket is not None and fallback_user_summary:
+        # 유저 요약: LLM 산문이 게이트(분량·언어·문장수, 살균은 _sanitize_bucket에서 완료)를
+        # 통과하면 비평가 요약처럼 그대로 사용한다. 통과하지 못할 때만 결정론적 템플릿으로
+        # fallback해 가독성이 떨어지는 "…반응이 있습니다" 나열을 최소화한다.
+        if user_bucket is not None and _llm_summary_passes_gate(user_bucket.summary):
+            pass
+        elif user_bucket is not None and fallback_user_summary:
             user_bucket.summary = fallback_user_summary
         elif user_bucket is None and fallback_user_summary:
             user_bucket = BucketSummary(

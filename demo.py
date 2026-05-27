@@ -45,7 +45,11 @@ RESET = "\033[0m"
 ROOT = Path(__file__).resolve().parent
 CRAWLING_DIR = ROOT / "crawling"
 BACKEND_URL = "http://localhost:8000"
-DEFAULT_LOCAL_MAP_MODEL = "qwen2.5:1.5b"
+# Map/Reduce 분리: Map은 로컬 GPU Ollama(docker-compose.map.yml), Reduce는 backend(Groq).
+DEFAULT_LOCAL_MAP_MODEL = "qwen2.5:7b"
+MAP_COMPOSE = "docker-compose.map.yml"
+OLLAMA_CONTAINER = "capstone_ollama_map"
+OLLAMA_URL = "http://localhost:11434"
 
 # 데모 기본 대상 게임
 DEMO_GAMES = ["grand-theft-auto-v", "elden-ring"]
@@ -191,26 +195,34 @@ def _docker_compose_cmd() -> list[str]:
 
 
 def start_docker():
+    # 백엔드 스택 (postgres/redis/backend/...) — Ollama 미포함
     cmd = _docker_compose_cmd() + ["up", "-d", "--build"]
     result = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
     if result.returncode != 0:
         abort(f"docker compose 실행 실패:\n{result.stderr[-600:]}")
-    ok("서비스 기동 완료  (postgres / redis / ollama / backend)")
+    # 로컬 Map 전용 Ollama (GPU) — 별도 compose 파일
+    cmd_map = _docker_compose_cmd() + ["-f", MAP_COMPOSE, "up", "-d"]
+    result_map = subprocess.run(cmd_map, cwd=ROOT, capture_output=True, text=True)
+    if result_map.returncode != 0:
+        abort(f"Ollama(map) 기동 실패:\n{result_map.stderr[-600:]}")
+    ok("서비스 기동 완료  (postgres / redis / backend  +  ollama-map[GPU])")
 
 
 def reset_docker_volumes():
-    cmd = _docker_compose_cmd() + ["down", "-v"]
-    result = subprocess.run(
-        cmd,
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-    )
-    if result.returncode != 0:
-        abort(f"docker compose down -v 실패:\n{result.stderr[-600:]}")
-    ok("Docker 컨테이너/볼륨 초기화 완료 (down -v)")
+    # 백엔드 스택과 Map용 Ollama 양쪽 볼륨을 초기화
+    for extra in ([], ["-f", MAP_COMPOSE]):
+        cmd = _docker_compose_cmd() + extra + ["down", "-v"]
+        result = subprocess.run(
+            cmd,
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        if result.returncode != 0:
+            abort(f"docker compose down -v 실패:\n{result.stderr[-600:]}")
+    ok("Docker 컨테이너/볼륨 초기화 완료 (down -v, backend + map)")
 
 
 def wait_backend(timeout: int = 150):
@@ -254,7 +266,7 @@ def run_price_refresher_once():
 def pull_ollama_model(model: str):
     info(f"모델 확인: {model}")
     result = subprocess.run(
-        ["docker", "exec", "capstone_ollama", "ollama", "pull", model],
+        ["docker", "exec", OLLAMA_CONTAINER, "ollama", "pull", model],
         capture_output=False,
     )
     if result.returncode == 0:
@@ -264,19 +276,13 @@ def pull_ollama_model(model: str):
 
 
 # ─── DB 리뷰 현황 조회 ────────────────────────────────────────────────────────
-def resolve_backend_local_model(default: str = DEFAULT_LOCAL_MAP_MODEL) -> str:
-    result = subprocess.run(
-        ["docker", "exec", "capstone_backend", "printenv", "LOCAL_MAP_MODEL"],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-    )
-    model = (result.stdout or "").strip()
-    if result.returncode == 0 and model:
-        return model
-    warn(f"backend LOCAL_MAP_MODEL 확인 실패 -> 기본값 사용: {default}")
-    return default
+def resolve_map_model(default: str = DEFAULT_LOCAL_MAP_MODEL) -> str:
+    """Map 모델 결정 — 호스트 env LOCAL_MAP_MODEL 우선, 없으면 기본값.
+
+    분리 구조에서 Map은 backend가 아니라 로컬(run_map_pipeline 실행 환경)에서
+    돌아가므로, 모델은 backend 컨테이너 env가 아닌 호스트 기준으로 결정한다.
+    """
+    return os.environ.get("LOCAL_MAP_MODEL", "").strip() or default
 
 
 def show_review_counts(label: str = "현재 DB 리뷰 현황"):
@@ -793,13 +799,24 @@ def print_test_summary() -> bool:
     return failed == 0
 
 
-def trigger_summarize(game_id: int, force: bool = False) -> int:
-    r = httpx.post(
-        f"{BACKEND_URL}/api/v1/games/{game_id}/summarize",
-        params={"force": "true"} if force else None,
-        timeout=15,
-    )
-    return r.status_code
+def run_map_reduce(game_id: int, model: str, force: bool = False) -> bool:
+    """로컬 Map(Ollama, GPU) → Reduce(Groq) 분리 파이프라인 실행.
+
+    run_map_pipeline.py가 GET /reviews-for-map → 로컬 Ollama Map →
+    POST /reduce(BackgroundTask) 순으로 수행한다. reduce는 비동기이므로
+    호출 후 poll_summary로 요약 완료를 기다린다.
+    """
+    cmd = [
+        sys.executable, "run_map_pipeline.py",
+        "--cloud-url", BACKEND_URL,
+        "--game-id", str(game_id),
+        "--model", model,
+        "--ollama-url", OLLAMA_URL,
+    ]
+    if force:
+        cmd.append("--force")
+    r = subprocess.run(cmd, cwd=ROOT)
+    return r.returncode == 0
 
 
 def current_summary_version(game_id: int) -> int | None:
@@ -1087,10 +1104,7 @@ def main():
             reset_docker_volumes()
         start_docker()
     wait_backend()
-    backend_model = resolve_backend_local_model()
-    if backend_model != model:
-        warn(f"LOCAL_MAP_MODEL 불일치: .env/host={model}, backend={backend_model} -> backend 기준 사용")
-        model = backend_model
+    model = resolve_map_model(model)
 
     # ── STEP 3: Ollama 모델 확인 ──────────────────────────────────────────────
     step(3, "Ollama 로컬 모델 준비")
@@ -1178,8 +1192,12 @@ def main():
         for slug, gid in targets.items():
             name = GAME_DISPLAY_NAMES.get(slug, slug)
             previous_version = current_summary_version(gid) if args.force else None
-            code = trigger_summarize(gid, force=args.force)
-            ok(f"[{gid}]  {name}  →  HTTP {code}")
+            info(f"로컬 Map 실행 중 (Ollama GPU): {name}")
+            mapped = run_map_reduce(gid, model, force=args.force)
+            if mapped:
+                ok(f"[{gid}]  {name}  →  로컬 Map + Reduce 트리거 완료")
+            else:
+                warn(f"[{gid}]  {name}  →  Map/Reduce 파이프라인 오류 (run_map_pipeline)")
             info(f"통합 요약 대기 중: {name}")
             data = poll_summary(gid, timeout=args.timeout, min_version=previous_version)
             if data:

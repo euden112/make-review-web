@@ -16,7 +16,7 @@ from playwright.async_api import async_playwright
 
 TARGET_SLUG = "forza-horizon-6"   # 분석할 게임 슬러그
 PLATFORM    = "pc"
-HEADLESS    = False                # True로 바꾸면 백그라운드 실행
+HEADLESS    = True                 # True로 바꾸면 백그라운드 실행
 SCROLL_WAIT = 3000                 # 스크롤 후 대기 ms
 OUT_FILE    = Path("metacritic_inspect_result.json")
 

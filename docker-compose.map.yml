@@ -1,0 +1,39 @@
+# 로컬 Map 단계 전용 Ollama (GPU 가속)
+#
+# Map/Reduce 분리 구조에서 Map은 클라우드가 아닌 로컬에서 실행한다
+# (cloud-deploy: docker-compose.yml에서 ollama 제거). CPU 배포 제약이
+# 사라졌으므로 로컬 GPU를 사용해 더 큰 Map 모델을 돌린다.
+#
+# 사용법:
+#   docker compose -f docker-compose.map.yml up -d        # Ollama 기동
+#   docker compose -f docker-compose.map.yml exec ollama ollama pull qwen2.5:7b
+#   python run_map_pipeline.py --cloud-url https://xxx.trycloudflare.com --all
+#
+# 전제: NVIDIA 드라이버 + (Docker Desktop/WSL2의) nvidia container runtime.
+# GPU가 없는 호스트라면 아래 deploy 블록을 주석 처리하면 CPU로 폴백된다.
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: capstone_ollama_map
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_HOST=0.0.0.0:11434
+      # GPU 1장(16GB)에 모델 1개 상주. 동시 로드/병렬 요청 억제로 OOM 방지.
+      - OLLAMA_KEEP_ALIVE=30m
+      - OLLAMA_MAX_LOADED_MODELS=1
+      - OLLAMA_NUM_PARALLEL=1
+    # GPU 예약: nvidia 런타임이 있어야 한다. CPU 폴백 시 이 블록을 주석 처리.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  ollama_data:

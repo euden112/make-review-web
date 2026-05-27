@@ -123,6 +123,7 @@ def test_map_payload_preserves_public_detail_and_spoiler_metadata() -> None:
 
 
 def test_map_payload_redacts_public_detail_when_missing() -> None:
+    # 게임별 고유명사는 하드코딩 사전이 아니라 Map LLM이 준 spoiler_terms로 redaction된다.
     payload = {
         "chunk_no": 1,
         "review_ids": [10],
@@ -134,6 +135,7 @@ def test_map_payload_redacts_public_detail_when_missing() -> None:
                 "polarity": "negative",
                 "detail": "Malenia fight becomes exhausting after repeated deaths",
                 "snippet": "Malenia fight becomes exhausting after repeated deaths",
+                "spoiler_terms": ["Malenia"],
             }
         ],
     }

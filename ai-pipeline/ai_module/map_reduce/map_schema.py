@@ -17,49 +17,15 @@ ALLOWED_ASPECTS = {
     "bugs",
 }
 
+# 게임 무관(genre-agnostic) 일반 스포일러 카테고리어만 둔다. 특정 게임 고유명사
+# (보스명·지역명·엔딩명 등)는 하드코딩하면 한 게임에만 편향되고 50게임 확장도 안 되므로
+# 두지 않는다. 게임별 고유 스포일러는 Map LLM이 출력하는 evidence의 spoiler_terms가 담당한다.
 SPOILER_TERM_PATTERNS = {
-    "final_boss": (
-        "final boss",
-        "last boss",
-        "elden beast",
-        "malenia",
-        "radahn",
-        "fire giant",
-        "godrick",
-        "margit",
-        "maliketh",
-        "최종 보스",
-        "최종보스",
-        "막보",
-        "말레니아",
-        "라단",
-        "불의 거인",
-        "불거인",
-        "고드릭",
-        "드릭이형",
-        "멀기트",
-        "말리케스",
-        "엘데의 짐승",
-        "쌍둥이 가고일",
-        "미켈라",
-    ),
-    "ending": ("ending", "true ending", "bad ending", "frenzied flame", "엔딩", "진엔딩", "배드엔딩", "미친불 엔딩"),
+    "final_boss": ("final boss", "last boss", "최종 보스", "최종보스", "막보"),
+    "ending": ("ending", "true ending", "bad ending", "엔딩", "진엔딩", "배드엔딩"),
     "twist": ("plot twist", "twist", "반전", "정체", "배신"),
     "death": ("dies", "death of", "killed", "사망", "죽는다", "죽음"),
-    "late_area": (
-        "late-game area",
-        "endgame area",
-        "caelid",
-        "raya lucaria",
-        "leyndell",
-        "farum azula",
-        "후반 지역",
-        "후반부 지역",
-        "엔드게임 지역",
-        "케일리드",
-        "케일리드 신수탑",
-        "레아 루카리아",
-    ),
+    "late_area": ("late-game area", "endgame area", "후반 지역", "후반부 지역", "엔드게임 지역"),
     "quest_resolution": ("quest ending", "questline ending", "퀘스트 결말", "퀘스트 엔딩"),
 }
 
@@ -148,6 +114,44 @@ def _redact_spoiler_terms(text: str, terms: list[str]) -> str:
     return result
 
 
+# 표시용 대표 리뷰(원문 verbatim)에 적용하는 강한 비속어 — 마스킹 처리.
+# 긴 패턴을 먼저 두어 부분 중복 치환을 피한다.
+_DISPLAY_PROFANITY_PATTERNS = (
+    "좆같", "좆", "씨1발", "씨발", "시발", "ㅅㅂ", "ㅄ", "ㅈㄴ", "ㅈ같", "존나", "개같",
+    # 숫자 삽입 난독화 변형 포함
+    "병1신", "병2신", "병신", "정2병", "정1병", "새끼",
+)
+
+
+def redact_display_text(text: str) -> str:
+    """표시용 대표 리뷰 경량 redaction.
+
+    요약용 sanitizer(_sanitize_public_text)는 filler 치환까지 해서 원문을 많이 바꾸므로
+    verbatim 표시에는 부적합하다. 표시용은 원문 가치를 최대한 보존하되 (1)게임 무관 일반
+    스포일러 패턴 치환, (2)강한 비속어 마스킹만 적용한다. 게임 고유명사는 패턴 사전에
+    없으므로 redaction되지 않는다(설계상 LLM 요약 본문에서만 spoiler_terms로 처리).
+    """
+    raw = str(text or "")
+    result = _redact_spoiler_terms(raw, _spoiler_terms_from_text(raw))
+    for term in _DISPLAY_PROFANITY_PATTERNS:
+        result = re.sub(re.escape(term), "***", result, flags=re.I)
+    return result
+
+
+def _prefer_source_language_detail(detail: str, snippet: str) -> str:
+    """로컬 LLM이 detail을 원문과 다른 언어로 번역한 경우 원문 snippet으로 보정한다.
+
+    qwen 계열은 한국어/영어 리뷰의 detail을 중국어로 번역하거나 한자를 섞어
+    출력하기도 한다(한국어 critic 요약 입력으로 부적합). 따라서 detail에 한자(中文)가
+    있는데 원문 snippet에는 한자가 없으면(원문이 한국어/영어인데 중국어로 오염된 경우)
+    원문 snippet을 detail로 사용한다. snippet 자체가 한자를 포함한 진짜 중국어 리뷰는
+    보정하지 않는다. 영어 detail은 한자가 없으므로 그대로 통과한다.
+    """
+    if re.search(r"[一-鿿]", detail) and not re.search(r"[一-鿿]", snippet):
+        return snippet
+    return detail
+
+
 def _public_detail_from_item(item: dict[str, Any], detail: str, snippet: str) -> tuple[str, str, list[str]]:
     explicit_terms = _string_list(item.get("spoiler_terms"), max_items=8)
     inferred_terms = _spoiler_terms_from_text(" ".join([detail, snippet]))
@@ -206,6 +210,11 @@ def normalize_map_payload(
             snippet = str(item.get("snippet", "")).strip()
             if len(detail) < 12 or len(snippet) < 12:
                 continue
+            corrected = _prefer_source_language_detail(detail, snippet)
+            if corrected != detail:
+                # 번역된 detail/public_detail은 폐기하고 원문 snippet에서 재생성
+                detail = corrected
+                item = {**item, "public_detail": ""}
             public_detail, spoiler_risk, spoiler_terms = _public_detail_from_item(item, detail, snippet)
             evidence_items.append(
                 {
@@ -533,7 +542,12 @@ def repair_llm_payload_with_candidate(
         ).strip()
         if len(detail) < 12 or len(snippet) < 12:
             continue
-        public_detail = str(item.get("public_detail") or candidate_item.get("public_detail") or "").strip()
+        corrected = _prefer_source_language_detail(detail, snippet)
+        translated = corrected != detail
+        if translated:
+            detail = corrected
+        # 번역된 detail이면 LLM이 만든 public_detail도 신뢰할 수 없으므로 폐기 → 재생성
+        public_detail = "" if translated else str(item.get("public_detail") or candidate_item.get("public_detail") or "").strip()
         spoiler_terms = _string_list(item.get("spoiler_terms"), max_items=8) or _string_list(candidate_item.get("spoiler_terms"), max_items=8)
         if not spoiler_terms:
             spoiler_terms = _spoiler_terms_from_text(" ".join([detail, snippet]))

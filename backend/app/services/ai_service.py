@@ -51,11 +51,34 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 
+import re
+
+# grounding 감사용 (review_id=N) 앵커. 파이프라인 산출물에는 검증을 위해 남기되,
+# 사용자에게 저장·노출되는 텍스트에서는 제거한다(원문 근거는 representative_reviews_json으로 보존).
+_GROUNDING_ANCHOR_RE = re.compile(r"\s*\(\s*(?:review_id|리뷰\s*ID)\s*=\s*\d+\s*\)")
+
+
+def _strip_grounding_anchor(text):
+    if not isinstance(text, str):
+        return text
+    cleaned = _GROUNDING_ANCHOR_RE.sub("", text)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned)
+    cleaned = re.sub(r"\s+([.,!?])", r"\1", cleaned)
+    return cleaned.strip()
+
+
+def _strip_grounding_anchor_list(items):
+    if not isinstance(items, list):
+        return items
+    return [_strip_grounding_anchor(x) for x in items]
+
+
 def _select_platform_representative_reviews(
     reviews,
     steam_pid,
     meta_pid,
     limit_per_platform: int = 3,
+    prioritized_ids: set | None = None,
 ) -> list[dict[str, object]]:
     def _platform_score(review) -> tuple[float, float, float, int]:
         helpful_count = float(getattr(review, "helpful_count", 0) or 0)
@@ -72,16 +95,19 @@ def _select_platform_representative_reviews(
             return (score, normalized_score, helpful_count, -int(getattr(review, "id", 0) or 0))
         return (0.0, helpful_count, playtime_hours, -int(getattr(review, "id", 0) or 0))
 
-    steam_candidates = sorted(
-        [review for review in reviews if getattr(review, "platform_id", None) == steam_pid],
-        key=_platform_score,
-        reverse=True,
-    )[:limit_per_platform]
-    meta_candidates = sorted(
-        [review for review in reviews if getattr(review, "platform_id", None) == meta_pid],
-        key=_platform_score,
-        reverse=True,
-    )[:limit_per_platform]
+    prioritized_ids = prioritized_ids or set()
+
+    # reduce가 실제 인용한 리뷰(prioritized)를 각 플랫폼 상위에 우선 배치해, 표시용 대표
+    # 리뷰가 요약 근거와 일부 겹치도록(정합성) 한다. 우선순위가 같으면 기존 점수 순.
+    def _ranked(platform_id):
+        return sorted(
+            [r for r in reviews if getattr(r, "platform_id", None) == platform_id],
+            key=lambda r: (int(getattr(r, "id", 0) in prioritized_ids), _platform_score(r)),
+            reverse=True,
+        )[:limit_per_platform]
+
+    steam_candidates = _ranked(steam_pid)
+    meta_candidates = _ranked(meta_pid)
 
     selected: list[dict[str, object]] = []
 
@@ -124,12 +150,12 @@ async def _upsert_playtime_analysis(db, game_id: int, ai_result: FinalSummary, b
                 f"{prefix}_cons": None, f"{prefix}_keywords": None,
             }
         return {
-            f"{prefix}_summary": b.summary,
+            f"{prefix}_summary": _strip_grounding_anchor(b.summary),
             f"{prefix}_sentiment": b.sentiment_overall,
             f"{prefix}_score": b.sentiment_score,
-            f"{prefix}_pros": b.pros,
-            f"{prefix}_cons": b.cons,
-            f"{prefix}_keywords": b.keywords,
+            f"{prefix}_pros": _strip_grounding_anchor_list(b.pros),
+            f"{prefix}_cons": _strip_grounding_anchor_list(b.cons),
+            f"{prefix}_keywords": _strip_grounding_anchor_list(b.keywords),
         }
 
     fields = {
@@ -159,12 +185,12 @@ async def _upsert_critic_summary(db, game_id: int, ai_result: FinalSummary) -> N
 
     fields = {
         "game_id": game_id,
-        "summary": ai_result.critic.summary,
+        "summary": _strip_grounding_anchor(ai_result.critic.summary),
         "sentiment": ai_result.critic.sentiment_overall,
         "score": ai_result.critic.sentiment_score,
-        "pros": ai_result.critic.pros,
-        "cons": ai_result.critic.cons,
-        "keywords": ai_result.critic.keywords,
+        "pros": _strip_grounding_anchor_list(ai_result.critic.pros),
+        "cons": _strip_grounding_anchor_list(ai_result.critic.cons),
+        "keywords": _strip_grounding_anchor_list(ai_result.critic.keywords),
         "updated_at": datetime.utcnow(),
     }
 
@@ -186,12 +212,12 @@ async def _upsert_user_summary(db, game_id: int, ai_result: FinalSummary) -> Non
 
     fields = {
         "game_id": game_id,
-        "summary": ai_result.user.summary,
+        "summary": _strip_grounding_anchor(ai_result.user.summary),
         "sentiment": ai_result.user.sentiment_overall,
         "score": ai_result.user.sentiment_score,
-        "pros": ai_result.user.pros,
-        "cons": ai_result.user.cons,
-        "keywords": ai_result.user.keywords,
+        "pros": _strip_grounding_anchor_list(ai_result.user.pros),
+        "cons": _strip_grounding_anchor_list(ai_result.user.cons),
+        "keywords": _strip_grounding_anchor_list(ai_result.user.keywords),
         "updated_at": datetime.utcnow(),
     }
 
@@ -460,14 +486,14 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
                 job_id=job.id,
                 summary_version=new_version,
                 summary_text=None,
-                one_liner=ai_result.one_liner,
+                one_liner=_strip_grounding_anchor(ai_result.one_liner),
                 sentiment_overall=ai_result.sentiment_overall,
                 sentiment_score=ai_result.sentiment_score,
                 aspect_sentiment_json=ai_result.aspect_scores,
                 representative_reviews_json=representative_reviews,
-                pros_json=ai_result.pros,
-                cons_json=ai_result.cons,
-                keywords_json=ai_result.keywords,
+                pros_json=_strip_grounding_anchor_list(ai_result.pros),
+                cons_json=_strip_grounding_anchor_list(ai_result.cons),
+                keywords_json=_strip_grounding_anchor_list(ai_result.keywords),
                 steam_recommend_ratio=steam_recommend_ratio,
                 metacritic_critic_avg=metacritic_critic_avg,
                 metacritic_user_avg=metacritic_user_avg,
@@ -552,3 +578,346 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
                 except Exception:
                     pass
             logger.exception("ai pipeline failed: game_id=%s error=%s", game_id, e)
+
+
+async def get_reviews_for_map(game_id: int, force: bool = False) -> dict:
+    """로컬 Map 단계용 리뷰 데이터와 메타데이터 반환."""
+    async with AsyncSessionLocal() as db:
+        cursor = (await db.execute(
+            select(GameSummaryCursor).where(and_(
+                GameSummaryCursor.game_id == game_id,
+                GameSummaryCursor.summary_type == "unified",
+                GameSummaryCursor.language_code == "unified",
+            ))
+        )).scalar_one_or_none()
+
+        last_review_id = cursor.last_summarized_review_id if (cursor and not force) else 0
+
+        new_reviews = (await db.execute(
+            select(ExternalReview).where(and_(
+                ExternalReview.game_id == game_id,
+                ExternalReview.id > last_review_id,
+                ExternalReview.is_deleted == False,
+            ))
+        )).scalars().all()
+
+        if not new_reviews:
+            has_current = (await db.execute(
+                select(GameReviewSummary.id).where(and_(
+                    GameReviewSummary.game_id == game_id,
+                    GameReviewSummary.summary_type == "unified",
+                    GameReviewSummary.review_language.is_(None),
+                    GameReviewSummary.is_current == True,
+                ))
+            )).scalar_one_or_none()
+            if has_current:
+                return {"status": "no_new_reviews", "game_id": game_id}
+            new_reviews = (await db.execute(
+                select(ExternalReview).where(and_(
+                    ExternalReview.game_id == game_id,
+                    ExternalReview.id > 0,
+                    ExternalReview.is_deleted == False,
+                ))
+            )).scalars().all()
+            if not new_reviews:
+                return {"status": "no_new_reviews", "game_id": game_id}
+
+        summary_reviews = (await db.execute(
+            select(ExternalReview).where(and_(
+                ExternalReview.game_id == game_id,
+                ExternalReview.is_deleted == False,
+            ))
+        )).scalars().all()
+
+        if not summary_reviews:
+            return {"status": "no_new_reviews", "game_id": game_id}
+
+        platforms    = (await db.execute(select(Platform))).scalars().all()
+        steam_pid    = next((p.id for p in platforms if p.code == "steam"), None)
+        meta_pid     = next((p.id for p in platforms if p.code == "metacritic"), None)
+        review_types = (await db.execute(select(ReviewType))).scalars().all()
+        critic_tid   = next((rt.id for rt in review_types if rt.type_code == "critic"), None)
+        user_tid     = next((rt.id for rt in review_types if rt.type_code == "user"), None)
+
+        steam_pos = sum(1 for r in summary_reviews if r.platform_id == steam_pid and r.is_recommended is True)
+        steam_neg = sum(1 for r in summary_reviews if r.platform_id == steam_pid and r.is_recommended is False)
+        meta_pos  = sum(1 for r in summary_reviews if r.platform_id == meta_pid and r.normalized_score_100 and r.normalized_score_100 >= 75)
+        meta_mix  = sum(1 for r in summary_reviews if r.platform_id == meta_pid and r.normalized_score_100 and 50 <= r.normalized_score_100 < 75)
+        meta_neg  = sum(1 for r in summary_reviews if r.platform_id == meta_pid and r.normalized_score_100 and r.normalized_score_100 < 50)
+
+        steam_total = steam_pos + steam_neg
+        steam_recommend_ratio = round((steam_pos / steam_total) * 100, 2) if steam_total > 0 else None
+
+        meta_critic_scores = [float(r.normalized_score_100) for r in summary_reviews if r.platform_id == meta_pid and r.review_type_id == critic_tid and r.normalized_score_100 is not None]
+        meta_user_scores   = [float(r.normalized_score_100) for r in summary_reviews if r.platform_id == meta_pid and r.review_type_id == user_tid  and r.normalized_score_100 is not None]
+        metacritic_critic_avg = round(sum(meta_critic_scores) / len(meta_critic_scores), 2) if meta_critic_scores else None
+        metacritic_user_avg   = round(sum(meta_user_scores)   / len(meta_user_scores),   2) if meta_user_scores   else None
+
+        category_total: Counter    = Counter()
+        category_positive: Counter = Counter()
+        for review in summary_reviews:
+            for item in (review.review_categories_json or []):
+                if isinstance(item, dict):
+                    category  = item.get("category")
+                    sentiment = item.get("sentiment")
+                elif isinstance(item, str):
+                    category, sentiment = item, None
+                else:
+                    category = None
+                if category:
+                    category_total[str(category)] += 1
+                    if sentiment == "positive":
+                        category_positive[str(category)] += 1
+        top_categories = [
+            (cat, total, round(category_positive[cat] / total, 3))
+            for cat, total in category_total.most_common(8)
+        ]
+
+        existing_summary = (await db.execute(
+            select(GameReviewSummary).where(and_(
+                GameReviewSummary.game_id == game_id,
+                GameReviewSummary.summary_type == "unified",
+                GameReviewSummary.review_language.is_(None),
+                GameReviewSummary.is_current == True,
+            ))
+        )).scalar_one_or_none()
+
+        pid_to_code = {p.id: p.code for p in platforms}
+
+        def _serialize(r) -> dict:
+            return {
+                "id": r.id,
+                "platform_code": pid_to_code.get(r.platform_id, "unknown"),
+                "language_code": r.language_code or "ko",
+                "review_text_clean": r.review_text_clean or "",
+                "is_recommended": r.is_recommended,
+                "normalized_score_100": float(r.normalized_score_100) if r.normalized_score_100 is not None else None,
+                "helpful_count": r.helpful_count or 0,
+                "playtime_hours": float(r.playtime_hours) if r.playtime_hours is not None else None,
+                "review_categories": r.review_categories_json,
+            }
+
+        return {
+            "game_id": game_id,
+            "language_code": "ko",
+            "reviews": [_serialize(r) for r in new_reviews],
+            "steam_ratio": [steam_pos, steam_neg],
+            "metacritic_ratio": [meta_pos, meta_mix, meta_neg],
+            "score_anchors": {
+                "steam_recommend_ratio": steam_recommend_ratio,
+                "metacritic_critic_avg": metacritic_critic_avg,
+                "metacritic_user_avg":   metacritic_user_avg,
+            },
+            "category_frequency": top_categories,
+            "prior_summary_text": existing_summary.summary_text if existing_summary else None,
+            "source_stats": {
+                "total_reviews_in_db":    len(summary_reviews),
+                "new_count_since_last":   len(new_reviews),
+                "batch_from_review_id":   min(r.id for r in new_reviews),
+                "new_max_review_id":      max(r.id for r in new_reviews),
+                "covered_from_review_id": min(r.id for r in summary_reviews),
+                "covered_to_review_id":   max(r.id for r in summary_reviews),
+                "source_review_count":    len(summary_reviews),
+            },
+        }
+
+
+async def run_reduce_from_precomputed_map(
+    *,
+    game_id: int,
+    language_code: str,
+    grouped_summaries: dict,
+    representative_quotes: list,
+    score_anchors: dict,
+    category_frequency: list,
+    prior_summary_text: str | None,
+    playtime_buckets_dict: dict | None,
+    map_stats: dict | None,
+    source_stats: dict,
+) -> None:
+    """로컬에서 pre-compute된 map 결과를 받아 reduce → DB 저장."""
+    from ai_module.map_reduce.reduce_api import run_feature_reduce_stage
+    from ai_module.map_reduce.sampler import PlaytimeBuckets
+
+    logger.info("run_reduce_from_precomputed_map started: game_id=%s", game_id)
+
+    async with AsyncSessionLocal() as db:
+        job = None
+        try:
+            map_stats    = map_stats    or {}
+            source_stats = source_stats or {}
+
+            job = ReviewSummaryJob(
+                game_id=game_id,
+                status="started",
+                input_review_count=source_stats.get("source_review_count", 0),
+                from_review_id=source_stats.get("batch_from_review_id"),
+                to_review_id=source_stats.get("new_max_review_id"),
+            )
+            db.add(job)
+            await db.flush()
+
+            ai_result = await run_feature_reduce_stage(
+                api_key=os.getenv("GROQ_API_KEY", ""),
+                model_name=os.getenv("GROQ_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct"),
+                language_code=language_code,
+                grouped_summaries=grouped_summaries,
+                score_anchors=score_anchors,
+                category_frequency=category_frequency,
+                prior_summary_text=prior_summary_text,
+                representative_quotes=representative_quotes,
+            )
+
+            job.chunk_count          = map_stats.get("chunk_count", 0)
+            job.map_cache_hit        = map_stats.get("map_cache_hit", 0)
+            job.map_cache_miss       = map_stats.get("map_cache_miss", 0)
+            job.map_input_tokens     = map_stats.get("map_input_tokens", 0)
+            job.map_output_tokens    = map_stats.get("map_output_tokens", 0)
+            job.reduce_input_tokens  = getattr(ai_result, "input_tokens", 0)
+            job.reduce_output_tokens = getattr(ai_result, "output_tokens", 0)
+            failure_reasons = dict(map_stats.get("failure_reasons") or {})
+            reduce_usage = getattr(ai_result, "reduce_usage", None)
+            if reduce_usage:
+                failure_reasons["reduce_usage"] = reduce_usage
+            if failure_reasons:
+                job.failure_reasons_json = failure_reasons
+
+            steam_recommend_ratio = score_anchors.get("steam_recommend_ratio")
+            metacritic_critic_avg = score_anchors.get("metacritic_critic_avg")
+            metacritic_user_avg   = score_anchors.get("metacritic_user_avg")
+            total_reviews_in_db   = source_stats.get("total_reviews_in_db", 1)
+            new_count_since_last  = source_stats.get("new_count_since_last", 0)
+            source_review_count   = source_stats.get("source_review_count", 0)
+
+            coverage_ratio      = source_review_count / total_reviews_in_db if total_reviews_in_db else None
+            staleness_ratio     = new_count_since_last / total_reviews_in_db if total_reviews_in_db else None
+            sentiment_alignment = (
+                1 - abs(float(ai_result.sentiment_score) - steam_recommend_ratio) / 100
+                if ai_result.sentiment_score is not None and steam_recommend_ratio is not None
+                else None
+            )
+
+            cursor = (await db.execute(
+                select(GameSummaryCursor).where(and_(
+                    GameSummaryCursor.game_id == game_id,
+                    GameSummaryCursor.summary_type == "unified",
+                    GameSummaryCursor.language_code == "unified",
+                ))
+            )).scalar_one_or_none()
+
+            latest_version = (await db.execute(
+                select(func.coalesce(func.max(GameReviewSummary.summary_version), 0)).where(and_(
+                    GameReviewSummary.game_id == game_id,
+                    GameReviewSummary.summary_type == "unified",
+                    GameReviewSummary.review_language.is_(None),
+                ))
+            )).scalar_one()
+
+            cursor_version = cursor.last_summary_version if cursor else 0
+            new_version    = max(cursor_version, latest_version) + 1
+
+            existing = (await db.execute(
+                select(GameReviewSummary).where(and_(
+                    GameReviewSummary.game_id == game_id,
+                    GameReviewSummary.summary_type == "unified",
+                    GameReviewSummary.review_language.is_(None),
+                    GameReviewSummary.is_current == True,
+                ))
+            )).scalar_one_or_none()
+            if existing:
+                await db.delete(existing)
+                await db.flush()
+
+            platforms  = (await db.execute(select(Platform))).scalars().all()
+            steam_pid  = next((p.id for p in platforms if p.code == "steam"), None)
+            meta_pid   = next((p.id for p in platforms if p.code == "metacritic"), None)
+            all_reviews = (await db.execute(
+                select(ExternalReview).where(and_(
+                    ExternalReview.game_id == game_id,
+                    ExternalReview.is_deleted == False,
+                )).limit(500)
+            )).scalars().all()
+            # reduce가 인용한 review_id를 표시용 선별에 우선 포함 → 요약 근거와 정합성 확보
+            cited_ids = {
+                int(m)
+                for q in (representative_quotes or [])
+                for m in re.findall(r"review_id\s*=\s*(\d+)", str(q))
+            }
+            representative_reviews = _select_platform_representative_reviews(
+                all_reviews, steam_pid, meta_pid, prioritized_ids=cited_ids
+            )
+
+            new_summary = GameReviewSummary(
+                game_id=game_id,
+                summary_type="unified",
+                review_language=None,
+                job_id=job.id,
+                summary_version=new_version,
+                summary_text=None,
+                one_liner=_strip_grounding_anchor(ai_result.one_liner),
+                sentiment_overall=ai_result.sentiment_overall,
+                sentiment_score=ai_result.sentiment_score,
+                aspect_sentiment_json=ai_result.aspect_scores,
+                representative_reviews_json=representative_reviews,
+                pros_json=_strip_grounding_anchor_list(ai_result.pros),
+                cons_json=_strip_grounding_anchor_list(ai_result.cons),
+                keywords_json=_strip_grounding_anchor_list(ai_result.keywords),
+                steam_recommend_ratio=steam_recommend_ratio,
+                metacritic_critic_avg=metacritic_critic_avg,
+                metacritic_user_avg=metacritic_user_avg,
+                source_review_count=source_review_count,
+                covered_from_review_id=source_stats.get("covered_from_review_id"),
+                covered_to_review_id=source_stats.get("covered_to_review_id"),
+                sentiment_alignment=sentiment_alignment,
+                coverage_ratio=coverage_ratio,
+                staleness_ratio=staleness_ratio,
+                is_current=True,
+            )
+            db.add(new_summary)
+
+            buckets = None
+            if playtime_buckets_dict and playtime_buckets_dict.get("early_max") is not None and playtime_buckets_dict.get("mid_max") is not None:
+                buckets = PlaytimeBuckets(
+                    early_max=float(playtime_buckets_dict["early_max"]),
+                    mid_max=float(playtime_buckets_dict["mid_max"]),
+                )
+            await _upsert_playtime_analysis(db, game_id, ai_result, buckets)
+            await _upsert_critic_summary(db, game_id, ai_result)
+            await _upsert_user_summary(db, game_id, ai_result)
+
+            new_max_review_id = source_stats.get("new_max_review_id", 0)
+            if cursor:
+                cursor.last_summarized_review_id = new_max_review_id
+                cursor.last_summary_version      = new_version
+                cursor.updated_at                = datetime.utcnow()
+            else:
+                db.add(GameSummaryCursor(
+                    game_id=game_id,
+                    language_code="unified",
+                    summary_type="unified",
+                    last_summarized_review_id=new_max_review_id,
+                    last_summary_version=new_version,
+                ))
+
+            job.status   = "success"
+            job.ended_at = datetime.utcnow()
+            await db.commit()
+
+            logger.info("reduce pipeline finished: game_id=%s job_id=%s", game_id, job.id)
+
+            await invalidate_summary_cache(game_id, "unified")
+            await invalidate_playtime_cache(game_id)
+            await invalidate_critic_cache(game_id)
+            await invalidate_user_summary_cache(game_id)
+
+        except Exception as e:
+            await db.rollback()
+            if job:
+                job.status        = "failed"
+                job.error_message = str(e)
+                try:
+                    await db.commit()
+                except Exception:
+                    pass
+            logger.exception("reduce pipeline failed: game_id=%s error=%s", game_id, e)
+            raise

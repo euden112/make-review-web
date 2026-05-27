@@ -698,5 +698,12 @@
     "metacritic_slug": "john-carpenters-toxic-commando",
     "name": "John Carpenter's Toxic Commando",
     "id": 100
+  },
+  {
+    "steam_app_id": "271590",
+    "steam_slug": "grand-theft-auto-v",
+    "metacritic_slug": "grand-theft-auto-v",
+    "name": "Grand Theft Auto V",
+    "id": 101
   }
 ]

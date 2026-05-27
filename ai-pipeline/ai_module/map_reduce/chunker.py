@@ -15,8 +15,14 @@ class Chunk:
 # 1 토큰 ≈ 2.5 문자 (한·영 혼합 기준 보수적 추정)
 _CHARS_PER_TOKEN = 2.5
 
-# 환경변수 OLLAMA_NUM_CTX 가 설정되면 그 값에서 프롬프트 오버헤드(약 200토큰)와
-# 출력 예약(약 400토큰)을 제외한 만큼만 안전 입력 토큰으로 사용한다.
+# 청크 크기는 "추출 품질" 기준으로 정한다. 큰 청크 하나를 주면 로컬 모델이
+# 청크 내 리뷰를 빠짐없이 evidence로 추출하지 않고 일부만 요약해, evidence가
+# 빈약해지고 pros/cons가 부족해진다(검증: 5500자=1청크 → 게이트 미달,
+# ~1000자=다청크 → 게이트 통과). 따라서 기본 청크 크기는 추출 친화 목표값으로
+# 두고, OLLAMA_NUM_CTX는 입력 truncation을 막는 상한 안전장치로만 쓴다.
+_TARGET_CHUNK_CHARS = 1400
+
+
 def _resolve_max_chars(explicit: int | None) -> int:
     if explicit is not None:
         return explicit
@@ -25,12 +31,14 @@ def _resolve_max_chars(explicit: int | None) -> int:
         try:
             num_ctx = int(num_ctx_env)
             # JSON Map prompts include schema instructions plus deterministic candidates.
-            # Keep raw chunks smaller so small local models can return complete JSON.
+            # num_ctx 상한을 넘으면 입력이 잘리므로, 안전 입력 토큰을 천장으로 삼되
+            # 추출 친화 목표값을 넘지 않게 한다.
             safe_input_tokens = max(num_ctx - 1650, 320)
-            return int(safe_input_tokens * _CHARS_PER_TOKEN)
+            ceiling = int(safe_input_tokens * _CHARS_PER_TOKEN)
+            return min(_TARGET_CHUNK_CHARS, ceiling)
         except ValueError:
             pass
-    return 5500  # 기본값 (GPU + 큰 num_ctx 가정)
+    return _TARGET_CHUNK_CHARS
 
 
 def chunk_reviews_by_chars(
