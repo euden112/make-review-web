@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -311,6 +312,39 @@ def _has_playtime_bucket_coverage(
     return all(count >= min_per_bucket for count in counts.values())
 
 
+def _summary_review_target(default: int = 200) -> int:
+    raw = os.getenv("AI_SUMMARY_REVIEW_TARGET")
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return max(12, min(value, default))
+
+
+def _summary_chunk_overlap(default: int = 2) -> int:
+    raw = os.getenv("AI_SUMMARY_CHUNK_OVERLAP")
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return max(0, min(value, default))
+
+
+def _summary_min_bucket_coverage(default: int) -> int:
+    raw = os.getenv("AI_SUMMARY_MIN_BUCKET_COVERAGE")
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return max(0, min(value, default))
+
+
 
 async def run_hybrid_summary_pipeline(
     *,
@@ -345,11 +379,12 @@ async def run_hybrid_summary_pipeline(
     else:
         metacritic_bin_ratio = metacritic_ratio
 
+    review_target = _summary_review_target()
     selected = stratified_select_reviews(
         normalized_reviews,
         steam_ratio=steam_ratio,
         metacritic_bin_ratio=metacritic_bin_ratio,
-        total_target=200,
+        total_target=review_target,
     )
 
     # Sprint 4: 플레이타임 버킷 계산 — 전체 Steam 리뷰 기준으로 p33/p66 계산
@@ -358,7 +393,8 @@ async def run_hybrid_summary_pipeline(
 
     tagged = tag_reviews(selected, buckets)
     if buckets is not None:
-        tagged = _ensure_bucket_coverage(tagged, all_steam_reviews, buckets)
+        min_bucket_coverage = _summary_min_bucket_coverage(min(20, max(6, review_target // 6)))
+        tagged = _ensure_bucket_coverage(tagged, all_steam_reviews, buckets, min_per_bucket=min_bucket_coverage)
 
     chunks = chunk_reviews_by_chars(
         [
@@ -366,6 +402,7 @@ async def run_hybrid_summary_pipeline(
             for review in tagged
         ],
         max_chars=None,  # chunker가 OLLAMA_NUM_CTX 환경변수로 안전 한계 결정
+        overlap_reviews=_summary_chunk_overlap(),
     )
 
     map_func = map_runner or run_map_stage

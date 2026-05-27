@@ -87,8 +87,11 @@ services:
       - OLLAMA_BASE_URL=http://ollama:11434
       # Map 모델: 벤치마크 기반 qwen2.5:1.5b 채택 (plan-cpu-deployment §2)
       - LOCAL_MAP_MODEL=qwen2.5:1.5b
-      # CPU 배포: NUM_CTX=2048 → num_predict 400·chunker 안전 입력 자동 축소 (§3 조치#2)
-      - OLLAMA_NUM_CTX=2048
+      - AI_SUMMARY_REVIEW_TARGET=12
+      - AI_SUMMARY_CHUNK_OVERLAP=0
+      - AI_SUMMARY_MIN_BUCKET_COVERAGE=3
+      # CPU 배포: NUM_CTX=4096 기준으로 chunker 안전 입력을 자동 축소
+      - OLLAMA_NUM_CTX=4096
       - GROQ_API_KEY=${GROQ_API_KEY}
       - GROQ_MODEL=${GROQ_MODEL:-meta-llama/llama-4-scout-17b-16e-instruct}
       - PYTHONPATH=/workspace/backend:/workspace/ai-pipeline:/workspace/crawling/steam
@@ -119,9 +122,12 @@ services:
       - REDIS_PORT=6379
       - REDIS_DB=0
       - OLLAMA_BASE_URL=http://ollama:11434
-      # Map 모델·CPU 컨텍스트 (plan-cpu-deployment §2·§3, backend와 동일)
+      # Map 모델·CPU 컨텍스트: backend와 동일한 데모/스케줄러 설정
       - LOCAL_MAP_MODEL=qwen2.5:1.5b
-      - OLLAMA_NUM_CTX=2048
+      - AI_SUMMARY_REVIEW_TARGET=12
+      - AI_SUMMARY_CHUNK_OVERLAP=0
+      - AI_SUMMARY_MIN_BUCKET_COVERAGE=3
+      - OLLAMA_NUM_CTX=4096
       - GROQ_API_KEY=${GROQ_API_KEY}
       - GROQ_MODEL=${GROQ_MODEL:-meta-llama/llama-4-scout-17b-16e-instruct}
       - PYTHONPATH=/workspace/backend:/workspace/ai-pipeline:/workspace/crawling/steam

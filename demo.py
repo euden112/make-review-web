@@ -802,15 +802,29 @@ def trigger_summarize(game_id: int, force: bool = False) -> int:
     return r.status_code
 
 
-def poll_summary(game_id: int, timeout: int = 600) -> dict | None:
+def current_summary_version(game_id: int) -> int | None:
+    try:
+        r = httpx.get(f"{BACKEND_URL}/api/v1/games/{game_id}/summary", timeout=10)
+        if r.status_code == 200:
+            version = r.json().get("version")
+            return int(version) if version is not None else None
+    except Exception:
+        pass
+    return None
+
+
+def poll_summary(game_id: int, timeout: int = 600, min_version: int | None = None) -> dict | None:
     deadline = time.time() + timeout
     dots = 0
     while time.time() < deadline:
         try:
             r = httpx.get(f"{BACKEND_URL}/api/v1/games/{game_id}/summary", timeout=10)
             if r.status_code == 200:
-                print()
-                return r.json()
+                data = r.json()
+                version = data.get("version")
+                if min_version is None or (version is not None and int(version) > min_version):
+                    print()
+                    return data
         except Exception:
             pass
         elapsed = int(time.time() - (deadline - timeout))
@@ -1155,20 +1169,19 @@ def main():
         info(f"Reduce 단계: Groq API ({groq_model}) — 최종 구조화 요약")
         info("파이프라인: 통합 요약(unified) 생성")
         print()
-        for slug, gid in targets.items():
-            name = GAME_DISPLAY_NAMES.get(slug, slug)
-            code = trigger_summarize(gid, force=args.force)
-            ok(f"[{gid}]  {name}  →  HTTP {code}")
-
-        # ── STEP 9: 결과 대기 & 비교 출력 ─────────────────────────────────────
-        step(9, f"요약 결과 대기 (최대 {args.timeout}초 / 게임)")
+        # CPU Ollama 환경에서는 게임별 Map 작업을 병렬로 걸면 같은 모델 서버에서
+        # 긴 chunk 호출이 경합한다. 데모는 실제 완료 검증이 목적이므로 순차 처리한다.
+        step(9, f"요약 생성 및 결과 대기 (최대 {args.timeout}초 / 게임)")
         print(f"   {D}백엔드 로그에서 map/reduce 진행 상황을 확인할 수 있습니다:{RESET}")
         print(f"   {D}  docker compose logs -f backend{RESET}\n")
 
         for slug, gid in targets.items():
             name = GAME_DISPLAY_NAMES.get(slug, slug)
+            previous_version = current_summary_version(gid) if args.force else None
+            code = trigger_summarize(gid, force=args.force)
+            ok(f"[{gid}]  {name}  →  HTTP {code}")
             info(f"통합 요약 대기 중: {name}")
-            data = poll_summary(gid, timeout=args.timeout)
+            data = poll_summary(gid, timeout=args.timeout, min_version=previous_version)
             if data:
                 results[slug] = data
                 ok(f"통합 요약 완료: {name}")
@@ -1180,6 +1193,11 @@ def main():
                     info(f"언어권별 시각 아직 없음")
             else:
                 warn(f"타임아웃 ({args.timeout}초 초과): {name}")
+                if args.test:
+                    abort(
+                        f"{name} 요약 timeout. "
+                        "Map background job이 계속 실행 중일 수 있어 추가 게임 트리거를 중단합니다."
+                    )
 
     # ── STEP 10: 검증 ─────────────────────────────────────────────────────────
     if args.test:

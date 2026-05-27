@@ -1,0 +1,264 @@
+{
+  "positive": [
+    {
+      "name": "early_trial_reward",
+      "priority": 10,
+      "template": "초반 시행착오를 넘기면 재미가 커진다는 반응이 있습니다",
+      "any_terms": ["그러한 과정", "과정을 잘 겪"],
+      "genres": ["common"],
+      "aspects": ["difficulty", "progression"]
+    },
+    {
+      "name": "early_hours_fun",
+      "priority": 20,
+      "template": "초반 몇 시간만으로도 재미를 느꼈다는 반응이 있습니다",
+      "all_terms": ["4시간"],
+      "any_terms": ["재밌", "재미"],
+      "genres": ["common"],
+      "aspects": ["content"]
+    },
+    {
+      "name": "purchase_recommendation",
+      "priority": 30,
+      "template": "구매를 권할 만큼 재미있다는 반응이 있습니다",
+      "any_terms": ["사세", "다 사"],
+      "genres": ["common"],
+      "aspects": ["value"]
+    },
+    {
+      "name": "growth_loop",
+      "priority": 40,
+      "template": "반복 도전 속에서 플레이어가 성장한다는 반응이 있습니다",
+      "any_terms": ["성장하는 것은"],
+      "genres": ["common", "action_rpg", "roguelike"],
+      "aspects": ["progression", "difficulty"]
+    },
+    {
+      "name": "combat_freedom",
+      "priority": 50,
+      "template": "전투 스타일의 자유도가 높다는 반응이 있습니다",
+      "all_terms": ["전투 스타일", "자유도"],
+      "genres": ["action", "action_rpg", "rpg"],
+      "aspects": ["combat", "systems"]
+    },
+    {
+      "name": "memorable_masterpiece",
+      "priority": 60,
+      "template": "오래 기억할 만큼 강한 만족감을 줬다는 반응이 있습니다",
+      "any_terms": ["인생게임", "명작"],
+      "genres": ["common"],
+      "aspects": ["overall"]
+    },
+    {
+      "name": "genre_entry",
+      "priority": 70,
+      "template": "장르 입문작으로 접근하기 좋다는 반응이 있습니다",
+      "all_terms": ["입문", "좋"],
+      "genres": ["common"],
+      "aspects": ["accessibility", "difficulty"]
+    },
+    {
+      "name": "clear_after_learning",
+      "priority": 80,
+      "template": "플레이 흐름을 익힌 뒤 클리어까지 이어졌다는 반응이 있습니다",
+      "any_terms": ["클리어", "깰 수", "꺨 수"],
+      "genres": ["common"],
+      "aspects": ["progression", "difficulty"]
+    },
+    {
+      "name": "combat_learning",
+      "priority": 90,
+      "template": "전투 방식을 익힌 뒤 회피와 반격 흐름이 재미있어졌다는 반응이 있습니다",
+      "any_terms": ["전투방식", "전투 방식", "회피", "뒤잡"],
+      "genres": ["action", "action_rpg"],
+      "aspects": ["combat"]
+    },
+    {
+      "name": "low_spec_access",
+      "priority": 100,
+      "template": "낮은 사양에서도 실행 가능해 접근성이 좋다는 반응이 있습니다",
+      "any_terms": ["낮은 사양", "똥컴"],
+      "genres": ["common"],
+      "aspects": ["performance", "accessibility"]
+    },
+    {
+      "name": "friends_fun",
+      "priority": 110,
+      "template": "친구들과 함께 플레이하는 것이 재미있다는 반응이 있습니다",
+      "all_terms": ["친구"],
+      "any_terms": ["재밌", "재미"],
+      "genres": ["common", "multiplayer"],
+      "aspects": ["multiplayer"]
+    },
+    {
+      "name": "time_immersion",
+      "priority": 120,
+      "template": "시간이 빠르게 지나갈 만큼 몰입감이 있다는 반응이 있습니다",
+      "all_terms": ["시간"],
+      "any_terms": ["빨리", "가는줄"],
+      "genres": ["common"],
+      "aspects": ["immersion"]
+    },
+    {
+      "name": "optimization_realism",
+      "priority": 130,
+      "template": "최적화와 현실감이 좋다는 반응이 있습니다",
+      "any_terms": ["최적화", "현실성"],
+      "genres": ["common"],
+      "aspects": ["performance", "graphics"]
+    },
+    {
+      "name": "guide_map_tradeoff",
+      "priority": 140,
+      "template": "공략과 지도를 참고하면 탐험 만족감이 크다는 반응이 있습니다",
+      "all_terms": ["공략", "지도", "빼면"],
+      "genres": ["open_world", "adventure", "rpg"],
+      "aspects": ["exploration", "navigation"]
+    },
+    {
+      "name": "strong_satisfaction",
+      "priority": 150,
+      "template": "강한 만족감을 주는 게임으로 기억된다는 반응이 있습니다",
+      "any_terms": ["강한 만족감을 주는 게임"],
+      "genres": ["common"],
+      "aspects": ["overall"]
+    },
+    {
+      "name": "liked_despite_issues",
+      "priority": 160,
+      "template": "문제가 있어도 게임 자체는 좋다는 반응이 있습니다",
+      "all_terms": ["좋"],
+      "any_terms": ["난 니가 좋", "난 너가 좋", "난 네가 좋"],
+      "genres": ["common"],
+      "aspects": ["overall"]
+    },
+    {
+      "name": "direct_recommendation",
+      "priority": 170,
+      "template": "직접 해보라고 권할 만큼 재미있다는 반응이 있습니다",
+      "any_terms": ["해보세요", "해보세"],
+      "genres": ["common"],
+      "aspects": ["value"]
+    },
+    {
+      "name": "console_to_pc",
+      "priority": 180,
+      "template": "콘솔에서 재미있게 플레이한 뒤 PC판도 오래 즐겼다는 반응이 있습니다",
+      "all_terms": ["PC", "시간"],
+      "any_terms": ["플스", "콘솔"],
+      "genres": ["common"],
+      "aspects": ["platform"]
+    },
+    {
+      "name": "long_running_fun",
+      "priority": 190,
+      "template": "오래 지난 뒤에도 여전히 재미있다는 반응이 있습니다",
+      "any_terms": ["13년", "갓겜"],
+      "genres": ["common"],
+      "aspects": ["longevity"]
+    }
+  ],
+  "negative": [
+    {
+      "name": "casino_region_lock",
+      "priority": 10,
+      "template": "지역 제한으로 일부 콘텐츠를 이용하지 못한다는 불만이 있습니다",
+      "all_terms": ["카지노", "못해"],
+      "genres": ["common"],
+      "aspects": ["content", "region_lock"]
+    },
+    {
+      "name": "unfair_late_progression",
+      "priority": 20,
+      "template": "후반부 진행이 불합리하게 느껴져 중단했다는 반응이 있습니다",
+      "any_terms": ["접음", "불합리"],
+      "genres": ["common"],
+      "aspects": ["progression", "difficulty"]
+    },
+    {
+      "name": "loss_of_interest",
+      "priority": 30,
+      "template": "계속 참고 플레이하려 해도 다시 켜기 싫을 만큼 흥미가 떨어졌다는 불만이 있습니다",
+      "any_terms": ["재미없", "재미없는", "키기 싫", "하기 싫"],
+      "genres": ["common"],
+      "aspects": ["overall"]
+    },
+    {
+      "name": "sequel_wait_numbered_title",
+      "priority": 40,
+      "template": "후속작 PC 출시를 오래 기다려야 한다는 불만이 있습니다",
+      "any_terms": ["기다", "기달", "출시", "나올"],
+      "none_terms": ["강제종료", "데이터"],
+      "regex_patterns": ["[A-Za-z가-힣]{2,}\\s?[2-9]"],
+      "genres": ["common"],
+      "aspects": ["release", "platform"]
+    },
+    {
+      "name": "sequel_wait_generic",
+      "priority": 45,
+      "template": "후속작 PC 출시를 오래 기다려야 한다는 불만이 있습니다",
+      "any_terms": ["후속작", "차기작", "다음작"],
+      "none_terms": ["강제종료", "데이터"],
+      "regex_patterns": ["기다|기달|출시|나올"],
+      "genres": ["common"],
+      "aspects": ["release", "platform"]
+    },
+    {
+      "name": "npc_progression_block",
+      "priority": 50,
+      "template": "NPC 오류로 퀘스트 진행이 막힌다는 불만이 있습니다",
+      "all_terms": ["NPC"],
+      "any_terms": ["벽", "퀘스트", "진행"],
+      "genres": ["rpg", "open_world", "adventure"],
+      "aspects": ["bug", "progression"]
+    },
+    {
+      "name": "friendless_online",
+      "priority": 60,
+      "template": "친구 없이 진행하면 온라인 플레이가 불편하다는 반응이 있습니다",
+      "all_terms": ["친구", "불편"],
+      "genres": ["multiplayer"],
+      "aspects": ["multiplayer"]
+    },
+    {
+      "name": "crash_or_save_loss",
+      "priority": 70,
+      "template": "강제 종료와 로드 실패로 진행이 끊겼다는 불만이 있습니다",
+      "any_terms": ["강제종료", "로드", "데이터"],
+      "genres": ["common"],
+      "aspects": ["bug", "stability"]
+    },
+    {
+      "name": "navigation_fatigue",
+      "priority": 80,
+      "template": "길 찾기에 오래 걸려 피로감을 느꼈다는 반응이 있습니다",
+      "any_terms": ["길찾", "길 찾", "3시간"],
+      "genres": ["open_world", "adventure", "rpg"],
+      "aspects": ["navigation", "exploration"]
+    },
+    {
+      "name": "guide_free_frustration",
+      "priority": 90,
+      "template": "공략 없이 진행하면 길과 진행 장벽 때문에 크게 좌절했다는 반응이 있습니다",
+      "any_terms": ["키보드", "부술", "공략없이"],
+      "genres": ["common"],
+      "aspects": ["difficulty", "navigation"]
+    },
+    {
+      "name": "intentional_discomfort",
+      "priority": 100,
+      "template": "의도적인 불편함과 높은 진행 장벽이 부담스럽다는 반응이 있습니다",
+      "any_terms": ["불쾌함", "쉬운거"],
+      "genres": ["common"],
+      "aspects": ["difficulty", "accessibility"]
+    },
+    {
+      "name": "difficulty_burden",
+      "priority": 110,
+      "template": "진행 장벽 때문에 부담을 느꼈다는 반응이 있습니다",
+      "any_terms": ["어렵", "난이도", "진행 장벽", "고통", "힘들"],
+      "genres": ["common"],
+      "aspects": ["difficulty"]
+    }
+  ]
+}

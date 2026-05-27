@@ -5,7 +5,8 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import Any
+from pathlib import Path
+from typing import Any, Literal
 
 from groq import AsyncGroq
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -36,6 +37,14 @@ GROUNDING_TERMS = (
     "사운드",
     "BGM",
     "전투",
+    "출시",
+    "후속작",
+    "NPC",
+    "퀘스트",
+    "안티치트",
+    "카지노",
+    "최적화",
+    "스토리",
 )
 
 NEGATIVE_DETAIL_TERMS = (
@@ -58,6 +67,7 @@ NEGATIVE_DETAIL_TERMS = (
     "못해",
     "불만",
     "기다",
+    "기달",
     "언제",
     "출시",
     "호소",
@@ -118,6 +128,121 @@ ASPECT_LABELS = {
     "price_value": "가격",
     "bugs": "버그",
 }
+
+
+CandidateDecision = Literal["accept", "ambiguous", "reject"]
+
+
+@dataclass(frozen=True, slots=True)
+class SummaryRule:
+    name: str
+    priority: int
+    polarity: str
+    template: str
+    any_terms: tuple[str, ...] = ()
+    all_terms: tuple[str, ...] = ()
+    none_terms: tuple[str, ...] = ()
+    regex_patterns: tuple[str, ...] = ()
+    genres: tuple[str, ...] = ()
+    aspects: tuple[str, ...] = ()
+
+    def matches(self, text: str, *, active_genres: tuple[str, ...] = ()) -> bool:
+        if active_genres and self.genres and not set(active_genres).intersection(self.genres):
+            return False
+        haystack = text.lower()
+        if self.any_terms and not any(term.lower() in haystack for term in self.any_terms):
+            return False
+        if self.all_terms and not all(term.lower() in haystack for term in self.all_terms):
+            return False
+        if self.none_terms and any(term.lower() in haystack for term in self.none_terms):
+            return False
+        if self.regex_patterns and not any(re.search(pattern, text, flags=re.I) for pattern in self.regex_patterns):
+            return False
+        return True
+
+
+PUBLIC_LIST_REJECT_TERMS = (
+    "안됨",
+    "새끼",
+    "있음",
+    "게임임",
+    "진짜",
+    "어요",
+    "더라구요",
+    "가득함",
+    "없음",
+    "했어염",
+    "고염",
+    "사세염",
+)
+
+
+CANDIDATE_REJECT_TERMS = (
+    "살빠",
+    "기달",
+    "기다릴듯",
+    "기다릴 듯",
+    "근대 이거",
+    "근데 이거",
+    "했어염",
+    "고염",
+    "사세염",
+)
+
+
+SUMMARY_RULES_PATH = Path(__file__).with_name("rules") / "summary_rules.json"
+
+
+def _tuple_field(raw: Any, *, field_name: str, rule_name: str) -> tuple[str, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
+        raise ValueError(f"summary rule {rule_name!r} has invalid {field_name}")
+    return tuple(item for item in raw if item)
+
+
+def _load_summary_rules() -> dict[str, tuple[SummaryRule, ...]]:
+    try:
+        raw = json.loads(SUMMARY_RULES_PATH.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise RuntimeError(f"failed to read summary rules: {SUMMARY_RULES_PATH}") from exc
+    if not isinstance(raw, dict):
+        raise ValueError("summary rules root must be an object")
+
+    loaded: dict[str, tuple[SummaryRule, ...]] = {}
+    for polarity in ("positive", "negative"):
+        entries = raw.get(polarity, [])
+        if not isinstance(entries, list):
+            raise ValueError(f"summary rules {polarity!r} must be a list")
+        rules: list[SummaryRule] = []
+        for entry in entries:
+            if not isinstance(entry, dict):
+                raise ValueError(f"summary rule in {polarity!r} must be an object")
+            name = str(entry.get("name") or "").strip()
+            template = str(entry.get("template") or "").strip()
+            if not name or not template:
+                raise ValueError(f"summary rule in {polarity!r} requires name and template")
+            rules.append(
+                SummaryRule(
+                    name=name,
+                    priority=int(entry.get("priority", 1000)),
+                    polarity=polarity,
+                    template=template,
+                    any_terms=_tuple_field(entry.get("any_terms"), field_name="any_terms", rule_name=name),
+                    all_terms=_tuple_field(entry.get("all_terms"), field_name="all_terms", rule_name=name),
+                    none_terms=_tuple_field(entry.get("none_terms"), field_name="none_terms", rule_name=name),
+                    regex_patterns=_tuple_field(entry.get("regex_patterns"), field_name="regex_patterns", rule_name=name),
+                    genres=_tuple_field(entry.get("genres"), field_name="genres", rule_name=name),
+                    aspects=_tuple_field(entry.get("aspects"), field_name="aspects", rule_name=name),
+                )
+            )
+        loaded[polarity] = tuple(sorted(rules, key=lambda rule: rule.priority))
+    return loaded
+
+
+SUMMARY_RULES = _load_summary_rules()
+POSITIVE_SUMMARY_RULES = SUMMARY_RULES["positive"]
+NEGATIVE_SUMMARY_RULES = SUMMARY_RULES["negative"]
 
 
 @dataclass(slots=True)
@@ -531,6 +656,12 @@ def _sanitize_public_text(text: str) -> str:
         "정2병": "비매너",
         "ㅅㅂ": "",
         "씨발": "",
+        "갓겜임": "강한 만족감을 주는 게임임",
+        "갓겜": "강한 만족감을 주는 게임",
+        "끔찎": "끔찍",
+        "ㅐ미": "재미",
+        "꺨": "깰",
+        "깰을": "깰",
         "난이도": "진행 장벽",
         "다양한 의견이 있지만, ": "",
         "다양한 의견": "상반된 반응",
@@ -559,6 +690,8 @@ def _sanitize_public_text(text: str) -> str:
         "review_id 미제공": "근거 ID 없음",
         "review_id=미제공": "근거 ID 없음",
         "대표적인 따옴문": "근거 ID 없음",
+        "한 리뷰는는": "한 리뷰는",
+        "사용자들에게": "리뷰에서",
     }
     for src, dst in replacements.items():
         sanitized = sanitized.replace(src, dst)
@@ -608,6 +741,9 @@ def _is_vague_public_sentence(text: str) -> bool:
             "유저들은",
             "일부 리뷰어",
             "일부 플레이어",
+            "사용자들에게",
+            "다양한 활동",
+            "게임의 멀티플레이 기능",
             "의 플레이어들",
             "긍정적인 평가",
             "부정적인 평가",
@@ -667,6 +803,33 @@ def _sanitize_grounded_text(text: Any, evidence_index: dict[int, str] | None = N
     return " ".join(kept) if kept else ""
 
 
+def _normalize_public_sentence_anchor(text: str) -> str:
+    normalized = " ".join(str(text or "").split()).strip()
+    if not normalized:
+        return ""
+
+    prefix = re.match(r"^\(?\s*review_id\s*=\s*(\d+)\s*\)?\s*[:：,-]?\s*(.+)$", normalized, flags=re.I)
+    if prefix:
+        review_id, body = prefix.group(1), prefix.group(2).strip()
+        body = re.sub(r"\s*\(?\s*review_id\s*=\s*\d+\s*\)?\s*\.?$", "", body, flags=re.I).strip()
+        normalized = f"{body} (review_id={review_id})"
+
+    mid = re.match(r"^(.+?)\s*\(?\s*review_id\s*=\s*(\d+)\s*\)?\s+(.+)$", normalized, flags=re.I)
+    if mid:
+        lead, review_id, tail = mid.group(1).strip(), mid.group(2), mid.group(3).strip()
+        tail = re.sub(r"\s*\(?\s*review_id\s*=\s*\d+\s*\)?\s*\.?$", "", tail, flags=re.I).strip()
+        body = tail if len(tail) >= 16 else f"{lead} {tail}".strip()
+        normalized = f"{body} (review_id={review_id})"
+
+    normalized = re.sub(r"\s*\.\s*\(review_id=", " (review_id=", normalized)
+    normalized = normalized.rstrip(" .")
+    return f"{normalized}."
+
+
+def _review_id_count(text: str) -> int:
+    return len(re.findall(r"review_id\s*=\s*\d+", str(text or "")))
+
+
 def _fallback_items_from_evidence(
     evidence_items: list[dict[str, Any]],
     *,
@@ -700,10 +863,16 @@ def _fallback_items_from_evidence(
 def _sanitize_public_list(values: Any, evidence_index: dict[int, str] | None = None) -> list[str]:
     result: list[str] = []
     for item in _to_string_list(values):
-        sanitized = _sanitize_grounded_text(item, evidence_index)
+        sanitized = _normalize_public_sentence_anchor(_sanitize_grounded_text(item, evidence_index))
         if len(sanitized) < 35 or not re.search(r"review_id\s*=\s*\d+", sanitized):
             continue
+        if _review_id_count(sanitized) != 1:
+            continue
         if len(sanitized) > 180:
+            continue
+        if any(term in sanitized for term in PUBLIC_LIST_REJECT_TERMS):
+            continue
+        if _is_low_quality_detail(sanitized):
             continue
         if re.search(r"([가-힣A-Za-z])\1{5,}", sanitized):
             continue
@@ -740,7 +909,7 @@ def _positive_clause(detail: str) -> str:
     cleaned = _sanitize_public_text(detail)
     clauses = [
         part.strip(" .'\"")
-        for part in re.split(r"하지만|그러나|그대신|그 대신|근데|지만|[,.;]", cleaned)
+        for part in re.split(r"하지만|그러나|그대신|그 대신|근데|근대|지만|[,.;]", cleaned)
         if part.strip(" .'\"")
     ]
     snippets = re.findall(r"[^.!?。]{0,28}(?:재밌|재미|좋|추천|가능|잘되어|현실성|즐|굉장|명작|인생게임|입문|클리어|자유도)[^.!?。]{0,36}", cleaned)
@@ -759,6 +928,8 @@ def _is_low_quality_detail(detail: str) -> bool:
     normalized = " ".join(str(detail or "").split())
     if len(normalized) < 8:
         return True
+    if any(term in normalized for term in CANDIDATE_REJECT_TERMS):
+        return True
     if "이 앞" in normalized or "있으라" in normalized or "매우매우" in normalized:
         return True
     if "던가" in normalized or "굳이" in normalized or "열받" in normalized:
@@ -772,6 +943,38 @@ def _is_low_quality_detail(detail: str) -> bool:
     return False
 
 
+def _candidate_quality_decision(detail: str) -> CandidateDecision:
+    normalized = " ".join(str(detail or "").split())
+    if _is_low_quality_detail(normalized):
+        return "reject"
+    if len(normalized) < 18:
+        return "ambiguous"
+    has_grounding = any(term.lower() in normalized.lower() for term in GROUNDING_TERMS)
+    has_sentiment = any(term in normalized for term in POSITIVE_DETAIL_TERMS + NEGATIVE_DETAIL_TERMS)
+    if has_grounding and has_sentiment:
+        return "accept"
+    return "ambiguous"
+
+
+def _classify_ambiguous_candidate(detail: str, *, polarity: str) -> bool:
+    """Cheap local classifier hook; only ambiguous candidates reach here.
+
+    A remote LLM can be plugged in later, but the default path stays deterministic
+    to avoid extra tokens and cost during normal reduce execution.
+    """
+    if polarity == "positive":
+        return any(term in detail for term in POSITIVE_DETAIL_TERMS) and not _has_negative_detail(detail)
+    return _has_negative_detail(detail)
+
+
+def _apply_summary_rules(detail: str, *, polarity: str) -> str:
+    rules = POSITIVE_SUMMARY_RULES if polarity == "positive" else NEGATIVE_SUMMARY_RULES
+    for rule in rules:
+        if rule.matches(detail):
+            return rule.template
+    return ""
+
+
 def _has_negative_detail(detail: str) -> bool:
     if "스트레스" in detail and "풀" in detail:
         detail = detail.replace("스트레스", "")
@@ -782,71 +985,25 @@ def _has_negative_detail(detail: str) -> bool:
 def _review_based_sentence(detail: str, *, polarity: str) -> str:
     raw_text = _sanitize_public_text(detail)
     text = _compact_detail_for_sentence(detail)
-    if polarity == "positive":
-        if _is_low_quality_detail(text):
+    decision = _candidate_quality_decision(text)
+    if decision == "reject":
+        rule_sentence = _apply_summary_rules(raw_text, polarity=polarity)
+        return rule_sentence
+    if decision == "ambiguous" and not _classify_ambiguous_candidate(raw_text, polarity=polarity):
+        rule_sentence = _apply_summary_rules(raw_text, polarity=polarity)
+        if not rule_sentence:
             return ""
-        if "그러한 과정" in raw_text or "과정을 잘 겪" in raw_text:
-            return "초반 시행착오를 넘기면 재미가 커진다는 반응이 있습니다"
-        if "4시간" in raw_text and "재밌" in raw_text:
-            return "초반 몇 시간만으로도 재미를 느꼈다는 반응이 있습니다"
-        if "사세" in raw_text or "다 사" in raw_text:
-            return "구매를 권할 만큼 재미있다는 반응이 있습니다"
-        if "성장하는 것은" in raw_text:
-            return "반복 도전 속에서 플레이어가 성장한다는 반응이 있습니다"
-        if "전투 스타일" in raw_text and "자유도" in raw_text:
-            return "전투 스타일의 자유도가 높다는 반응이 있습니다"
-        if "인생게임" in raw_text or "명작" in raw_text:
-            return "오래 기억할 만큼 강한 만족감을 줬다는 반응이 있습니다"
-        if "소울 입문" in raw_text or ("입문" in raw_text and "좋" in raw_text):
-            return "소울류 입문작으로 접근하기 좋다는 반응이 있습니다"
-        if "클리어" in raw_text or "깰 수" in raw_text or "꺨 수" in raw_text:
-            return "전투 흐름을 익힌 뒤 클리어까지 이어졌다는 반응이 있습니다"
-        if "전투방식" in raw_text or "전투 방식" in raw_text or "회피" in raw_text or "뒤잡" in raw_text:
-            return "전투 방식을 익힌 뒤 회피와 반격 흐름이 재미있어졌다는 반응이 있습니다"
-        if "낮은 사양" in raw_text or "똥컴" in raw_text:
-            return "낮은 사양에서도 실행 가능해 접근성이 좋다는 반응이 있습니다"
-        if "시간" in raw_text and ("빨리" in raw_text or "가는줄" in raw_text):
-            return "시간이 빠르게 지나갈 만큼 몰입감이 있다는 반응이 있습니다"
-        if "최적화" in raw_text or "현실성" in raw_text:
-            return "최적화와 현실감이 좋다는 반응이 있습니다"
-        if ("난 니가 좋" in raw_text or "난 너가 좋" in raw_text or "난 네가 좋" in raw_text) and "좋" in raw_text:
-            return "문제가 있어도 게임 자체는 좋다는 반응이 있습니다"
-        if "해보세요" in raw_text or "해보세" in raw_text:
-            return "직접 해보라고 권할 만큼 재미있다는 반응이 있습니다"
-        if ("플스" in raw_text or "콘솔" in raw_text) and "PC" in raw_text and "시간" in raw_text:
-            return "콘솔에서 재미있게 플레이한 뒤 PC판도 오래 즐겼다는 반응이 있습니다"
-        if "13년" in raw_text or "갓겜" in raw_text:
-            return "오래 지난 뒤에도 여전히 재미있다는 반응이 있습니다"
+
+    rule_sentence = _apply_summary_rules(raw_text, polarity=polarity)
+    if rule_sentence:
+        return rule_sentence
+
+    if polarity == "positive":
         if "재밌" in text or "재미" in text:
             return f"{text}는 반응이 있습니다"
         if "좋" in text or "추천" in text:
             return f"{text}는 긍정 반응이 있습니다"
         return f"{text}는 장점으로 언급됐습니다"
-
-    if "카지노" in raw_text and "못해" in raw_text:
-        return "지역 제한으로 카지노 콘텐츠를 이용하지 못한다는 불만이 있습니다"
-    if "접음" in raw_text or "불합리" in raw_text:
-        return "후반부 진행이 불합리하게 느껴져 중단했다는 반응이 있습니다"
-    if "재미없" in raw_text or "재미없는" in raw_text or "키기 싫" in raw_text or "하기 싫" in raw_text:
-        return "계속 참고 플레이하려 해도 다시 켜기 싫을 만큼 흥미가 떨어졌다는 불만이 있습니다"
-    if _is_low_quality_detail(text):
-        return ""
-    if "GTA6" in raw_text or "PC로" in raw_text or "출시" in raw_text:
-        return "후속작 PC 출시를 오래 기다려야 한다는 불만이 있습니다"
-    if "NPC" in raw_text and ("벽" in raw_text or "퀘스트" in raw_text or "진행" in raw_text):
-        return "NPC 오류로 퀘스트 진행이 막힌다는 불만이 있습니다"
-    if "친구" in raw_text and "불편" in raw_text:
-        return "친구 없이 진행하면 온라인 플레이가 불편하다는 반응이 있습니다"
-    if "강제종료" in raw_text or "로드" in raw_text or "데이터" in raw_text:
-        return "강제 종료와 로드 실패로 진행이 끊겼다는 불만이 있습니다"
-    if "길찾" in raw_text or "길 찾" in raw_text or "3시간" in raw_text:
-        return "길 찾기에 오래 걸려 피로감을 느꼈다는 반응이 있습니다"
-    if "키보드" in raw_text or "부술" in raw_text or "공략없이" in raw_text:
-        return "공략 없이 진행하면 길과 진행 장벽 때문에 크게 좌절했다는 반응이 있습니다"
-    if "불쾌함" in raw_text or "쉬운거" in raw_text:
-        return "의도적인 불편함과 높은 진행 장벽이 부담스럽다는 반응이 있습니다"
-    if "어렵" in raw_text or "난이도" in raw_text or "진행 장벽" in raw_text or "고통" in raw_text or "힘들" in raw_text:
-        return "진행 장벽 때문에 부담을 느꼈다는 반응이 있습니다"
     return ""
 
 
@@ -1005,9 +1162,42 @@ def _fallback_natural_items_from_evidence(
     return result
 
 
+def _fallback_aspect_scores_from_evidence(
+    evidence_items: list[dict[str, Any]],
+    existing: Any,
+) -> dict[str, Any]:
+    if isinstance(existing, dict) and existing:
+        return existing
+
+    counts: dict[str, dict[str, int]] = {}
+    for item in evidence_items:
+        aspect = str(item.get("aspect") or "").strip().lower()
+        if aspect not in ASPECT_LABELS:
+            continue
+        polarity = str(item.get("polarity") or "").strip().lower()
+        bucket = counts.setdefault(aspect, {"positive": 0, "mixed": 0, "negative": 0})
+        if polarity in bucket:
+            bucket[polarity] += 1
+
+    result: dict[str, Any] = {}
+    for aspect, bucket in counts.items():
+        total = sum(bucket.values())
+        if total <= 0:
+            continue
+        score = 5.0 + (bucket["positive"] * 1.2) - (bucket["negative"] * 1.4) + (bucket["mixed"] * 0.1)
+        score = round(max(2.0, min(9.0, score)), 1)
+        result[aspect] = {
+            "label": ASPECT_LABELS.get(aspect, "리뷰"),
+            "score": score,
+        }
+    return result
+
+
 def _fallback_one_liner_from_evidence(evidence_items: list[dict[str, Any]]) -> str:
     def one_liner_rank(item: dict[str, Any]) -> int:
         detail = _sanitize_public_text(_public_detail_for_sentence(item))
+        if _is_low_quality_detail(detail):
+            return 9
         if str(item.get("polarity")) == "positive" and not _has_negative_detail(detail):
             return 0
         if str(item.get("polarity")) == "mixed" and any(term in detail for term in POSITIVE_DETAIL_TERMS):
@@ -1023,6 +1213,8 @@ def _fallback_one_liner_from_evidence(evidence_items: list[dict[str, Any]]) -> s
         except (TypeError, ValueError):
             continue
         detail = _sanitize_public_text(_public_detail_for_sentence(item))
+        if _is_low_quality_detail(detail):
+            continue
         raw_polarity = str(item.get("polarity"))
         has_negative_detail = _has_negative_detail(detail)
         has_positive_detail = any(term in detail for term in POSITIVE_DETAIL_TERMS)
@@ -1265,6 +1457,14 @@ async def run_feature_reduce_stage(
         final_cons = _fallback_natural_items_from_evidence(final_evidence_items, polarities=("negative",), existing=final_cons, limit=4)
         if len(final_cons) < 2:
             final_cons = _fallback_natural_items_from_evidence(final_evidence_items, polarities=("mixed",), existing=final_cons, limit=4)
+        if len(final_cons) < 2:
+            final_cons = _fallback_natural_items_from_evidence(
+                final_evidence_items,
+                polarities=("positive",),
+                existing=final_cons,
+                limit=4,
+                sentence_polarity="negative",
+            )
         one_liner = _fallback_one_liner_from_evidence(final_evidence_items)
         if not one_liner:
             one_liner = _sanitize_grounded_text(final_data.get("one_liner", ""), final_evidence_index)
@@ -1281,10 +1481,11 @@ async def run_feature_reduce_stage(
                 cons=final_cons,
                 keywords=_sanitize_keyword_list(final_data.get("keywords", [])),
             )
+        aspect_scores = _fallback_aspect_scores_from_evidence(final_evidence_items, final_data.get("aspect_scores", {}))
 
         return FinalSummary(
             one_liner=one_liner,
-            aspect_scores=final_data.get("aspect_scores", {}) if isinstance(final_data.get("aspect_scores"), dict) else {},
+            aspect_scores=aspect_scores,
             full_text="",
             sentiment_overall=_normalize_sentiment_overall(final_data.get("sentiment_overall")),
             sentiment_score=_normalize_sentiment_score(final_data.get("sentiment_score")),

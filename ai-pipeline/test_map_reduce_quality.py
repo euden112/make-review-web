@@ -22,6 +22,10 @@ from ai_module.map_reduce.map_schema import (
 )
 from ai_module.map_reduce.reduce_api import (
     FinalSummary,
+    SUMMARY_RULES,
+    SUMMARY_RULES_PATH,
+    _apply_summary_rules,
+    _candidate_quality_decision,
     _evidence_subset,
     _fallback_one_liner_from_evidence,
     _fallback_natural_items_from_evidence,
@@ -437,6 +441,80 @@ def test_sanitize_public_list_drops_misaligned_anchor_and_fallback_fills() -> No
     assert not any("리뷰에서는 '" in item for item in filled)
 
 
+def test_sanitize_public_list_moves_prefix_anchor_to_suffix() -> None:
+    sanitized = _sanitize_public_list(
+        ["(review_id=135) 게임이 오래되었지만 여전히 재미있다고 평가했습니다."],
+        {135: "게임이 오래되었지만 여전히 재미있다고 평가했습니다"},
+    )
+
+    assert sanitized == ["게임이 오래되었지만 여전히 재미있다고 평가했습니다 (review_id=135)."]
+
+
+def test_sanitize_public_list_moves_mid_anchor_to_suffix() -> None:
+    sanitized = _sanitize_public_list(
+        ["게임의 콘텐츠가 풍부하다 (review_id=101) 공략을 좀 찾아보고 지도를 봐야 하는 점을 빼면 만족감이 크다."],
+        {101: "공략을 좀 찾아보고 지도를 봐야 하는 점을 빼면 만족감이 크다"},
+    )
+
+    assert sanitized == ["공략을 좀 찾아보고 지도를 봐야 하는 점을 빼면 만족감이 크다 (review_id=101)."]
+
+
+def test_sanitize_public_list_fixes_korean_particle_after_clear() -> None:
+    sanitized = _sanitize_public_list(
+        ["게임의 진행 장벽이 쉽다 (review_id=55) 빌드가 갖춰지면 시원시원하게 깰을 수 있다."],
+        {55: "빌드가 갖춰지면 시원시원하게 깰 수 있다"},
+    )
+
+    assert sanitized == ["빌드가 갖춰지면 시원시원하게 깰 수 있다 (review_id=55)."]
+
+
+def test_sanitize_public_list_drops_raw_slang_items() -> None:
+    sanitized = _sanitize_public_list(
+        [
+            "안티치트 문제가 있지만 비매너 새끼들 많아도 게임은 좋다 (review_id=135).",
+            "재미있음 근대 이거 살빠에 그타6 나올때 까지 기달릴듯 (review_id=181).",
+            "친구들이랑 같이 하면 진짜 재밌어요! (review_id=85).",
+        ],
+        {
+            135: "안티치트 문제가 있지만 게임은 좋다",
+            181: "재미있음 근대 이거 살빠에 그타6 나올때 까지 기달릴듯",
+            85: "친구들이랑 같이 하면 진짜 재밌어요",
+        },
+    )
+
+    assert sanitized == []
+
+
+def test_sanitize_public_list_drops_cross_game_grounding_term() -> None:
+    sanitized = _sanitize_public_list(
+        ["후속작 PC 출시를 오래 기다려야 한다는 불만이 있습니다 (review_id=76)."],
+        {76: "PC 버전에서 강제종료 오류가 발생해 데이터를 삭제하고 다시 시작했다"},
+    )
+
+    assert sanitized == []
+
+
+def test_negative_pc_release_word_does_not_become_sequel_wait() -> None:
+    sentence = _review_based_sentence(
+        "PC판에서 갑자기 후반부 핵심 요소 컷신이 나오더니 강제종료가 되었다",
+        polarity="negative",
+    )
+
+    assert sentence == "강제 종료와 로드 실패로 진행이 끊겼다는 불만이 있습니다"
+
+
+def test_sanitize_public_list_drops_multi_anchor_short_claim() -> None:
+    sanitized = _sanitize_public_list(
+        ["길 찾는 것이 어려움 (review_id=55, review_id=85)"],
+        {
+            55: "소울류 입문작으로 접근하기 좋지만 길 찾는 것이 어려움",
+            85: "친구들과 재미있지만 길 찾는 것이 어려움",
+        },
+    )
+
+    assert sanitized == []
+
+
 def test_mixed_evidence_can_fill_cons_when_negative_terms_are_sparse() -> None:
     filled = _fallback_natural_items_from_evidence(
         [
@@ -714,7 +792,7 @@ def test_review_based_sentence_normalizes_positive_mixed_details() -> None:
     )
     assert (
         _review_based_sentence("소울 입문으로 제일 좋은 소울류게임인듯", polarity="positive")
-        == "소울류 입문작으로 접근하기 좋다는 반응이 있습니다"
+        == "장르 입문작으로 접근하기 좋다는 반응이 있습니다"
     )
     assert (
         _review_based_sentence("그래도 난 니가 좋다", polarity="positive")
@@ -759,6 +837,42 @@ def test_fallback_one_liner_skips_positive_item_with_negative_detail() -> None:
 
     assert "review_id=29" not in one_liner
     assert "오래 기억할 만큼 강한 만족감" in one_liner
+
+
+def test_fallback_one_liner_skips_wait_for_next_game_clause() -> None:
+    one_liner = _fallback_one_liner_from_evidence(
+        [
+            {
+                "review_id": 181,
+                "polarity": "mixed",
+                "public_detail": "재미있음 근대 이거 살빠에 그타6 나올때 까지 기달릴듯",
+            },
+            {
+                "review_id": 135,
+                "polarity": "positive",
+                "public_detail": "게임이 오래되었지만 여전히 재미있다고 평가했습니다",
+            },
+        ]
+    )
+
+    assert "review_id=181" not in one_liner
+    assert "review_id=135" in one_liner
+
+
+def test_fallback_one_liner_normalizes_gotg_slang() -> None:
+    one_liner = _fallback_one_liner_from_evidence(
+        [
+            {
+                "review_id": 101,
+                "polarity": "positive",
+                "public_detail": "그냥 갓겜임 공략 좀 찾아보고 지도 좀 찾아봐야되는거 빼면 갓겜임",
+            }
+        ]
+    )
+
+    assert "갓겜" not in one_liner
+    assert "는 장점으로 언급됐습니다" not in one_liner
+    assert "공략과 지도를 참고하면 탐험 만족감" in one_liner
 
 
 def test_positive_clause_rejects_rhetorical_complaints_for_pros() -> None:
@@ -827,6 +941,44 @@ def test_unknown_negative_sentence_does_not_emit_raw_template() -> None:
 
     assert sentence == ""
     assert "주의할 지점" not in sentence
+
+
+def test_candidate_quality_decision_bulk_filters_clear_cases() -> None:
+    assert _candidate_quality_decision("전투 방식이 재미있고 회피와 반격 흐름이 좋다") == "accept"
+    assert _candidate_quality_decision("분위기는 좋다는 짧은 평가") == "ambiguous"
+    assert _candidate_quality_decision("재미있음 근대 이거 살빠에 그타6 나올때 까지 기달릴듯") == "reject"
+
+
+def test_summary_rules_apply_priority_before_generic_fallback() -> None:
+    sentence = _apply_summary_rules("공략과 지도를 참고하면 좋은데 그걸 빼면 탐험 만족감이 크다", polarity="positive")
+
+    assert sentence == "공략과 지도를 참고하면 탐험 만족감이 크다는 반응이 있습니다"
+
+
+def test_summary_rules_are_loaded_from_data_file() -> None:
+    raw_rules = json.loads(SUMMARY_RULES_PATH.read_text(encoding="utf-8"))
+
+    assert raw_rules["positive"]
+    assert raw_rules["negative"]
+    assert SUMMARY_RULES["positive"][0].priority <= SUMMARY_RULES["positive"][-1].priority
+    assert all(rule.genres and rule.aspects for rules in SUMMARY_RULES.values() for rule in rules)
+
+
+def test_summary_rules_avoid_specific_game_name_conditions() -> None:
+    raw_rules = json.loads(SUMMARY_RULES_PATH.read_text(encoding="utf-8"))
+    serialized = json.dumps(raw_rules, ensure_ascii=False)
+
+    assert "GTA6" not in serialized
+    assert "그타6" not in serialized
+
+
+def test_rejected_candidate_can_still_be_recovered_by_ordered_rule() -> None:
+    sentence = _review_based_sentence(
+        "재미있음 근대 이거 살빠에 그타6 나올때 까지 기달릴듯",
+        polarity="negative",
+    )
+
+    assert sentence == "후속작 PC 출시를 오래 기다려야 한다는 불만이 있습니다"
 
 
 def test_fallback_user_summary_is_evidence_sentences() -> None:

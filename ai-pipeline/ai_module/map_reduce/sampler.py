@@ -345,4 +345,38 @@ def stratified_select_reviews(
         )
         selected.extend(fallback[: total_target - len(selected)])
 
+    min_counter_evidence = min(3, max(2, total_target // 8))
+
+    def _is_counter_evidence(row: ReviewRow) -> bool:
+        if row.platform_code == STEAM_PLATFORM_CODE:
+            return row.is_recommended is False
+        if row.platform_code == METACRITIC_PLATFORM_CODE:
+            score = row.normalized_score_100
+            return score is not None and score < 75
+        return False
+
+    selected_ids = {row.id for row in selected}
+    selected_counter = [row for row in selected if _is_counter_evidence(row)]
+    if len(selected_counter) < min_counter_evidence:
+        counter_candidates = sorted(
+            [
+                row for row in filtered_rows
+                if row.id not in selected_ids and _is_counter_evidence(row)
+            ],
+            key=quality_score,
+            reverse=True,
+        )
+        replaceable = sorted(
+            [
+                (idx, row) for idx, row in enumerate(selected)
+                if not _is_counter_evidence(row)
+            ],
+            key=lambda item: quality_score(item[1]),
+        )
+        needed = min_counter_evidence - len(selected_counter)
+        for candidate, (idx, _) in zip(counter_candidates[:needed], replaceable[:needed]):
+            selected_ids.discard(selected[idx].id)
+            selected[idx] = candidate
+            selected_ids.add(candidate.id)
+
     return selected[:total_target]
