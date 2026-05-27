@@ -955,6 +955,48 @@ def test_summary_rules_apply_priority_before_generic_fallback() -> None:
     assert sentence == "공략과 지도를 참고하면 탐험 만족감이 크다는 반응이 있습니다"
 
 
+def test_ambiguous_positive_without_rule_is_not_promoted_to_public_sentence() -> None:
+    sentence = _review_based_sentence(
+        "미야자키의 아버지는 채찍을 어엇박으로 휘두른다는 전설이 있다 난 이 이야기를 좋아한다",
+        polarity="positive",
+    )
+
+    assert sentence == ""
+
+
+def test_open_world_story_freedom_uses_general_rule() -> None:
+    sentence = _review_based_sentence(
+        "몇 년이 지나도 여전히 재밌는 오픈월드 게임 스토리도 좋고 자유도도 높아서 할 게 끝이 없음",
+        polarity="positive",
+    )
+
+    assert sentence == "오픈월드의 자유도와 스토리를 오래 즐길 수 있다는 반응이 있습니다"
+
+
+def test_build_tool_variety_uses_general_rule_instead_of_raw_grammar() -> None:
+    sentence = _review_based_sentence(
+        "여러 빌드랑 여러 영체를 다 써보면서 깨는게 제일 재밌음",
+        polarity="positive",
+    )
+
+    assert sentence == "다양한 빌드와 보조 요소를 활용해 공략하는 재미가 있다는 반응이 있습니다"
+    assert "재밌음는" not in sentence
+
+
+def test_crash_rule_requires_failure_context_not_positive_quit_context() -> None:
+    positive_context = _review_based_sentence(
+        "머리도 아팠고 어려웠고 스트레스도 받았고 강제종료도 했지만 전투방식을 익힌순간 재밌다",
+        polarity="negative",
+    )
+    failure_context = _review_based_sentence(
+        "컷신이 나오더니 강제종료가 되었다",
+        polarity="negative",
+    )
+
+    assert positive_context == ""
+    assert failure_context == "강제 종료와 로드 실패로 진행이 끊겼다는 불만이 있습니다"
+
+
 def test_summary_rules_are_loaded_from_data_file() -> None:
     raw_rules = json.loads(SUMMARY_RULES_PATH.read_text(encoding="utf-8"))
 

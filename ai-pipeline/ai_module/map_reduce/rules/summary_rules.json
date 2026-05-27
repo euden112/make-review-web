@@ -74,6 +74,15 @@
       "aspects": ["combat"]
     },
     {
+      "name": "build_tool_variety",
+      "priority": 95,
+      "template": "다양한 빌드와 보조 요소를 활용해 공략하는 재미가 있다는 반응이 있습니다",
+      "any_terms": ["빌드", "영체", "제작템"],
+      "all_terms": ["재밌"],
+      "genres": ["action_rpg", "rpg", "common"],
+      "aspects": ["systems", "progression"]
+    },
+    {
       "name": "low_spec_access",
       "priority": 100,
       "template": "낮은 사양에서도 실행 가능해 접근성이 좋다는 반응이 있습니다",
@@ -106,6 +115,15 @@
       "any_terms": ["최적화", "현실성"],
       "genres": ["common"],
       "aspects": ["performance", "graphics"]
+    },
+    {
+      "name": "open_world_freedom_story",
+      "priority": 135,
+      "template": "오픈월드의 자유도와 스토리를 오래 즐길 수 있다는 반응이 있습니다",
+      "any_terms": ["오픈월드", "오픈 월드"],
+      "all_terms": ["스토리", "자유도"],
+      "genres": ["open_world", "common"],
+      "aspects": ["exploration", "story", "systems"]
     },
     {
       "name": "guide_map_tradeoff",
@@ -153,7 +171,7 @@
       "name": "long_running_fun",
       "priority": 190,
       "template": "오래 지난 뒤에도 여전히 재미있다는 반응이 있습니다",
-      "any_terms": ["13년", "갓겜"],
+      "any_terms": ["13년", "갓겜", "오래되었", "오래 지난"],
       "genres": ["common"],
       "aspects": ["longevity"]
     }
@@ -224,7 +242,7 @@
       "name": "crash_or_save_loss",
       "priority": 70,
       "template": "강제 종료와 로드 실패로 진행이 끊겼다는 불만이 있습니다",
-      "any_terms": ["강제종료", "로드", "데이터"],
+      "any_terms": ["로드", "데이터", "오류", "버그", "컷신"],
       "genres": ["common"],
       "aspects": ["bug", "stability"]
     },

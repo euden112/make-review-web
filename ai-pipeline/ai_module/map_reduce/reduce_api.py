@@ -45,6 +45,15 @@ GROUNDING_TERMS = (
     "카지노",
     "최적화",
     "스토리",
+    "오픈월드",
+    "오픈 월드",
+    "자유도",
+    "싱글",
+    "운전",
+    "대사",
+    "빌드",
+    "영체",
+    "제작템",
 )
 
 NEGATIVE_DETAIL_TERMS = (
@@ -947,13 +956,18 @@ def _candidate_quality_decision(detail: str) -> CandidateDecision:
     normalized = " ".join(str(detail or "").split())
     if _is_low_quality_detail(normalized):
         return "reject"
-    if len(normalized) < 18:
-        return "ambiguous"
-    has_grounding = any(term.lower() in normalized.lower() for term in GROUNDING_TERMS)
+    has_grounding = _has_grounding_detail(normalized)
     has_sentiment = any(term in normalized for term in POSITIVE_DETAIL_TERMS + NEGATIVE_DETAIL_TERMS)
     if has_grounding and has_sentiment:
         return "accept"
+    if len(normalized) < 18:
+        return "ambiguous"
     return "ambiguous"
+
+
+def _has_grounding_detail(detail: str) -> bool:
+    normalized = str(detail or "").lower()
+    return any(term.lower() in normalized for term in GROUNDING_TERMS)
 
 
 def _classify_ambiguous_candidate(detail: str, *, polarity: str) -> bool:
@@ -997,6 +1011,8 @@ def _review_based_sentence(detail: str, *, polarity: str) -> str:
     rule_sentence = _apply_summary_rules(raw_text, polarity=polarity)
     if rule_sentence:
         return rule_sentence
+    if decision != "accept":
+        return ""
 
     if polarity == "positive":
         if "재밌" in text or "재미" in text:
