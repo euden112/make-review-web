@@ -171,7 +171,7 @@ async def main():
     )
     parser.add_argument(
         "--model",
-        default=os.getenv("LOCAL_MAP_MODEL", "qwen3:8b"),
+        default=os.getenv("LOCAL_MAP_MODEL", "qwen2.5:7b"),
     )
     args = parser.parse_args()
 
