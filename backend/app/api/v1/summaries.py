@@ -63,7 +63,7 @@ async def get_games(db: AsyncSession = Depends(get_db)):
         select(Platform).where(Platform.code == "metacritic")
     )).scalar_one_or_none()
 
-    games = (await db.execute(select(Game))).scalars().all()
+    games = (await db.execute(select(Game).order_by(Game.id))).scalars().all()
 
     # 플랫폼 맵을 플랫폼별 단일 쿼리로 일괄 로드 (N+1 제거)
     steam_maps: dict[int, GamePlatformMap] = {}
