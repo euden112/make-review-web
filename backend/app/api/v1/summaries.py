@@ -1,5 +1,8 @@
 import logging
+from typing import Any
+
 from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import and_
@@ -9,6 +12,42 @@ from app.core.database import get_db
 from app.core.redis_client import get_summary_cache, set_summary_cache
 from app.models.domain import Game, GamePlatformMap, Platform, GameReviewSummary, ReviewSummaryJob, ExternalReview
 from app.services.ai_service import run_ai_pipeline_task, get_pipeline_tasks
+
+
+class _PlaytimeBucketsInput(BaseModel):
+    early_max: float | None = None
+    mid_max: float | None = None
+
+
+class _MapStatsInput(BaseModel):
+    chunk_count: int = 0
+    map_cache_hit: int = 0
+    map_cache_miss: int = 0
+    map_input_tokens: int = 0
+    map_output_tokens: int = 0
+    failure_reasons: dict[str, Any] | None = None
+
+
+class _SourceStatsInput(BaseModel):
+    total_reviews_in_db: int
+    new_count_since_last: int
+    batch_from_review_id: int
+    new_max_review_id: int
+    covered_from_review_id: int
+    covered_to_review_id: int
+    source_review_count: int
+
+
+class ReduceRequest(BaseModel):
+    language_code: str = "ko"
+    grouped_summaries: dict[str, list[str]]
+    representative_quotes: list[str] = []
+    score_anchors: dict[str, Any] = {}
+    category_frequency: list[list[Any]] = []
+    prior_summary_text: str | None = None
+    playtime_buckets: _PlaytimeBucketsInput | None = None
+    map_stats: _MapStatsInput | None = None
+    source_stats: _SourceStatsInput
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +144,40 @@ async def trigger_summarization(
         "tasks": [{"mode": m, "language_code": l} for m, l in tasks],
         "force": force,
     }
+
+
+@router.get("/{game_id}/reviews-for-map")
+async def get_reviews_for_map(
+    game_id: int,
+    force: bool = Query(False, description="커서 무시하고 전체 리뷰 반환"),
+):
+    """로컬 Map 단계 실행을 위한 리뷰 데이터 제공."""
+    from app.services.ai_service import get_reviews_for_map as _svc
+    return await _svc(game_id, force=force)
+
+
+@router.post("/{game_id}/reduce")
+async def trigger_reduce_from_map(
+    game_id: int,
+    body: ReduceRequest,
+    background_tasks: BackgroundTasks,
+):
+    """로컬 Map 결과를 받아 Reduce → DB 저장 (BackgroundTask로 즉시 반환)."""
+    from app.services.ai_service import run_reduce_from_precomputed_map
+    background_tasks.add_task(
+        run_reduce_from_precomputed_map,
+        game_id=game_id,
+        language_code=body.language_code,
+        grouped_summaries=body.grouped_summaries,
+        representative_quotes=body.representative_quotes,
+        score_anchors=body.score_anchors,
+        category_frequency=body.category_frequency,
+        prior_summary_text=body.prior_summary_text,
+        playtime_buckets_dict=body.playtime_buckets.model_dump() if body.playtime_buckets else None,
+        map_stats=body.map_stats.model_dump() if body.map_stats else None,
+        source_stats=body.source_stats.model_dump(),
+    )
+    return {"status": "processing", "game_id": game_id}
 
 
 @router.get("/{game_id}/summary")
