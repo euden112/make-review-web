@@ -55,13 +55,25 @@ import re
 
 # grounding 감사용 (review_id=N) 앵커. 파이프라인 산출물에는 검증을 위해 남기되,
 # 사용자에게 저장·노출되는 텍스트에서는 제거한다(원문 근거는 representative_reviews_json으로 보존).
-_GROUNDING_ANCHOR_RE = re.compile(r"\s*\(\s*(?:review_id|리뷰\s*ID)\s*=\s*\d+\s*\)")
+# 괄호 그룹 안에 review_id가 한 번이라도 등장하면 그룹 전체를 제거한다.
+# 이렇게 해야 "(review_id=55, review_id=85)", "(review_id=12 등)" 같은 복수·꼬리말
+# 변형도 통째로 제거된다(단일 ID만 매칭하던 기존 정규식은 이런 경우를 놓쳤다).
+_GROUNDING_ANCHOR_RE = re.compile(
+    r"\s*\(\s*(?:review_id|리뷰\s*ID)\b[^)]*\)",
+    re.IGNORECASE,
+)
+# 괄호 없이 남은 "review_id=12", "review_id 12, 34" 등의 잔재.
+_BARE_ANCHOR_RE = re.compile(
+    r"\s*(?:review_id|리뷰\s*ID)\s*=?\s*\d+(?:\s*[,/、]\s*(?:review_id\s*=?\s*)?\d+)*",
+    re.IGNORECASE,
+)
 
 
 def _strip_grounding_anchor(text):
     if not isinstance(text, str):
         return text
     cleaned = _GROUNDING_ANCHOR_RE.sub("", text)
+    cleaned = _BARE_ANCHOR_RE.sub("", cleaned)
     cleaned = re.sub(r"\s{2,}", " ", cleaned)
     cleaned = re.sub(r"\s+([.,!?])", r"\1", cleaned)
     return cleaned.strip()
