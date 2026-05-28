@@ -131,6 +131,7 @@ async def summarize_chunk_with_ollama(
             "temperature": 0.2,
             "num_predict": num_predict,
             "num_ctx": num_ctx,
+            "think": False,
         },
     }
     return await _summarize_chunk_with_ollama_with_retry(

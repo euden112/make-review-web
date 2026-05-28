@@ -10,20 +10,11 @@ Metacritic Game Review Crawler
 import asyncio
 import json
 import re
-import sys
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
-
-# Windows 콘솔(cp949)에서 게임명·리뷰의 유니코드(en-dash 등) 출력 시
-# UnicodeEncodeError로 크롤러가 중단되는 것을 방지 — stdout/stderr를 UTF-8로 고정
-for _stream in (sys.stdout, sys.stderr):
-    try:
-        _stream.reconfigure(encoding="utf-8", errors="replace")
-    except (AttributeError, ValueError):
-        pass
 
 # ============================================================
 # 설정
@@ -440,21 +431,10 @@ async def collect_game(entry: dict, context) -> dict | None:
 # 메인
 # ============================================================
 
-async def main(target_slugs: set[str] | None = None):
+async def main():
     entries = load_game_list()
     if not entries:
         return
-
-    # demo 등에서 --games로 특정 게임만 요청하면 game_list 전체가 아니라
-    # 해당 게임만 크롤한다 (steam_slug 또는 metacritic_slug 일치).
-    if target_slugs:
-        entries = [
-            e for e in entries
-            if e.get("steam_slug") in target_slugs or e.get("metacritic_slug") in target_slugs
-        ]
-        if not entries:
-            print(f"[ERROR] 요청한 게임이 game_list에 없음: {sorted(target_slugs)}")
-            return
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -517,12 +497,4 @@ async def main(target_slugs: set[str] | None = None):
 
 
 if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Metacritic critic review crawler")
-    parser.add_argument(
-        "--games", nargs="*", default=None,
-        help="크롤할 게임 슬러그 목록 (steam_slug/metacritic_slug). 미지정 시 game_list 전체",
-    )
-    args = parser.parse_args()
-    asyncio.run(main(set(args.games) if args.games else None))
+    asyncio.run(main())

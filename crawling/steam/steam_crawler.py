@@ -144,15 +144,42 @@ def make_slug(name: str) -> str:
     return slug or "unknown"
 
 def get_image_urls(app_id: str) -> dict:
-    cover_image = f"https://cdn.cloudflare.steamstatic.com/steam/apps/{app_id}/library_600x900.jpg"
-    hero_url    = f"https://cdn.cloudflare.steamstatic.com/steam/apps/{app_id}/library_hero.jpg"
-    fallback    = f"https://cdn.cloudflare.steamstatic.com/steam/apps/{app_id}/header.jpg"
+    _CDN_OLD  = f"https://cdn.cloudflare.steamstatic.com/steam/apps/{app_id}"
+    _CDN_NEW  = "https://shared.fastly.steamstatic.com/store_item_assets/"
+    fallback_cover = f"{_CDN_OLD}/library_600x900.jpg"
+    fallback_hero  = f"{_CDN_OLD}/header.jpg"
+
     try:
-        res = requests.head(hero_url, timeout=5)
-        hero_image = hero_url if res.status_code == 200 else fallback
+        import urllib.parse
+        payload = {"ids": [{"appid": int(app_id)}], "context": {"country_code": "US", "language": "english", "steam_realm": 1}, "data_request": {"include_assets": True}}
+        resp = requests.get(
+            "https://api.steampowered.com/IStoreBrowseService/GetItems/v1/",
+            params={"input_json": json.dumps(payload)},
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            items = resp.json().get("response", {}).get("store_items", [])
+            if items:
+                assets = items[0].get("assets", {})
+                fmt = assets.get("asset_url_format", "")
+                base = _CDN_NEW
+
+                def _build(filename: str) -> str:
+                    if fmt:
+                        return base + fmt.replace("${FILENAME}", filename)
+                    return f"{_CDN_OLD}/{filename}"
+
+                capsule = assets.get("library_capsule")
+                cover_image = _build(capsule) if capsule else fallback_cover
+
+                hero_file = assets.get("library_hero") or assets.get("header")
+                hero_image = _build(hero_file) if hero_file else fallback_hero
+
+                return {"cover_image": cover_image, "hero_image": hero_image}
     except Exception:
-        hero_image = fallback
-    return {"cover_image": cover_image, "hero_image": hero_image}
+        pass
+
+    return {"cover_image": fallback_cover, "hero_image": fallback_hero}
 
 # ============================================================
 # Steam 리뷰 API 호출 (페이지네이션)
