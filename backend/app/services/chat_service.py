@@ -1,6 +1,6 @@
 import os
 import logging
-from groq import AsyncGroq, APITimeoutError, APIStatusError
+from groq import AsyncGroq, APITimeoutError, APIStatusError, RateLimitError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import and_
@@ -8,16 +8,6 @@ from sqlalchemy import and_
 from app.models.domain import Game, GamePlatformMap, Platform
 
 logger = logging.getLogger(__name__)
-
-# 모듈 레벨 클라이언트: 요청마다 생성하지 않고 재사용
-# timeout=30: 챗봇 응답 대기 최대 30초 (기본값 600초는 UX에 부적절)
-_groq_client: AsyncGroq | None = None
-
-def _get_groq_client(api_key: str) -> AsyncGroq:
-    global _groq_client
-    if _groq_client is None:
-        _groq_client = AsyncGroq(api_key=api_key, timeout=30.0)
-    return _groq_client
 
 SYSTEM_PROMPT_TEMPLATE = """당신은 게임 추천 전문가 챗봇입니다. 사용자가 좋아하거나 싫어하는 게임을 알려주면, 우리 데이터베이스에 있는 게임 목록에서 최적의 게임을 추천해줍니다.
 
@@ -72,31 +62,39 @@ async def get_recommendation(
     messages: list[dict],
     db: AsyncSession,
 ) -> str:
-    api_key = os.getenv("GROQ_API_KEY", "")
+    from ai_module.map_reduce.key_rotator import GroqKeyRotator
+    key_string = os.getenv("GROQ_API_KEYS") or os.getenv("GROQ_API_KEY", "")
     model = os.getenv("GROQ_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
 
-    if not api_key:
+    if not key_string:
         raise ValueError("GROQ_API_KEY가 설정되지 않았습니다.")
 
+    rotator = GroqKeyRotator.from_key_string(key_string)
     game_catalog = await build_game_catalog(db)
     system_prompt = SYSTEM_PROMPT_TEMPLATE.format(game_catalog=game_catalog)
-
     trimmed = messages[-MAX_HISTORY_MESSAGES:]
 
-    client = _get_groq_client(api_key)
-    try:
-        response = await client.chat.completions.create(
-            model=model,
-            messages=[{"role": "system", "content": system_prompt}] + trimmed,
-            temperature=0.7,
-        )
-    except APITimeoutError as e:
-        raise TimeoutError("AI 모델 응답 시간이 초과됐습니다.") from e
-    except APIStatusError as e:
-        raise ConnectionError(f"AI 모델 서버 오류: {e.status_code}") from e
+    last_exc: Exception | None = None
+    for attempt in range(rotator.key_count):
+        client = AsyncGroq(api_key=rotator.current_key, timeout=30.0)
+        try:
+            response = await client.chat.completions.create(
+                model=model,
+                messages=[{"role": "system", "content": system_prompt}] + trimmed,
+                temperature=0.7,
+            )
+            content = response.choices[0].message.content
+            if not content:
+                logger.error("Groq 응답에 content 없음")
+                raise ValueError("AI 모델 응답 형식이 올바르지 않습니다.")
+            return content
+        except RateLimitError as e:
+            last_exc = e
+            logger.warning("Groq 429 on chat key %d/%d, rotating...", attempt + 1, rotator.key_count)
+            rotator.rotate()
+        except APITimeoutError as e:
+            raise TimeoutError("AI 모델 응답 시간이 초과됐습니다.") from e
+        except APIStatusError as e:
+            raise ConnectionError(f"AI 모델 서버 오류: {e.status_code}") from e
 
-    content = response.choices[0].message.content
-    if not content:
-        logger.error("Groq 응답에 content 없음")
-        raise ValueError("AI 모델 응답 형식이 올바르지 않습니다.")
-    return content
+    raise ConnectionError("모든 Groq API 키가 rate limit에 걸렸습니다.") from last_exc

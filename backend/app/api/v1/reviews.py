@@ -3,6 +3,7 @@ import re
 from datetime import datetime, timedelta
 from typing import Dict
 from fastapi import APIRouter, Depends, HTTPException, Query
+from app.core.auth import require_api_key
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.dialects.postgresql import insert
@@ -82,7 +83,7 @@ async def _upsert_game(
     ).returning(Game.id)
     return (await db.execute(stmt)).scalar_one()
 
-@router.post("/metacritic")
+@router.post("/metacritic", dependencies=[Depends(require_api_key)])
 async def receive_metacritic_data(payload: Dict[str, MetacriticPayload], db: AsyncSession = Depends(get_db)):
     platforms, review_types = await get_reference_data(db)
     platform_id = platforms.get("metacritic")
@@ -233,7 +234,7 @@ async def receive_metacritic_data(payload: Dict[str, MetacriticPayload], db: Asy
     }
 
 
-@router.post("/steam")
+@router.post("/steam", dependencies=[Depends(require_api_key)])
 async def receive_steam_data(payload: Dict[str, SteamPayload], db: AsyncSession = Depends(get_db)):
     platforms, review_types = await get_reference_data(db)
     platform_id = platforms.get("steam")
@@ -333,7 +334,7 @@ async def receive_steam_data(payload: Dict[str, SteamPayload], db: AsyncSession 
     return {"status": "success", "message": f"Steam 데이터 {len(payload)}건 DB 저장 완료"}
 
 
-@router.get("/priority/general")
+@router.get("/priority/general", dependencies=[Depends(require_api_key)])
 async def get_general_priority_reviews(
     days_back: int = Query(30, description="최근 N일 이내의 리뷰"),
     limit: int = Query(50, description="가져올 최대 리뷰 수"),

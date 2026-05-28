@@ -62,7 +62,9 @@ services:
       - REDIS_PORT=6379
       - REDIS_DB=0
       - GROQ_API_KEY=${GROQ_API_KEY}
+      - GROQ_API_KEYS=${GROQ_API_KEYS}
       - GROQ_MODEL=${GROQ_MODEL:-meta-llama/llama-4-scout-17b-16e-instruct}
+      - API_SECRET_KEY=${API_SECRET_KEY}
       - PYTHONPATH=/workspace/backend:/workspace/ai-pipeline:/workspace/crawling/steam
     command: sh -c "pip install -r requirements.txt && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
     depends_on:

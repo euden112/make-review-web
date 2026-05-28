@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
 from app.core.database import get_db
+from app.core.auth import require_api_key
 from app.models.domain import GameReviewSummary, CriticSummary
 
 router = APIRouter()
@@ -26,7 +27,7 @@ router = APIRouter()
 _DIVERGENCE_THRESHOLD = 15.0
 
 
-@router.get("/{game_id}/divergence")
+@router.get("/{game_id}/divergence", dependencies=[Depends(require_api_key)])
 async def get_divergence(game_id: int, db: AsyncSession = Depends(get_db)):
     user_row = (await db.execute(
         select(GameReviewSummary).where(
