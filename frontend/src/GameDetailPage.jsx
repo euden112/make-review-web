@@ -15,6 +15,11 @@ const CATEGORY_LABELS = {
   difficulty: '난이도',
 }
 
+// 카테고리 분석 차트는 모든 게임에 공통으로 존재하는 핵심 축만 고정 표시한다.
+// (난이도·음향·가성비 등 게임마다 언급 여부가 갈리는 축은 차트에서 제외 — 축 일관성 확보.
+//  이 축들은 파이프라인에서 계속 산출되어 장단점/키워드 텍스트에는 반영된다.)
+const CANONICAL_ASPECTS = ['content', 'gameplay', 'graphics', 'controls', 'optimization']
+
 const SENTIMENT_CONFIG = {
   positive: { label: '긍정적', cls: 'bg-green-50 text-green-600 dark:bg-green-900/20 dark:text-green-400' },
   negative: { label: '부정적', cls: 'bg-red-50 text-red-600 dark:bg-red-900/20 dark:text-red-400' },
@@ -117,9 +122,12 @@ function AspectRadarChart({ aspects, isDark }) {
   const accent = '#6366f1'
   // 절대 점수가 아니라 "이 게임 평균 대비" 상대 강약으로 색을 정한다.
   // 평균 위 = 강점(녹), 평균 아래 = 약점(적), 평균 근처 = 보통(회색).
-  const mean = aspects.reduce((s, a) => s + a.score, 0) / n
-  const NEUTRAL = isDark ? '#9ca3af' : '#9ca3af'
-  const relColor = (s) => { const d = s - mean; return d >= 0.3 ? '#22c55e' : d <= -0.3 ? '#ef4444' : NEUTRAL }
+  // 근거 없는(missing) 축은 평균값으로 채워 형상이 왜곡되지 않게 하고 회색으로 표시한다.
+  const present = aspects.filter((a) => !a.missing && Number.isFinite(a.score))
+  const mean = present.length ? present.reduce((s, a) => s + a.score, 0) / present.length : 5
+  const NEUTRAL = '#9ca3af'
+  const scoreOf = (a) => (a.missing || !Number.isFinite(a.score) ? mean : a.score)
+  const relColor = (a) => { if (a.missing) return NEUTRAL; const d = a.score - mean; return d >= 0.3 ? '#22c55e' : d <= -0.3 ? '#ef4444' : NEUTRAL }
 
   const angleFor = (i) => (-90 + (360 / n) * i) * (Math.PI / 180)
   const pt = (i, r) => [cx + r * Math.cos(angleFor(i)), cy + r * Math.sin(angleFor(i))]
@@ -127,7 +135,7 @@ function AspectRadarChart({ aspects, isDark }) {
     aspects.map((_, i) => { const p = pt(i, r); return `${i === 0 ? 'M' : 'L'}${p[0].toFixed(1)},${p[1].toFixed(1)}` }).join(' ') + ' Z'
 
   const dataPath =
-    aspects.map((a, i) => { const p = pt(i, (Math.max(0, Math.min(MAX, a.score)) / MAX) * R); return `${i === 0 ? 'M' : 'L'}${p[0].toFixed(1)},${p[1].toFixed(1)}` }).join(' ') + ' Z'
+    aspects.map((a, i) => { const p = pt(i, (Math.max(0, Math.min(MAX, scoreOf(a))) / MAX) * R); return `${i === 0 ? 'M' : 'L'}${p[0].toFixed(1)},${p[1].toFixed(1)}` }).join(' ') + ' Z'
 
   return (
     <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ maxHeight: 300 }}>
@@ -141,8 +149,10 @@ function AspectRadarChart({ aspects, isDark }) {
       <path d={dataPath} fill={accent} fillOpacity={0.18} stroke={accent} strokeWidth={2} strokeLinejoin="round" />
 
       {aspects.map((a, i) => {
-        const p = pt(i, (Math.max(0, Math.min(MAX, a.score)) / MAX) * R)
-        return <circle key={i} cx={p[0]} cy={p[1]} r={4} fill={relColor(a.score)} />
+        const p = pt(i, (Math.max(0, Math.min(MAX, scoreOf(a))) / MAX) * R)
+        const c = relColor(a)
+        // 근거 없는 축은 속 빈 회색 점으로 구분.
+        return <circle key={i} cx={p[0]} cy={p[1]} r={4} fill={a.missing ? 'none' : c} stroke={c} strokeWidth={a.missing ? 1.5 : 0} />
       })}
 
       {aspects.map((a, i) => {
@@ -150,11 +160,16 @@ function AspectRadarChart({ aspects, isDark }) {
         const cos = Math.cos(angleFor(i))
         const anchor = Math.abs(cos) < 0.3 ? 'middle' : cos > 0 ? 'start' : 'end'
         const label = CATEGORY_LABELS[a.key] || a.label || a.key
-        const c = relColor(a.score)
+        const c = relColor(a)
         // 절대 수치는 기준이 불명확해 표기하지 않는다. 색(강/약)과 형상으로만 비교.
         return (
-          <text key={i} x={lp[0]} y={lp[1] + 3} textAnchor={anchor} fontSize={11} fontWeight="bold"
-            fill={c === NEUTRAL ? labelColor : c}>{label}</text>
+          <g key={i}>
+            <text x={lp[0]} y={lp[1] + (a.missing ? -2 : 3)} textAnchor={anchor} fontSize={11} fontWeight="bold"
+              fill={c === NEUTRAL ? labelColor : c}>{label}</text>
+            {a.missing && (
+              <text x={lp[0]} y={lp[1] + 9} textAnchor={anchor} fontSize={8} fill={NEUTRAL}>정보 없음</text>
+            )}
+          </g>
         )
       })}
     </svg>
@@ -776,15 +791,19 @@ function GameDetailPage({ isDark, toggleDark }) {
 
             {/* 카테고리별 분석 — 게임 내 상대 강·약점 프로파일 (다각형 차트) */}
             {summary.aspect_sentiment && Object.keys(summary.aspect_sentiment).length > 0 && (() => {
-              const aspects = Object.entries(summary.aspect_sentiment).map(([key, v]) => ({
-                key,
-                label: v.label,
-                score: typeof v.score === 'number' ? v.score : (Number(v.score) || 0),
-              }))
-              const sorted = [...aspects].sort((a, b) => b.score - a.score)
+              const raw = summary.aspect_sentiment || {}
+              // 핵심 5축 고정. 게임에 근거 없는 축은 missing(중립)으로 채워 축을 항상 동일하게 유지.
+              const aspects = CANONICAL_ASPECTS.map((key) => {
+                const v = raw[key]
+                const num = v ? (typeof v.score === 'number' ? v.score : Number(v.score)) : NaN
+                const has = v != null && Number.isFinite(num)
+                return { key, label: v?.label, score: has ? num : null, missing: !has }
+              })
+              const present = aspects.filter((a) => !a.missing)
+              const sorted = [...present].sort((a, b) => b.score - a.score)
               const strength = sorted[0]
               const weakness = sorted[sorted.length - 1]
-              const labelOf = (a) => CATEGORY_LABELS[a.key] || a.label || a.key
+              const labelOf = (a) => CATEGORY_LABELS[a.key] || a?.label || a?.key
               return (
                 <div className="bg-white dark:bg-[#1e1e2e] rounded-xl p-7 border border-gray-200 dark:border-[#2a2a3e] shadow-sm">
                   <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0] mb-1">카테고리별 분석</h2>
@@ -792,11 +811,13 @@ function GameDetailPage({ isDark, toggleDark }) {
                   {aspects.length >= 3 ? (
                     <div className="flex flex-col items-center">
                       <AspectRadarChart aspects={aspects} isDark={isDark} />
-                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
-                        강점 <span className="font-bold" style={{ color: '#22c55e' }}>{labelOf(strength)}</span>
-                        <span className="mx-1.5 text-gray-300 dark:text-gray-600">·</span>
-                        약점 <span className="font-bold" style={{ color: '#ef4444' }}>{labelOf(weakness)}</span>
-                      </p>
+                      {strength && weakness && strength !== weakness && (
+                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                          강점 <span className="font-bold" style={{ color: '#22c55e' }}>{labelOf(strength)}</span>
+                          <span className="mx-1.5 text-gray-300 dark:text-gray-600">·</span>
+                          약점 <span className="font-bold" style={{ color: '#ef4444' }}>{labelOf(weakness)}</span>
+                        </p>
+                      )}
                     </div>
                   ) : (
                     <div className="grid grid-cols-2 gap-3">
