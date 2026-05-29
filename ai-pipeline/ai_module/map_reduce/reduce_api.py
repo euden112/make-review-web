@@ -266,6 +266,7 @@ class BucketSummary:
     pros: list[str]
     cons: list[str]
     keywords: list[str]
+    review_count: int | None = None
 
 
 @dataclass(slots=True)
@@ -1527,6 +1528,50 @@ def _has_min_evidence(payloads: list[dict[str, Any]], minimum: int = 5) -> bool:
     return len(_evidence_subset(payloads, limit=minimum)) >= minimum
 
 
+def _bucket_stats(payloads: list[dict[str, Any]]) -> tuple[float | None, str | None, int]:
+    """버킷 map payload들에서 결정론 sentiment_score·label·review_count 산출.
+
+    playtime 버킷 reduce는 summary/pros/cons만 생성하고 sentiment를 주지 않으므로,
+    user/critic anchor와 같은 원리로 해당 버킷 리뷰의 추천 비율에서 직접 점수를 만든다.
+    score = positive/(positive+negative)*100. label은 점수에서 도출(≥60 긍정/≤45 부정/그외 중립).
+    review_count는 버킷에 속한 고유 review_id 수.
+    """
+    pos = neg = mix = 0
+    rids: set[int] = set()
+    for p in payloads:
+        s = p.get("sentiment") if isinstance(p, dict) else None
+        if isinstance(s, dict):
+            pos += int(s.get("positive") or 0)
+            neg += int(s.get("negative") or 0)
+            mix += int(s.get("mixed") or 0)
+        for rid in (p.get("review_ids") or []):
+            try:
+                rids.add(int(rid))
+            except (TypeError, ValueError):
+                pass
+        for item in (p.get("evidence_items") or []):
+            try:
+                rids.add(int(item.get("review_id")))
+            except (TypeError, ValueError):
+                pass
+    total = pos + neg + mix
+    # 전체 추천 비율 정의(positive / 전체)와 일치시킨다. mixed를 분모에 포함해
+    # neg=0일 때 100으로 포화되는 문제를 줄이고 overall anchor와 같은 척도를 쓴다.
+    if total > 0:
+        score: float | None = round(pos / total * 100)
+    else:
+        score = None
+    if score is None:
+        overall = None
+    elif score >= 60:
+        overall = "positive"
+    elif score <= 45:
+        overall = "negative"
+    else:
+        overall = "mixed"
+    return score, overall, len(rids)
+
+
 async def run_feature_reduce_stage(
     *,
     api_key: str,
@@ -1832,6 +1877,21 @@ async def run_feature_reduce_stage(
             else:
                 critic_bucket.sentiment_overall = "mixed"
 
+        # playtime 버킷별 결정론 sentiment·review_count 부착 (reduce LLM은 summary만 생성).
+        pt_payloads = {"early": early_payloads, "mid": mid_payloads, "late": late_payloads}
+        playtime_buckets_out: dict[str, BucketSummary | None] = {}
+        for _name in ("early", "mid", "late"):
+            _b = _sanitize_bucket(
+                _parse_feature_bucket(playtime_data.get(_name) if isinstance(playtime_data, dict) else None),
+                final_evidence_index,
+            )
+            if _b is not None:
+                # 감성 점수/라벨은 실제 추천 비율(ai_service의 bucket_stats)로 채운다.
+                # map payload sentiment는 추천 수가 아니라 신뢰할 수 없어 여기선 review_count만 산출.
+                _, _, _count = _bucket_stats(pt_payloads[_name])
+                _b.review_count = _count
+            playtime_buckets_out[_name] = _b
+
         return FinalSummary(
             one_liner=one_liner,
             aspect_scores=aspect_scores,
@@ -1841,9 +1901,9 @@ async def run_feature_reduce_stage(
             pros=final_pros,
             cons=final_cons,
             keywords=_sanitize_keyword_list(final_data.get("keywords", [])),
-            playtime_early=_sanitize_bucket(_parse_feature_bucket(playtime_data.get("early") if isinstance(playtime_data, dict) else None), final_evidence_index),
-            playtime_mid=_sanitize_bucket(_parse_feature_bucket(playtime_data.get("mid") if isinstance(playtime_data, dict) else None), final_evidence_index),
-            playtime_late=_sanitize_bucket(_parse_feature_bucket(playtime_data.get("late") if isinstance(playtime_data, dict) else None), final_evidence_index),
+            playtime_early=playtime_buckets_out["early"],
+            playtime_mid=playtime_buckets_out["mid"],
+            playtime_late=playtime_buckets_out["late"],
             critic=critic_bucket,
             user=user_bucket,
             input_tokens=input_tokens,

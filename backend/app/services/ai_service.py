@@ -143,8 +143,13 @@ async def get_pipeline_tasks(game_id: int, db) -> list[tuple[str, str | None]]:
     return [("unified", None)]
 
 
-async def _upsert_playtime_analysis(db, game_id: int, ai_result: FinalSummary, buckets) -> None:
-    """playtime_analyses 테이블에 upsert."""
+async def _upsert_playtime_analysis(db, game_id: int, ai_result: FinalSummary, buckets, bucket_stats: dict | None = None) -> None:
+    """playtime_analyses 테이블에 upsert.
+
+    bucket_stats(로컬 Map 단계에서 원본 리뷰 is_recommended로 산출한 버킷별 count/score)가
+    있으면 감성 점수/라벨/리뷰수를 이 값으로 덮어쓴다. summary/pros/cons는 LLM 결과 유지.
+    map payload sentiment는 추천 수가 아니라 점수 산출에 쓰면 안 되기 때문이다.
+    """
     if buckets is None:
         return
 
@@ -160,6 +165,7 @@ async def _upsert_playtime_analysis(db, game_id: int, ai_result: FinalSummary, b
                 f"{prefix}_summary": None, f"{prefix}_sentiment": None,
                 f"{prefix}_score": None, f"{prefix}_pros": None,
                 f"{prefix}_cons": None, f"{prefix}_keywords": None,
+                f"{prefix}_review_count": None,
             }
         return {
             f"{prefix}_summary": _strip_grounding_anchor(b.summary),
@@ -168,6 +174,7 @@ async def _upsert_playtime_analysis(db, game_id: int, ai_result: FinalSummary, b
             f"{prefix}_pros": _strip_grounding_anchor_list(b.pros),
             f"{prefix}_cons": _strip_grounding_anchor_list(b.cons),
             f"{prefix}_keywords": _strip_grounding_anchor_list(b.keywords),
+            f"{prefix}_review_count": getattr(b, "review_count", None),
         }
 
     fields = {
@@ -178,6 +185,20 @@ async def _upsert_playtime_analysis(db, game_id: int, ai_result: FinalSummary, b
         **bucket_fields(ai_result.playtime_late, "late"),
         "updated_at": datetime.utcnow(),
     }
+
+    # 버킷별 감성 점수/라벨/리뷰수는 실제 추천 비율(bucket_stats)로 덮어쓴다.
+    if bucket_stats:
+        for prefix in ("early", "mid", "late"):
+            st = bucket_stats.get(prefix) or {}
+            score = st.get("score")
+            count = st.get("count")
+            if score is not None:
+                fields[f"{prefix}_score"] = score
+                fields[f"{prefix}_sentiment"] = (
+                    "positive" if score >= 60 else "negative" if score <= 45 else "mixed"
+                )
+            if count is not None:
+                fields[f"{prefix}_review_count"] = count
 
     if existing:
         for k, v in fields.items():
@@ -890,12 +911,14 @@ async def run_reduce_from_precomputed_map(
             db.add(new_summary)
 
             buckets = None
+            bucket_stats = None
             if playtime_buckets_dict and playtime_buckets_dict.get("early_max") is not None and playtime_buckets_dict.get("mid_max") is not None:
                 buckets = PlaytimeBuckets(
                     early_max=float(playtime_buckets_dict["early_max"]),
                     mid_max=float(playtime_buckets_dict["mid_max"]),
                 )
-            await _upsert_playtime_analysis(db, game_id, ai_result, buckets)
+                bucket_stats = playtime_buckets_dict.get("bucket_stats")
+            await _upsert_playtime_analysis(db, game_id, ai_result, buckets, bucket_stats)
             await _upsert_critic_summary(db, game_id, ai_result)
             await _upsert_user_summary(db, game_id, ai_result)
 

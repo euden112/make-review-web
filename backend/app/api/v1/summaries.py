@@ -17,6 +17,8 @@ from app.services.ai_service import run_ai_pipeline_task, get_pipeline_tasks
 class _PlaytimeBucketsInput(BaseModel):
     early_max: float | None = None
     mid_max: float | None = None
+    # 버킷별 실제 리뷰 수/추천 비율(0~100). 로컬 Map 단계에서 원본 리뷰로 산출해 전달.
+    bucket_stats: dict[str, Any] | None = None
 
 
 class _MapStatsInput(BaseModel):

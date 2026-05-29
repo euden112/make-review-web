@@ -214,6 +214,50 @@ class _NullCache:
         return None
 
 
+def _compute_bucket_stats(all_steam, buckets) -> dict:
+    """버킷별 실제 리뷰 수/추천 비율(is_recommended)을 all_steam 모집단에서 산출.
+
+    map payload의 sentiment는 추천 수가 아니므로 신뢰할 수 없다. 감성 점수는 전체 추천률
+    anchor와 동일하게 '추천 / 전체 × 100'으로 직접 계산해 Reduce/DB로 넘긴다.
+    """
+    stats: dict[str, dict] = {}
+    if buckets is None:
+        return stats
+    all_tagged = tag_reviews(all_steam, buckets)
+    for name in ("early", "mid", "late"):
+        in_b = [r for r in all_tagged if r.playtime_bucket == name]
+        cnt = len(in_b)
+        rec = sum(1 for r in in_b if r.is_recommended)
+        stats[name] = {"count": cnt, "score": round(rec / cnt * 100) if cnt else None}
+    return stats
+
+
+def _chunk_by_bucket(tagged):
+    """버킷별로 분리해 청킹한다 (방안 A).
+
+    기존 char 기준 청킹은 한 청크에 early/mid/late가 섞여, map이 청크당 salient
+    evidence ≤6개만 뽑을 때 특정 버킷(특히 late)이 누락돼 _has_min_evidence 게이트에서
+    탈락했다. 버킷마다 별도 청크를 만들면 map이 버킷별 evidence를 보장한다.
+    steam은 playtime_bucket(early/mid/late/unknown), 그 외는 platform_code로 묶는다.
+    """
+    groups: dict[str, list] = {}
+    for r in tagged:
+        key = r.playtime_bucket if r.platform_code == "steam" else r.platform_code
+        groups.setdefault(key, []).append(r)
+
+    all_chunks = []
+    for rows in groups.values():
+        cs = chunk_reviews_by_chars(
+            [(r.id, r.review_text_clean, r.helpful_count, r.playtime_hours) for r in rows],
+            max_chars=None,
+        )
+        all_chunks.extend(cs)
+    # 버킷별로 chunk_no가 1부터 재시작하므로 전역 고유번호로 재부여.
+    for i, c in enumerate(all_chunks, 1):
+        c.chunk_no = i
+    return all_chunks
+
+
 def _fetch_reviews(cloud_url: str, game_id: int, force: bool) -> dict:
     resp = requests.get(
         f"{cloud_url}/api/v1/games/{game_id}/reviews-for-map",
@@ -276,11 +320,10 @@ async def _run_map(game_id: int, data: dict, ollama_url: str, model: str) -> dic
     if buckets is not None:
         tagged = _ensure_bucket_coverage(tagged, all_steam, buckets)
 
-    chunks = chunk_reviews_by_chars(
-        [(r.id, r.review_text_clean, r.helpful_count, r.playtime_hours) for r in tagged],
-        max_chars=None,
-    )
-    print(f"  {len(tagged)} reviews → {len(chunks)} chunks")
+    bucket_stats = _compute_bucket_stats(all_steam, buckets)
+
+    chunks = _chunk_by_bucket(tagged)
+    print(f"  {len(tagged)} reviews → {len(chunks)} chunks (버킷별 청킹)")
 
     map_results = await run_map_stage(
         game_id=game_id,
@@ -290,6 +333,7 @@ async def _run_map(game_id: int, data: dict, ollama_url: str, model: str) -> dic
         prompt_version="json_v3_spoiler_safe_map",
         cache=_NullCache(),
         ollama_base_url=ollama_url,
+        max_concurrency=int(os.getenv("MAP_CONCURRENCY", "3")),
     )
 
     grouped = _group_map_outputs_by_tags(map_results, tagged)
@@ -318,7 +362,7 @@ async def _run_map(game_id: int, data: dict, ollama_url: str, model: str) -> dic
         "category_frequency":  data["category_frequency"],
         "prior_summary_text":  data.get("prior_summary_text"),
         "playtime_buckets": (
-            {"early_max": buckets.early_max, "mid_max": buckets.mid_max}
+            {"early_max": buckets.early_max, "mid_max": buckets.mid_max, "bucket_stats": bucket_stats}
             if buckets else None
         ),
         "map_stats":    stats,
@@ -366,11 +410,10 @@ async def _run_map_groq(game_id: int, data: dict, groq_api_key: str, model: str)
     if buckets is not None:
         tagged = _ensure_bucket_coverage(tagged, all_steam, buckets)
 
-    chunks = chunk_reviews_by_chars(
-        [(r.id, r.review_text_clean, r.helpful_count, r.playtime_hours) for r in tagged],
-        max_chars=None,
-    )
-    print(f"  {len(tagged)} reviews → {len(chunks)} chunks")
+    bucket_stats = _compute_bucket_stats(all_steam, buckets)
+
+    chunks = _chunk_by_bucket(tagged)
+    print(f"  {len(tagged)} reviews → {len(chunks)} chunks (버킷별 청킹)")
 
     map_results = await _run_map_stage_groq(
         game_id=game_id,
@@ -407,7 +450,7 @@ async def _run_map_groq(game_id: int, data: dict, groq_api_key: str, model: str)
         "category_frequency":  data["category_frequency"],
         "prior_summary_text":  data.get("prior_summary_text"),
         "playtime_buckets": (
-            {"early_max": buckets.early_max, "mid_max": buckets.mid_max}
+            {"early_max": buckets.early_max, "mid_max": buckets.mid_max, "bucket_stats": bucket_stats}
             if buckets else None
         ),
         "map_stats":    stats,
