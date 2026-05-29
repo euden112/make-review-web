@@ -450,6 +450,11 @@ async def _generate_reduce_response(
     system_prompt: str,
     user_prompt: str,
 ):
+    # qwen3 계열은 기본 chain-of-thought를 출력해 토큰을 폭증시킨다(특히 TPM 한도가 낮은
+    # 모델에서 치명적). /no_think 디렉티브로 reasoning을 끄고 JSON만 출력하게 한다.
+    if "qwen3" in model_name.lower():
+        system_prompt = system_prompt + " /no_think"
+        user_prompt = user_prompt + " /no_think"
     return await client.chat.completions.create(
         model=model_name,
         messages=[
