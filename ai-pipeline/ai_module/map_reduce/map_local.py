@@ -38,7 +38,7 @@ def _build_map_prompt(*, chunk_text: str, deterministic_candidate: str) -> str:
         "The local LLM Map stage is the primary evidence generator. The deterministic candidate is only a guardrail: use it to keep review_ids, snippets, and sources aligned, but improve detail quality when the raw review supports it.\n"
         "Use only facts present in RAW_REVIEWS. Do not invent game facts. Do not use review_ids outside RAW_REVIEWS.\n"
         "Use the exact key review_id, not reviewer_id. Every evidence item must include one review_id from RAW_REVIEWS.\n"
-        "Allowed aspects: graphics, controls, optimization, content, price_value, sound, difficulty, multiplayer, bugs.\n"
+        "Allowed aspects: graphics, controls, optimization, content, price_value, sound, gameplay, difficulty.\n"
         "Schema keys: chunk_no, review_ids, source_mix, sentiment, aspects, playtime_signals, critic_signals, quote_candidates, evidence_items, warnings.\n"
         "Keep output compact: max 6 evidence_items, max 3 quote_candidates, max 5 aspects.\n"
         "Each evidence item: {review_id,source,aspect,polarity,detail,public_detail,spoiler_risk,spoiler_terms,snippet}.\n"

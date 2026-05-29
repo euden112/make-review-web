@@ -393,6 +393,7 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
                 "steam_recommend_ratio": steam_recommend_ratio,
                 "metacritic_critic_avg": metacritic_critic_avg,
                 "metacritic_user_avg": metacritic_user_avg,
+                "steam_total": steam_total,
             }
 
             # 7. Job 시작 기록
@@ -429,7 +430,7 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
                 metacritic_ratio=(meta_pos, meta_mix, meta_neg),
                 cache=RedisCache(get_redis_cache()),
                 ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
-                local_model_name=os.getenv("LOCAL_MAP_MODEL", "qwen2.5:1.5b"),
+                local_model_name=os.getenv("LOCAL_MAP_MODEL", "qwen2.5:7b"),
                 reduce_api_key=os.getenv("GROQ_API_KEY", ""),
                 reduce_model_name=os.getenv("GROQ_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct"),
                 prior_summary_text=prior_summary_text,
@@ -719,6 +720,7 @@ async def get_reviews_for_map(game_id: int, force: bool = False) -> dict:
                 "steam_recommend_ratio": steam_recommend_ratio,
                 "metacritic_critic_avg": metacritic_critic_avg,
                 "metacritic_user_avg":   metacritic_user_avg,
+                "steam_total": steam_total,
             },
             "category_frequency": top_categories,
             "prior_summary_text": existing_summary.summary_text if existing_summary else None,

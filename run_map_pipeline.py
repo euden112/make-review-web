@@ -58,17 +58,21 @@ async def _summarize_chunk_with_groq(
     model_name: str,
     prompt: str,
 ) -> tuple[str, int, int]:
+    # qwen3 계열은 기본적으로 chain-of-thought를 출력해 max_tokens를 잠식한다.
+    # /no_think 디렉티브로 reasoning 출력을 끈다.
+    is_qwen3 = "qwen3" in model_name.lower()
+    system_content = "You are a JSON-only extractor. Return one valid JSON object and no markdown."
+    if is_qwen3:
+        system_content += " /no_think"
+    user_content = prompt + (" /no_think" if is_qwen3 else "")
     resp = await client.post(
         _GROQ_API_URL,
         headers={"Authorization": f"Bearer {api_key}"},
         json={
             "model": model_name,
             "messages": [
-                {
-                    "role": "system",
-                    "content": "You are a JSON-only extractor. Return one valid JSON object and no markdown.",
-                },
-                {"role": "user", "content": prompt},
+                {"role": "system", "content": system_content},
+                {"role": "user", "content": user_content},
             ],
             "temperature": 0.2,
             "max_tokens": 2048,

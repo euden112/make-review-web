@@ -133,13 +133,13 @@ ASPECT_LABELS = {
     "performance": "최적화",
     "content": "콘텐츠",
     "story": "콘텐츠",
-    "difficulty": "난이도",
-    "combat": "전투",
-    "sound": "사운드",
-    "music": "사운드",
-    "multiplayer": "멀티플레이",
     "price_value": "가격",
-    "bugs": "버그",
+    "sound": "음향",
+    "music": "음향",
+    "audio": "음향",
+    "gameplay": "재미",
+    "fun": "재미",
+    "difficulty": "난이도",
 }
 
 
@@ -803,8 +803,18 @@ def _segment_anchor_failures(segment: str, evidence_index: dict[int, str] | None
     return failures
 
 
+_BROKEN_JOSA_LEAD = re.compile(r"^[은는이가을를과와로의도만에]\s+\S")
+
+
+def _repair_period_josa(text: str) -> str:
+    # LLM이 "…좋다.는" 처럼 마침표 직후 조사를 붙여 두 문장을 잇는 경우, 사이에 공백을 삽입해
+    # 정상 문장 분할기가 동작하도록 한다.
+    return re.sub(r"([.!?。])([은는이가을를과와로의도만에])(?=[가-힣\s])", r"\1 \2", str(text or ""))
+
+
 def _sanitize_grounded_text(text: Any, evidence_index: dict[int, str] | None = None) -> str:
     sanitized = _repair_review_id_anchors(_sanitize_public_text(str(text or "")), evidence_index)
+    sanitized = _repair_period_josa(sanitized)
     if not evidence_index:
         return sanitized
     segments = [part.strip() for part in re.split(r"(?<=[.!?。])\s+", sanitized) if part.strip()]
@@ -816,6 +826,9 @@ def _sanitize_grounded_text(text: Any, evidence_index: dict[int, str] | None = N
         if _is_vague_public_sentence(segment):
             continue
         if _segment_anchor_failures(segment, evidence_index):
+            continue
+        # 마침표 직후 떨어져 나온 잔존 조사 시작 문장은 의미 단위가 깨진 파편이므로 제거.
+        if _BROKEN_JOSA_LEAD.match(segment):
             continue
         # 동일/유사 문장 반복 제거 — LLM이 같은 지적을 여러 번 되풀이하는 경우 방지
         seg_key = _sentence_body_key(segment)
@@ -1091,10 +1104,8 @@ def _evidence_sentence(item: dict[str, Any], *, polarity: str) -> str | None:
         return None
     aspect = str(item.get("aspect") or "content")
     if polarity == "positive":
-        if aspect in {"difficulty", "controls"}:
-            body = f"전투나 조작 흐름에서 {detail}는 식의 호평이 확인됩니다"
-        elif aspect == "sound":
-            body = f"사운드 경험에서는 {detail}는 반응이 장점으로 남습니다"
+        if aspect == "controls":
+            body = f"조작 흐름에서 {detail}는 식의 호평이 확인됩니다"
         elif aspect == "graphics":
             body = f"비주얼 측면에서는 {detail}는 인상이 장점으로 언급됩니다"
         else:
@@ -1227,14 +1238,22 @@ def _fallback_natural_items_from_evidence(
     return result
 
 
-def _fallback_aspect_scores_from_evidence(
+def _compute_baseline_aspect_scores(
     evidence_items: list[dict[str, Any]],
-    existing: Any,
-) -> dict[str, Any]:
-    if isinstance(existing, dict) and existing:
-        return existing
+    sentiment_anchor: float | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Evidence 카운트 + sentiment anchor 기반 결정론 기준점 산출.
 
+    baseline_neutral은 전체 추천률(sentiment_anchor)에서 도출해 게임 전반
+    수용도를 반영한다. 그 위에 (pos − neg) × 0.5 대칭 가중으로 각 aspect의
+    상대 위치를 더한다. 부정 리뷰 verbose 편향을 보정하기 위해 가중치를
+    대칭화하고, 시작점을 고정 5.0에서 anchor 연동으로 변경했다.
+
+    LLM은 이 baseline을 입력으로 받아 ±2.0 delta를 인용 근거와 함께 제안하고
+    _apply_aspect_score_deltas가 검증 후 결합한다.
+    """
     counts: dict[str, dict[str, int]] = {}
+    cited_review_ids: dict[str, set[int]] = {}
     for item in evidence_items:
         aspect = str(item.get("aspect") or "").strip().lower()
         if aspect not in ASPECT_LABELS:
@@ -1243,19 +1262,155 @@ def _fallback_aspect_scores_from_evidence(
         bucket = counts.setdefault(aspect, {"positive": 0, "mixed": 0, "negative": 0})
         if polarity in bucket:
             bucket[polarity] += 1
+        try:
+            rid = int(item.get("review_id"))
+            cited_review_ids.setdefault(aspect, set()).add(rid)
+        except (TypeError, ValueError):
+            pass
 
-    result: dict[str, Any] = {}
+    # Sentiment anchor (0~100) → baseline_neutral (0~10) 선형 매핑.
+    # 50% 추천 → 5.0, 90% → 6.6, 100% → 7.0. 기울기를 낮춰
+    # 9.0 ceiling 흡수로 인한 aspect 변별력 소실을 방지한다.
+    if sentiment_anchor is None:
+        baseline_neutral = 5.0
+    else:
+        try:
+            anchor_val = float(sentiment_anchor)
+        except (TypeError, ValueError):
+            baseline_neutral = 5.0
+        else:
+            baseline_neutral = 5.0 + (anchor_val - 50.0) * 0.04
+            baseline_neutral = max(2.5, min(7.0, baseline_neutral))
+
+    result: dict[str, dict[str, Any]] = {}
     for aspect, bucket in counts.items():
         total = sum(bucket.values())
         if total <= 0:
             continue
-        score = 5.0 + (bucket["positive"] * 1.2) - (bucket["negative"] * 1.4) + (bucket["mixed"] * 0.1)
+        # 비율 기반 skew: (pos − neg) / (pos + neg + 1) ∈ [-1, +1]. 표본 크기 무관,
+        # 양·음 극단으로 보낼 수 있고 mixed는 분모만 키워 영향 희석.
+        skew = (bucket["positive"] - bucket["negative"]) / (bucket["positive"] + bucket["negative"] + 1)
+        score = baseline_neutral + skew * 2.0
         score = round(max(2.0, min(9.0, score)), 1)
         result[aspect] = {
             "label": ASPECT_LABELS.get(aspect, "리뷰"),
             "score": score,
+            "evidence_count": total,
+            "evidence_review_ids": sorted(cited_review_ids.get(aspect, set())),
         }
     return result
+
+
+def _apply_aspect_score_deltas(
+    baseline: dict[str, dict[str, Any]],
+    llm_deltas: Any,
+    llm_evidence: Any,
+    valid_review_ids: set[int],
+) -> dict[str, dict[str, Any]]:
+    """Baseline 점수에 LLM delta를 검증 후 결합.
+
+    검증 규칙:
+    - delta는 [-2.0, +2.0] 범위. 초과 시 클램프.
+    - non-zero delta는 aspect_delta_evidence에 ≥1개의 유효 review_id 인용 필요.
+      미인용 또는 invalid id → delta 0 강제.
+    - baseline에 없는 aspect의 delta는 무시 (LLM이 새 aspect 만들지 못함).
+    - baseline evidence_count < 2면 delta 무시 (표본 부족 시 LLM 판단 차단).
+    최종 점수는 [2.0, 9.0] 클램프.
+    """
+    if not isinstance(llm_deltas, dict):
+        llm_deltas = {}
+    if not isinstance(llm_evidence, dict):
+        llm_evidence = {}
+
+    result: dict[str, dict[str, Any]] = {}
+    for aspect, base in baseline.items():
+        base_score = float(base.get("score") or 5.0)
+        applied_delta = 0.0
+        try:
+            raw_delta = float(llm_deltas.get(aspect, 0))
+        except (TypeError, ValueError):
+            raw_delta = 0.0
+        clamped_delta = max(-2.0, min(2.0, raw_delta))
+        if clamped_delta != 0.0 and int(base.get("evidence_count") or 0) >= 2:
+            citations = llm_evidence.get(aspect, [])
+            if isinstance(citations, list):
+                valid = [
+                    rid for rid in citations
+                    if isinstance(rid, (int, float)) and int(rid) in valid_review_ids
+                ]
+                if valid:
+                    applied_delta = clamped_delta
+        final_score = round(max(2.0, min(9.0, base_score + applied_delta)), 1)
+        result[aspect] = {
+            "label": base.get("label") or ASPECT_LABELS.get(aspect, "리뷰"),
+            "score": final_score,
+        }
+    return result
+
+
+def _apply_sentiment_score_delta(
+    anchor: float | None,
+    llm_delta: Any,
+    llm_evidence: Any,
+    valid_review_ids: set[int],
+    min_sample: int,
+    sample_size: int,
+) -> float | None:
+    """Steam recommend ratio 앵커에 LLM delta를 검증 후 결합.
+
+    검증 규칙:
+    - 앵커가 None이면 반환 None (이후 _normalize_sentiment_score 경로로 폴백).
+    - 표본 sample_size < min_sample이면 LLM delta 무시.
+    - delta는 [-8, +8] 범위. 초과 시 클램프.
+    - non-zero delta는 score_delta_evidence에 ≥2개의 유효 review_id 인용 필요.
+    최종 점수는 [0, 100] 클램프 후 정수 반올림.
+    """
+    if anchor is None:
+        return None
+    try:
+        anchor_f = float(anchor)
+    except (TypeError, ValueError):
+        return None
+    if sample_size < min_sample:
+        return round(max(0.0, min(100.0, anchor_f)))
+
+    try:
+        raw_delta = float(llm_delta) if llm_delta is not None else 0.0
+    except (TypeError, ValueError):
+        raw_delta = 0.0
+    clamped_delta = max(-8.0, min(8.0, raw_delta))
+    applied_delta = 0.0
+    if clamped_delta != 0.0:
+        citations = llm_evidence if isinstance(llm_evidence, list) else []
+        valid_count = 0
+        for cite in citations:
+            rid = None
+            if isinstance(cite, dict):
+                rid = cite.get("review_id")
+            elif isinstance(cite, (int, float)):
+                rid = cite
+            if isinstance(rid, (int, float)) and int(rid) in valid_review_ids:
+                valid_count += 1
+        if valid_count >= 2:
+            applied_delta = clamped_delta
+    return round(max(0.0, min(100.0, anchor_f + applied_delta)))
+
+
+def _fallback_aspect_scores_from_evidence(
+    evidence_items: list[dict[str, Any]],
+    existing: Any,
+) -> dict[str, Any]:
+    """Deprecated: 새 경로(_compute_baseline_aspect_scores + _apply_aspect_score_deltas) 사용.
+
+    이전 호환을 위해 유지하며 baseline만 반환.
+    """
+    if isinstance(existing, dict) and existing:
+        return existing
+    baseline = _compute_baseline_aspect_scores(evidence_items)
+    return {
+        aspect: {"label": data["label"], "score": data["score"]}
+        for aspect, data in baseline.items()
+    }
 
 
 def _fallback_one_liner_from_evidence(evidence_items: list[dict[str, Any]]) -> str:
@@ -1489,11 +1644,48 @@ async def run_feature_reduce_stage(
                 ),
             )
 
+        # Evidence 기반 baseline 사전 산출: aspect 점수와 sentiment anchor.
+        # LLM은 이 baseline을 입력으로 받아 인용 근거가 있는 작은 delta만 제안한다.
+        pre_evidence_items = _evidence_subset(user_payloads + critic_payloads, limit=80)
+        pre_sentiment_anchor = None
+        if score_anchors and score_anchors.get("steam_recommend_ratio") is not None:
+            pre_sentiment_anchor = float(score_anchors["steam_recommend_ratio"])
+        baseline_aspect_scores = _compute_baseline_aspect_scores(
+            pre_evidence_items,
+            sentiment_anchor=pre_sentiment_anchor,
+        )
+        baseline_aspect_for_prompt = {
+            aspect: {
+                "label": data["label"],
+                "baseline_score": data["score"],
+                "evidence_count": data["evidence_count"],
+                "evidence_review_ids": data["evidence_review_ids"][:6],
+            }
+            for aspect, data in baseline_aspect_scores.items()
+        }
+        sentiment_anchor_value = None
+        if score_anchors and score_anchors.get("steam_recommend_ratio") is not None:
+            sentiment_anchor_value = round(float(score_anchors["steam_recommend_ratio"]))
+
         final_contract = {
             "one_liner": "one Korean sentence under 100 chars with a concrete evidence-backed tradeoff",
-            "aspect_scores": "4-7 evidence-backed aspect labels and scores",
             "sentiment_overall": "positive|mixed|negative",
-            "sentiment_score": "0..100",
+            "sentiment_score_delta": (
+                "integer in [-8, +8] adjusting the provided sentiment_score_anchor. "
+                "0 = anchor 그대로. Non-zero delta는 score_delta_evidence에 2건 이상의 review_id 인용 필수. "
+                "anchor가 null이면 0을 출력."
+            ),
+            "score_delta_evidence": (
+                "array of objects {review_id:int, why:string}. score_delta가 0이 아니면 ≥2건 필수. "
+                "review_id는 입력 evidence에 존재해야 함."
+            ),
+            "aspect_score_deltas": (
+                "object {aspect_key: float in [-2.0, +2.0]} adjusting baseline_aspect_scores. "
+                "baseline에 없는 aspect는 추가 금지. 인용 없는 delta는 0으로 강제됨."
+            ),
+            "aspect_delta_evidence": (
+                "object {aspect_key: [review_id, ...]}. Non-zero delta는 해당 aspect에 ≥1건 review_id 인용 필수."
+            ),
             "pros": "4-5 concrete evidence-backed Korean strings with situation/detail, not labels",
             "cons": "3-4 concrete evidence-backed Korean strings with failure mode or frustration detail",
             "keywords": "6-8 evidence-backed topics; prefer specific evidence topics over broad genre labels",
@@ -1517,6 +1709,13 @@ async def run_feature_reduce_stage(
                     "critic_summary": critic_data,
                     "playtime_summary": playtime_data,
                     "prior_summary_text": prior_summary_text[:1200] if prior_summary_text else None,
+                    "sentiment_score_anchor": sentiment_anchor_value,
+                    "baseline_aspect_scores": baseline_aspect_for_prompt,
+                    "scoring_protocol": (
+                        "Score는 직접 출력하지 말 것. sentiment_score_delta(앵커 대비)와 "
+                        "aspect_score_deltas(baseline 대비)만 제안. 모든 non-zero delta는 인용 근거 필요. "
+                        "근거 부재 시 delta=0. 코드가 anchor/baseline + 검증된 delta로 최종 점수 산출."
+                    ),
                 },
             ),
         )
@@ -1568,21 +1767,84 @@ async def run_feature_reduce_stage(
                 cons=final_cons,
                 keywords=_sanitize_keyword_list(final_data.get("keywords", [])),
             )
-        aspect_scores = _fallback_aspect_scores_from_evidence(final_evidence_items, final_data.get("aspect_scores", {}))
+        # Aspect 점수: baseline + LLM delta (인용 검증 후 결합)
+        valid_review_ids = {
+            int(item.get("review_id"))
+            for item in final_evidence_items
+            if isinstance(item.get("review_id"), (int, float))
+        }
+        aspect_scores = _apply_aspect_score_deltas(
+            baseline_aspect_scores,
+            final_data.get("aspect_score_deltas", {}),
+            final_data.get("aspect_delta_evidence", {}),
+            valid_review_ids,
+        )
+
+        # Sentiment 점수: anchor + LLM delta (인용 검증 후 결합)
+        steam_total_count = 0
+        if score_anchors:
+            steam_total_count = int(score_anchors.get("steam_total") or 0)
+        validated_sentiment_score = _apply_sentiment_score_delta(
+            anchor=sentiment_anchor_value,
+            llm_delta=final_data.get("sentiment_score_delta"),
+            llm_evidence=final_data.get("score_delta_evidence"),
+            valid_review_ids=valid_review_ids,
+            min_sample=10,
+            sample_size=steam_total_count or 999,
+        )
+        if validated_sentiment_score is None:
+            validated_sentiment_score = _normalize_sentiment_score(final_data.get("sentiment_score"))
+
+        # 라벨은 최종 점수에서 결정론적으로 도출해 LLM 라벨/점수 불일치를 차단한다.
+        if isinstance(validated_sentiment_score, (int, float)):
+            if validated_sentiment_score >= 60:
+                derived_sentiment_overall = "positive"
+            elif validated_sentiment_score <= 45:
+                derived_sentiment_overall = "negative"
+            else:
+                derived_sentiment_overall = "mixed"
+        else:
+            derived_sentiment_overall = _normalize_sentiment_overall(final_data.get("sentiment_overall"))
+
+        # 유저 요약 점수를 Steam 추천률 anchor 기반 최종 점수와 정합시킨다.
+        # 추천률은 본질적으로 유저 신호이므로 user 버킷에 그대로 적용한다. 버킷 reduce LLM이
+        # pros/cons를 균형 요약하며 중간대(50~60)로 수렴해 항상 "mixed"로 보이던 문제를,
+        # anchor 결합 점수 + 결정론 라벨 도출로 unified와 일관되게 만든다.
+        if user_bucket is not None and isinstance(validated_sentiment_score, (int, float)):
+            user_bucket.sentiment_score = validated_sentiment_score
+            user_bucket.sentiment_overall = derived_sentiment_overall
+
+        # 비평가 요약 점수를 Metacritic critic 평균(이미 0~100) anchor에 정합시킨다.
+        # critic 평균 자체가 평론 점수이므로 delta 없이 그대로 사용하고, 라벨은 결정론 도출.
+        critic_bucket = _sanitize_bucket(_parse_feature_bucket(critic_data), final_evidence_index)
+        critic_anchor = None
+        if score_anchors and score_anchors.get("metacritic_critic_avg") is not None:
+            try:
+                critic_anchor = round(float(score_anchors["metacritic_critic_avg"]))
+            except (TypeError, ValueError):
+                critic_anchor = None
+        if critic_bucket is not None and isinstance(critic_anchor, (int, float)):
+            critic_bucket.sentiment_score = float(critic_anchor)
+            if critic_anchor >= 60:
+                critic_bucket.sentiment_overall = "positive"
+            elif critic_anchor <= 45:
+                critic_bucket.sentiment_overall = "negative"
+            else:
+                critic_bucket.sentiment_overall = "mixed"
 
         return FinalSummary(
             one_liner=one_liner,
             aspect_scores=aspect_scores,
             full_text="",
-            sentiment_overall=_normalize_sentiment_overall(final_data.get("sentiment_overall")),
-            sentiment_score=_normalize_sentiment_score(final_data.get("sentiment_score")),
+            sentiment_overall=derived_sentiment_overall,
+            sentiment_score=validated_sentiment_score,
             pros=final_pros,
             cons=final_cons,
             keywords=_sanitize_keyword_list(final_data.get("keywords", [])),
             playtime_early=_sanitize_bucket(_parse_feature_bucket(playtime_data.get("early") if isinstance(playtime_data, dict) else None), final_evidence_index),
             playtime_mid=_sanitize_bucket(_parse_feature_bucket(playtime_data.get("mid") if isinstance(playtime_data, dict) else None), final_evidence_index),
             playtime_late=_sanitize_bucket(_parse_feature_bucket(playtime_data.get("late") if isinstance(playtime_data, dict) else None), final_evidence_index),
-            critic=_sanitize_bucket(_parse_feature_bucket(critic_data), final_evidence_index),
+            critic=critic_bucket,
             user=user_bucket,
             input_tokens=input_tokens,
             output_tokens=output_tokens,

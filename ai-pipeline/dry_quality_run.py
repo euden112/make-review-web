@@ -441,7 +441,7 @@ async def run(args: argparse.Namespace) -> list[dict[str, Any]]:
             metacritic_ratio=_metacritic_ratio(reviews),
             cache=InMemoryAsyncCache(),
             ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
-            local_model_name=os.getenv("LOCAL_MAP_MODEL", "qwen2.5:1.5b"),
+            local_model_name=os.getenv("LOCAL_MAP_MODEL", "qwen2.5:7b"),
             reduce_api_key=os.environ["GROQ_API_KEY"],
             reduce_model_name=os.getenv("GROQ_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct"),
             score_anchors=_score_anchors(reviews),

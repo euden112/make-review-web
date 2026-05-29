@@ -10,6 +10,9 @@ const CATEGORY_LABELS = {
   optimization: '최적화',
   content: '콘텐츠 양',
   price_value: '가성비',
+  sound: '음향',
+  gameplay: '재미',
+  difficulty: '난이도',
 }
 
 const SENTIMENT_CONFIG = {
@@ -94,6 +97,59 @@ function PlaytimeBarChart({ buckets, isDark }) {
             <text x={cx} y={PAD.top + inner.h + 26} textAnchor="middle" fontSize={8} fill={axisColor}>
               {d?.label?.replace(/^[^\s]+\s/, '') || ''}
             </text>
+          </g>
+        )
+      })}
+    </svg>
+  )
+}
+
+// 카테고리별 점수를 다각형(레이더) 차트로 — 어느 축이 돌출/함몰됐는지 한눈에.
+// 절대 점수가 아니라 "이 게임 안에서" 강·약점 프로파일을 읽도록 한다.
+function AspectRadarChart({ aspects, isDark }) {
+  const n = aspects.length
+  if (n < 3) return null
+
+  const W = 340, H = 300, cx = 170, cy = 148, R = 92, MAX = 10
+  const labelR = R + 20
+  const stroke = isDark ? '#3a3a5e' : '#e5e7eb'
+  const labelColor = isDark ? '#e0e0e0' : '#374151'
+  const accent = '#6366f1'
+  const colorFor = (s) => (s >= 7 ? '#22c55e' : s >= 5 ? '#f5a623' : '#ef4444')
+
+  const angleFor = (i) => (-90 + (360 / n) * i) * (Math.PI / 180)
+  const pt = (i, r) => [cx + r * Math.cos(angleFor(i)), cy + r * Math.sin(angleFor(i))]
+  const polyPath = (r) =>
+    aspects.map((_, i) => { const p = pt(i, r); return `${i === 0 ? 'M' : 'L'}${p[0].toFixed(1)},${p[1].toFixed(1)}` }).join(' ') + ' Z'
+
+  const dataPath =
+    aspects.map((a, i) => { const p = pt(i, (Math.max(0, Math.min(MAX, a.score)) / MAX) * R); return `${i === 0 ? 'M' : 'L'}${p[0].toFixed(1)},${p[1].toFixed(1)}` }).join(' ') + ' Z'
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ maxHeight: 300 }}>
+      {[0.25, 0.5, 0.75, 1].map((rr, ri) => (
+        <path key={ri} d={polyPath(rr * R)} fill="none" stroke={stroke} strokeWidth={1} />
+      ))}
+      {aspects.map((_, i) => { const p = pt(i, R); return (
+        <line key={i} x1={cx} y1={cy} x2={p[0]} y2={p[1]} stroke={stroke} strokeWidth={1} />
+      ) })}
+
+      <path d={dataPath} fill={accent} fillOpacity={0.18} stroke={accent} strokeWidth={2} strokeLinejoin="round" />
+
+      {aspects.map((a, i) => {
+        const p = pt(i, (Math.max(0, Math.min(MAX, a.score)) / MAX) * R)
+        return <circle key={i} cx={p[0]} cy={p[1]} r={3.5} fill={colorFor(a.score)} />
+      })}
+
+      {aspects.map((a, i) => {
+        const lp = pt(i, labelR)
+        const cos = Math.cos(angleFor(i))
+        const anchor = Math.abs(cos) < 0.3 ? 'middle' : cos > 0 ? 'start' : 'end'
+        const label = CATEGORY_LABELS[a.key] || a.label || a.key
+        return (
+          <g key={i}>
+            <text x={lp[0]} y={lp[1] - 1} textAnchor={anchor} fontSize={11} fontWeight="bold" fill={labelColor}>{label}</text>
+            <text x={lp[0]} y={lp[1] + 11} textAnchor={anchor} fontSize={10} fontWeight="bold" fill={colorFor(a.score)}>{a.score?.toFixed(1)}</text>
           </g>
         )
       })}
@@ -714,27 +770,48 @@ function GameDetailPage({ isDark, toggleDark }) {
               </div>
             )}
 
-            {/* 카테고리별 세부 분석 */}
-            {summary.aspect_sentiment && Object.keys(summary.aspect_sentiment).length > 0 && (
-              <div className="bg-white dark:bg-[#1e1e2e] rounded-xl p-7 border border-gray-200 dark:border-[#2a2a3e] shadow-sm">
-                <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0] mb-4">카테고리별 분석</h2>
-                <div className="grid grid-cols-2 gap-3">
-                  {Object.entries(summary.aspect_sentiment).map(([key, value], i) => (
-                    <div key={i} className="flex items-center justify-between bg-gray-50 dark:bg-[#2a2a3e] rounded-lg px-4 py-2">
-                      <span className="text-sm text-gray-700 dark:text-[#e0e0e0] font-bold">
-                        {CATEGORY_LABELS[key] || key}
-                      </span>
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs text-gray-500 dark:text-gray-400">{value.label}</span>
-                        <span className="text-sm font-bold" style={{ color: value.score >= 7 ? '#22c55e' : value.score >= 5 ? '#f5a623' : '#ef4444' }}>
-                          {value.score?.toFixed(1)}
-                        </span>
-                      </div>
+            {/* 카테고리별 분석 — 게임 내 상대 강·약점 프로파일 (다각형 차트) */}
+            {summary.aspect_sentiment && Object.keys(summary.aspect_sentiment).length > 0 && (() => {
+              const aspects = Object.entries(summary.aspect_sentiment).map(([key, v]) => ({
+                key,
+                label: v.label,
+                score: typeof v.score === 'number' ? v.score : (Number(v.score) || 0),
+              }))
+              const sorted = [...aspects].sort((a, b) => b.score - a.score)
+              const strength = sorted[0]
+              const weakness = sorted[sorted.length - 1]
+              const labelOf = (a) => CATEGORY_LABELS[a.key] || a.label || a.key
+              return (
+                <div className="bg-white dark:bg-[#1e1e2e] rounded-xl p-7 border border-gray-200 dark:border-[#2a2a3e] shadow-sm">
+                  <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0] mb-1">카테고리별 분석</h2>
+                  <p className="text-xs text-gray-400 dark:text-gray-500 mb-4">이 게임 안에서의 상대적 강점과 약점</p>
+                  {aspects.length >= 3 ? (
+                    <div className="flex flex-col items-center">
+                      <AspectRadarChart aspects={aspects} isDark={isDark} />
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                        강점 <span className="font-bold" style={{ color: '#22c55e' }}>{labelOf(strength)}</span>
+                        <span className="mx-1.5 text-gray-300 dark:text-gray-600">·</span>
+                        약점 <span className="font-bold" style={{ color: '#ef4444' }}>{labelOf(weakness)}</span>
+                      </p>
                     </div>
-                  ))}
+                  ) : (
+                    <div className="grid grid-cols-2 gap-3">
+                      {aspects.map((a, i) => (
+                        <div key={i} className="flex items-center justify-between bg-gray-50 dark:bg-[#2a2a3e] rounded-lg px-4 py-2">
+                          <span className="text-sm text-gray-700 dark:text-[#e0e0e0] font-bold">{labelOf(a)}</span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-gray-500 dark:text-gray-400">{a.label}</span>
+                            <span className="text-sm font-bold" style={{ color: a.score >= 7 ? '#22c55e' : a.score >= 5 ? '#f5a623' : '#ef4444' }}>
+                              {a.score?.toFixed(1)}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
-              </div>
-            )}
+              )
+            })()}
           </>
         )}
 

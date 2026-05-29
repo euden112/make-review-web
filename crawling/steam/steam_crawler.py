@@ -1,7 +1,7 @@
 """
 Steam Game Review Crawler
 - crawling/game_list.json 에서 게임 목록 읽기 (steam_app_id 필드 사용)
-- language=koreana: 한국어 리뷰만 수집
+- language=koreana + english: 한국어 + 영어 리뷰 수집 (게임당 각 언어 최대 MAX_REVIEWS_PER_GAME)
 - 3-pool 전략: Pool1(헬프풀 긍정) + Pool2(헬프풀 부정) + Pool3(최신 전체)
 - 게임당 200개 리뷰, 파일 단위 저장 (재시작 시 기존 파일 스킵)
 - sentence_transformers 없음 — 한국어 키워드 매칭으로 카테고리 분류
@@ -53,51 +53,86 @@ FALLBACK_GAMES = {
     },
 }
 
-# 한국어 카테고리 키워드
+# 카테고리 키워드 — 한국어 + 영어 (substring 매칭, 모두 lower-case 비교)
+# 영어 키워드는 짧은 토큰("art", "bug" 등)이 오매치를 일으키지 않도록
+# 충분히 변별력 있는 어구(보통 5자 이상 또는 합성어)만 채택.
 GAME_CATEGORIES: dict[str, list[str]] = {
     "그래픽": [
         "그래픽", "비주얼", "화질", "아트", "그림체", "이펙트", "텍스처",
         "배경", "캐릭터 디자인", "예쁘", "아름답", "화려", "못생", "구리다",
         "조잡", "해상도", "렌더링",
+        "graphics", "visual", "visuals", "art style", "art-style", "artstyle",
+        "textures", "rendering", "resolution", "gorgeous", "stunning visuals",
+        "beautiful game", "ugly graphics",
     ],
     "조작감": [
         "조작", "조작감", "컨트롤", "키보드", "마우스", "패드", "반응속도",
         "인풋렉", "입력 딜레이", "움직임", "이동감", "직관적", "어색하",
         "불편하", "자연스럽", "손맛",
+        "controls", "control scheme", "keybinds", "key bindings", "input lag",
+        "responsive controls", "clunky controls", "gamepad", "controller support",
+        "mouse and keyboard", "movement feels",
     ],
     "최적화": [
         "최적화", "프레임", "프레임드랍", "버벅", "끊김", "렉", "로딩",
         "튕김", "크래시", "다운", "고사양", "저사양", "권장사양", "성능",
         "메모리", "cpu", "gpu", "fps",
+        "optimization", "optimisation", "optimized", "poorly optimized",
+        "unoptimized", "framerate", "frame rate", "fps drop", "low fps",
+        "stuttering", "stutters", "performance issues", "crashes",
+        "crash to desktop", "ctd", "loading times", "memory leak",
     ],
     "콘텐츠 양": [
         "콘텐츠", "볼륨", "플레이타임", "플레이 시간", "게임 시간",
         "엔드게임", "엔드컨텐츠", "후반부", "반복", "할 게 없", "금방 끝",
         "오래", "dlc", "업데이트", "신규 콘텐츠",
+        "content", "endgame", "end-game", "end game", "playtime", "play time",
+        "hours of content", "replayability", "replay value", "dlc",
+        "expansion", "short game", "long game", "lots to do", "nothing to do",
+        "grindy", "padded",
     ],
     "가성비": [
         "가성비", "가격", "할인", "세일", "환불", "비싸", "싸다", "저렴",
         "아깝", "돈 낭비", "정가", "원가", "지름",
+        "price", "value for money", "bang for buck", "worth the price",
+        "worth every penny", "overpriced", "not worth", "money's worth",
+        "full price", "on sale", "discount", "refund", "waste of money",
     ],
     "스토리": [
         "스토리", "이야기", "서사", "세계관", "설정", "분위기", "캐릭터",
         "주인공", "npc", "감동", "몰입", "지루", "결말", "복선", "전개",
+        "story", "narrative", "plot", "writing", "characters", "lore",
+        "worldbuilding", "world-building", "world building", "atmosphere",
+        "ending", "twist", "voice acting",
     ],
     "사운드": [
         "사운드", "음악", "bgm", "ost", "효과음", "성우", "더빙", "볼륨",
         "음질", "배경음",
+        "soundtrack", "music", "sound design", "audio", "voice acting",
+        "voice-acting", "voiceover", "sound effects", "sfx", "ambient sound",
+        "dubbing",
     ],
     "난이도": [
         "난이도", "어렵", "쉽다", "도전적", "소울라이크", "죽음", "패널티",
         "보스", "고통", "뉴비", "입문",
+        "difficulty", "difficult", "challenging", "punishing",
+        "frustrating difficulty", "too easy", "too hard", "souls-like",
+        "soulslike", "souls like", "git gud", "beginner friendly",
+        "newcomer friendly",
     ],
     "멀티플레이": [
         "멀티", "협동", "코옵", "온라인", "pvp", "서버", "핑", "매칭",
         "대기", "파티",
+        "multiplayer", "multi-player", "co-op", "coop", "pvp", "pve",
+        "matchmaking", "online play", "server", "lobby", "party system",
+        "cross-play", "crossplay",
     ],
     "버그": [
         "버그", "오류", "에러", "충돌", "불안정", "패치", "수정", "먹통",
         "씹힘", "꼬임",
+        "bugs", "buggy", "glitches", "glitchy", "broken mess",
+        "game breaking", "game-breaking", "unfinished", "unstable",
+        "needs patching", "needs a patch", "patched up",
     ],
 }
 
@@ -105,6 +140,11 @@ NEGATIVE_KEYWORDS = {
     "별로", "최악", "쓰레기", "환불", "망겜", "구림",
     "불편", "실망", "후회", "돈낭비", "비추", "하지마",
     "형편없", "끔찍", "짜증", "노답", "최하", "망함",
+    "garbage", "trash", "terrible", "awful", "horrible", "refund",
+    "regret", "waste of money", "do not buy", "don't buy", "skip this",
+    "skip it", "avoid", "disappointing", "disappointed", "broken mess",
+    "uninstalled", "not worth", "do not recommend", "would not recommend",
+    "not recommended", "boring", "worst",
 }
 
 # ============================================================
@@ -396,10 +436,16 @@ def collect_game(slug: str, app_id: str, name: str, game_list_id: int | None = N
     all_reviews: list[dict] = []
     seen: set[str] = set()
 
-    print(f"    [{slug}] 최신 리뷰 최대 {MAX_REVIEWS_PER_GAME}개 수집")
-
-    raw, _ = fetch_raw_reviews(app_id, max_count=MAX_REVIEWS_PER_GAME, filter_type="recent", review_type="all")
-    all_reviews.extend(parse_and_dedup(raw, seen, "최신 전체", slug))
+    for lang in ("koreana", "english"):
+        print(f"    [{slug}] {lang} 최신 리뷰 최대 {MAX_REVIEWS_PER_GAME}개 수집")
+        raw, _ = fetch_raw_reviews(
+            app_id,
+            max_count=MAX_REVIEWS_PER_GAME,
+            filter_type="recent",
+            review_type="all",
+            language=lang,
+        )
+        all_reviews.extend(parse_and_dedup(raw, seen, f"{lang} 전체", slug))
 
     print(f"  [{slug}] 완료 → {len(all_reviews)}개 저장")
 
@@ -487,7 +533,7 @@ def main():
     print("\n" + "=" * 60)
     print(f"  총 게임 수    : {len(entries)}")
     print(f"  게임당 최대   : {MAX_REVIEWS_PER_GAME}개")
-    print(f"  언어          : koreana (한국어)")
+    print(f"  언어          : koreana + english (한국어 + 영어)")
     print(f"  저장 위치     : {OUT_FILE}")
     print(f"  기존 수집     : {len(existing_data)}개 게임")
     print("=" * 60 + "\n")
