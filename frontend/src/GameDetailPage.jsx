@@ -115,7 +115,11 @@ function AspectRadarChart({ aspects, isDark }) {
   const stroke = isDark ? '#3a3a5e' : '#e5e7eb'
   const labelColor = isDark ? '#e0e0e0' : '#374151'
   const accent = '#6366f1'
-  const colorFor = (s) => (s >= 7 ? '#22c55e' : s >= 5 ? '#f5a623' : '#ef4444')
+  // 절대 점수가 아니라 "이 게임 평균 대비" 상대 강약으로 색을 정한다.
+  // 평균 위 = 강점(녹), 평균 아래 = 약점(적), 평균 근처 = 보통(회색).
+  const mean = aspects.reduce((s, a) => s + a.score, 0) / n
+  const NEUTRAL = isDark ? '#9ca3af' : '#9ca3af'
+  const relColor = (s) => { const d = s - mean; return d >= 0.3 ? '#22c55e' : d <= -0.3 ? '#ef4444' : NEUTRAL }
 
   const angleFor = (i) => (-90 + (360 / n) * i) * (Math.PI / 180)
   const pt = (i, r) => [cx + r * Math.cos(angleFor(i)), cy + r * Math.sin(angleFor(i))]
@@ -138,7 +142,7 @@ function AspectRadarChart({ aspects, isDark }) {
 
       {aspects.map((a, i) => {
         const p = pt(i, (Math.max(0, Math.min(MAX, a.score)) / MAX) * R)
-        return <circle key={i} cx={p[0]} cy={p[1]} r={3.5} fill={colorFor(a.score)} />
+        return <circle key={i} cx={p[0]} cy={p[1]} r={4} fill={relColor(a.score)} />
       })}
 
       {aspects.map((a, i) => {
@@ -146,11 +150,11 @@ function AspectRadarChart({ aspects, isDark }) {
         const cos = Math.cos(angleFor(i))
         const anchor = Math.abs(cos) < 0.3 ? 'middle' : cos > 0 ? 'start' : 'end'
         const label = CATEGORY_LABELS[a.key] || a.label || a.key
+        const c = relColor(a.score)
+        // 절대 수치는 기준이 불명확해 표기하지 않는다. 색(강/약)과 형상으로만 비교.
         return (
-          <g key={i}>
-            <text x={lp[0]} y={lp[1] - 1} textAnchor={anchor} fontSize={11} fontWeight="bold" fill={labelColor}>{label}</text>
-            <text x={lp[0]} y={lp[1] + 11} textAnchor={anchor} fontSize={10} fontWeight="bold" fill={colorFor(a.score)}>{a.score?.toFixed(1)}</text>
-          </g>
+          <text key={i} x={lp[0]} y={lp[1] + 3} textAnchor={anchor} fontSize={11} fontWeight="bold"
+            fill={c === NEUTRAL ? labelColor : c}>{label}</text>
         )
       })}
     </svg>
