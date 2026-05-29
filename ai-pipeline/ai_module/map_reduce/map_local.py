@@ -109,6 +109,9 @@ async def summarize_chunk_with_ollama(
     import os
     num_ctx = int(os.getenv("OLLAMA_NUM_CTX", "4096"))
     num_predict = int(os.getenv("OLLAMA_NUM_PREDICT", "900" if num_ctx <= 2048 else "2048"))
+    # 추출 단계는 결정성이 중요하다. 온도 0으로 두면 run마다 evidence가 흔들려
+    # aspect 점수 일관성이 떨어지는 문제를 줄인다. (env로 조정 가능.)
+    map_temperature = float(os.getenv("MAP_TEMPERATURE", "0"))
     # /api/chat handles the model's chat template internally and returns
     # plain text in message.content — avoids the empty-response bug seen
     # with /api/generate on instruction-tuned models (e.g. Gemma4).
@@ -128,7 +131,7 @@ async def summarize_chunk_with_ollama(
         # thinking 모델(qwen3 등)에서 thinking이 비활성화되지 않는다. top-level로 둔다.
         "think": False,
         "options": {
-            "temperature": 0.2,
+            "temperature": map_temperature,
             "num_predict": num_predict,
             "num_ctx": num_ctx,
             "think": False,

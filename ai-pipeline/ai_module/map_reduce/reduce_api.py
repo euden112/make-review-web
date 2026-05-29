@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -456,7 +457,9 @@ async def _generate_reduce_response(
             {"role": "user", "content": user_prompt},
         ],
         response_format={"type": "json_object"},
-        temperature=0.2,
+        # 온도 0: aspect delta·sentiment delta·버킷 텍스트가 run마다 흔들리는 일관성
+        # 문제를 줄인다. (env REDUCE_TEMPERATURE로 조정 가능.)
+        temperature=float(os.getenv("REDUCE_TEMPERATURE", "0")),
     )
 
 
@@ -527,9 +530,23 @@ def _evidence_subset(payloads: list[dict[str, Any]], *, limit: int = 80) -> list
                         "spoiler_risk": spoiler_risk,
                     }
                 )
-    polarity_rank = {"negative": 0, "positive": 1, "mixed": 2}
-    rows.sort(key=lambda item: (polarity_rank.get(str(item.get("polarity")), 3), str(item.get("aspect", "")), int(item.get("review_id") or 0)))
-    return rows[:limit]
+    # polarity별로 그룹화 후 라운드로빈 인터리브한다. 이전엔 부정 먼저 정렬 후 limit
+    # 컷이라, limit이 작은 playtime 버킷(8)에서 상위가 전부 부정으로 채워져 95% 긍정
+    # 게임인데도 요약/cons가 불만 일색이 되는 편향이 있었다. 긍정을 먼저 두어 긍정 우세
+    # 게임의 톤을 반영하되, 부정·mixed도 매 라운드 섞여 cons 재료도 보존한다.
+    buckets_by_pol: dict[str, list[dict[str, Any]]] = {"positive": [], "negative": [], "mixed": []}
+    for item in rows:
+        pol = str(item.get("polarity"))
+        buckets_by_pol.setdefault(pol if pol in buckets_by_pol else "mixed", []).append(item)
+    for pol in buckets_by_pol:
+        buckets_by_pol[pol].sort(key=lambda item: (str(item.get("aspect", "")), int(item.get("review_id") or 0)))
+    interleaved: list[dict[str, Any]] = []
+    order = ["positive", "negative", "mixed"]
+    while any(buckets_by_pol[p] for p in order):
+        for p in order:
+            if buckets_by_pol[p]:
+                interleaved.append(buckets_by_pol[p].pop(0))
+    return interleaved[:limit]
 
 
 def _signal_subset(payloads: list[dict[str, Any]], key: str) -> list[dict[str, Any]]:
@@ -1288,10 +1305,14 @@ def _compute_baseline_aspect_scores(
         total = sum(bucket.values())
         if total <= 0:
             continue
-        # 비율 기반 skew: (pos − neg) / (pos + neg + 1) ∈ [-1, +1]. 표본 크기 무관,
-        # 양·음 극단으로 보낼 수 있고 mixed는 분모만 키워 영향 희석.
+        # 비율 기반 skew: (pos − neg) / (pos + neg + 1) ∈ [-1, +1]. mixed는 분모만 키워 희석.
         skew = (bucket["positive"] - bucket["negative"]) / (bucket["positive"] + bucket["negative"] + 1)
-        score = baseline_neutral + skew * 2.0
+        # 표본 수축(shrinkage): 증거가 적은 aspect는 skew를 baseline 쪽으로 끌어당겨
+        # run마다 1~2건 차이로 점수가 크게 흔들리는 일관성 문제를 막는다.
+        # n이 충분히 크면 full skew, 작으면 0으로 수축. K는 절반-신뢰 표본 수.
+        _K = 5.0
+        confidence = total / (total + _K)
+        score = baseline_neutral + skew * 2.0 * confidence
         score = round(max(2.0, min(9.0, score)), 1)
         result[aspect] = {
             "label": ASPECT_LABELS.get(aspect, "리뷰"),
