@@ -333,7 +333,7 @@ async def _run_map(game_id: int, data: dict, ollama_url: str, model: str) -> dic
         prompt_version="json_v3_spoiler_safe_map",
         cache=_NullCache(),
         ollama_base_url=ollama_url,
-        max_concurrency=int(os.getenv("MAP_CONCURRENCY", "3")),
+        max_concurrency=int(os.getenv("MAP_CONCURRENCY", "1")),
     )
 
     grouped = _group_map_outputs_by_tags(map_results, tagged)
