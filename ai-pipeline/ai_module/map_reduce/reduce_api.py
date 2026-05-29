@@ -443,7 +443,7 @@ def classify_reduce_error(exc: Exception) -> tuple[str, bool]:
     return ("upstream_unavailable", True)
 
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True)
+@retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=2, min=2, max=60), reraise=True)
 async def _generate_reduce_response(
     client: AsyncGroq,
     model_name: str,
@@ -1259,6 +1259,7 @@ def _fallback_natural_items_from_evidence(
 def _compute_baseline_aspect_scores(
     evidence_items: list[dict[str, Any]],
     sentiment_anchor: float | None = None,
+    cumulative_counts: dict[str, dict[str, int]] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Evidence 카운트 + sentiment anchor 기반 결정론 기준점 산출.
 
@@ -1285,6 +1286,18 @@ def _compute_baseline_aspect_scores(
             cited_review_ids.setdefault(aspect, set()).add(rid)
         except (TypeError, ValueError):
             pass
+
+    # 누적 카운트가 주어지면(전체 리뷰의 카테고리 태그 집계) 해당 aspect의 pos/neg/mixed를
+    # 그것으로 덮어쓴다. 카테고리에 대응 없는 aspect(예: gameplay)는 신규 evidence 카운트 유지.
+    # 증분 요약 시 aspect 점수가 신규 배치만이 아니라 전체를 대표하게 한다.
+    if cumulative_counts:
+        for asp, cc in cumulative_counts.items():
+            if asp in ASPECT_LABELS:
+                counts[asp] = {
+                    "positive": int(cc.get("positive", 0)),
+                    "mixed": int(cc.get("mixed", 0)),
+                    "negative": int(cc.get("negative", 0)),
+                }
 
     # Sentiment anchor (0~100) → baseline_neutral (0~10) 선형 매핑.
     # 50% 추천 → 5.0, 90% → 6.6, 100% → 7.0. 기울기를 낮춰
@@ -1605,6 +1618,7 @@ async def run_feature_reduce_stage(
     prior_summary_text: str | None = None,
     representative_quotes: list[str] | None = None,
     map_summaries: list[str] | None = None,
+    cumulative_aspect_counts: dict[str, dict[str, int]] | None = None,
 ) -> FinalSummary:
     if map_summaries is not None and not grouped_summaries:
         grouped_summaries = {"all": map_summaries}
@@ -1719,6 +1733,7 @@ async def run_feature_reduce_stage(
         baseline_aspect_scores = _compute_baseline_aspect_scores(
             pre_evidence_items,
             sentiment_anchor=pre_sentiment_anchor,
+            cumulative_counts=cumulative_aspect_counts,
         )
         baseline_aspect_for_prompt = {
             aspect: {

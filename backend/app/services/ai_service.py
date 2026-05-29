@@ -207,6 +207,55 @@ async def _upsert_playtime_analysis(db, game_id: int, ai_result: FinalSummary, b
         db.add(PlaytimeAnalysis(**fields))
 
 
+def _cumulative_playtime_from_reviews(summary_reviews, steam_pid):
+    """전체(누적) Steam 리뷰에서 playtime 버킷 threshold + 버킷별 count/추천비율 산출.
+
+    증분 요약 시 파이프라인은 신규 리뷰만 보지만, playtime 버킷의 임계값·리뷰수·점수는
+    전체 리뷰를 대표해야 하므로(감성 앵커와 동일 철학) 여기서 누적 기준으로 계산한다.
+    버킷 요약 텍스트는 신규 evidence 기반(ai_result)을 그대로 쓰고, 점수/카운트/임계값만
+    이 누적값으로 덮어쓴다.
+    """
+    from ai_module.map_reduce.sampler import PlaytimeBuckets, MIN_REVIEWS_PER_BUCKET
+
+    pts = sorted(
+        float(r.playtime_hours)
+        for r in summary_reviews
+        if r.platform_id == steam_pid and r.playtime_hours and r.playtime_hours > 0
+    )
+    if len(pts) < MIN_REVIEWS_PER_BUCKET:
+        return None, None
+
+    def _pct(p):
+        idx = (p / 100) * (len(pts) - 1)
+        lo = int(idx)
+        hi = min(lo + 1, len(pts) - 1)
+        return pts[lo] + (pts[hi] - pts[lo]) * (idx - lo)
+
+    early_max = round(_pct(33), 1)
+    mid_max = round(_pct(66), 1)
+
+    def _bucket(pt):
+        return "early" if pt <= early_max else "mid" if pt <= mid_max else "late"
+
+    agg = {"early": [0, 0], "mid": [0, 0], "late": [0, 0]}  # [count, recommended]
+    for r in summary_reviews:
+        if r.platform_id != steam_pid or not r.playtime_hours or r.playtime_hours <= 0:
+            continue
+        b = _bucket(float(r.playtime_hours))
+        agg[b][0] += 1
+        if r.is_recommended is True:
+            agg[b][1] += 1
+
+    bucket_stats = {
+        name: {
+            "count": c,
+            "score": round(rec / c * 100) if c else None,
+        }
+        for name, (c, rec) in agg.items()
+    }
+    return PlaytimeBuckets(early_max=early_max, mid_max=mid_max), bucket_stats
+
+
 async def _upsert_critic_summary(db, game_id: int, ai_result: FinalSummary) -> None:
     """critic_summaries 테이블에 upsert."""
     if ai_result.critic is None:
@@ -389,6 +438,15 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
             # 6. 카테고리별 긍/부정 비율 집계
             category_total:    Counter = Counter()
             category_positive: Counter = Counter()
+            # 크롤러 한글 카테고리 → 파이프라인 aspect 키. 전체 리뷰의 카테고리 태그를 누적해
+            # aspect baseline을 신규 배치가 아닌 전체 기준으로 만든다(증분 대표성). gameplay는
+            # 대응 카테고리가 없어 신규 evidence 카운트로 폴백된다(reduce 쪽 처리).
+            _CATEGORY_TO_ASPECT = {
+                "그래픽": "graphics", "조작감": "controls", "최적화": "optimization",
+                "콘텐츠 양": "content", "스토리": "content", "가성비": "price_value",
+                "사운드": "sound", "난이도": "difficulty", "버그": "optimization",
+            }
+            cumulative_aspect_counts: dict[str, dict[str, int]] = {}
 
             for review in summary_reviews:
                 for item in (review.review_categories_json or []):
@@ -404,6 +462,10 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
                         category_total[str(category)] += 1
                         if sentiment == "positive":
                             category_positive[str(category)] += 1
+                        asp = _CATEGORY_TO_ASPECT.get(str(category))
+                        if asp:
+                            d = cumulative_aspect_counts.setdefault(asp, {"positive": 0, "negative": 0, "mixed": 0})
+                            d[sentiment if sentiment in ("positive", "negative", "mixed") else "mixed"] += 1
 
             top_categories = [
                 (cat, total, round(category_positive[cat] / total, 3))
@@ -457,6 +519,7 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
                 prior_summary_text=prior_summary_text,
                 score_anchors=score_anchors,
                 category_frequency=top_categories,
+                cumulative_aspect_counts=cumulative_aspect_counts,
             )
 
             # 10. Job 토큰/캐시 기록
@@ -542,7 +605,12 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
             db.add(new_summary)
 
             # 13. Sprint 4: playtime_analyses / critic_summaries 저장
-            await _upsert_playtime_analysis(db, game_id, ai_result, playtime_buckets)
+            # 버킷 임계값·점수·리뷰수는 전체(누적) 리뷰 기준으로 산출(증분 대표성 확보).
+            cum_buckets, cum_bucket_stats = _cumulative_playtime_from_reviews(summary_reviews, steam_pid)
+            if cum_buckets is not None:
+                await _upsert_playtime_analysis(db, game_id, ai_result, cum_buckets, cum_bucket_stats)
+            else:
+                await _upsert_playtime_analysis(db, game_id, ai_result, playtime_buckets)
             await _upsert_critic_summary(db, game_id, ai_result)
             await _upsert_user_summary(db, game_id, ai_result)
 
