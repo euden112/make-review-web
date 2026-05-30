@@ -6,6 +6,7 @@ from sqlalchemy.future import select
 from sqlalchemy import and_
 
 from app.core.database import get_db
+from app.core.auth import require_api_key
 from app.core.redis_client import get_json_cache, set_json_cache
 from app.models.domain import ExternalReview
 from app.api.v1.translate import _translate_one
@@ -68,7 +69,7 @@ async def _display_text(text: str) -> str:
     return await _translate_one(text)
 
 
-@router.get("/{game_id}/highlights")
+@router.get("/{game_id}/highlights", dependencies=[Depends(require_api_key)])
 async def get_highlights(
     game_id: int,
     limit: int = Query(5, ge=1, le=20),

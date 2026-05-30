@@ -78,8 +78,9 @@ def _find_input(platform: str) -> tuple[Path | None, str]:
     return None, "missing"
 
 
-async def _post_payload(client: httpx.AsyncClient, api_url: str, payload: dict[str, Any]) -> httpx.Response:
-    return await client.post(api_url, json=payload, timeout=TIMEOUT)
+async def _post_payload(client: httpx.AsyncClient, api_url: str, payload: dict[str, Any], api_key: str = "") -> httpx.Response:
+    headers = {"X-API-Key": api_key} if api_key else {}
+    return await client.post(api_url, json=payload, headers=headers, timeout=TIMEOUT)
 
 
 def _response_detail(response: httpx.Response) -> Any:
@@ -102,7 +103,7 @@ def _api_url(platform: str, host: str) -> str:
     return host.rstrip("/") + CONFIGS[platform]["api_path"]
 
 
-async def _send_raw(platform: str, path: Path, api_url: str, keep: bool) -> int:
+async def _send_raw(platform: str, path: Path, api_url: str, keep: bool, api_key: str = "") -> int:
     data = _load_json(path)
     review_count = _count_reviews(data)
     if review_count == 0:
@@ -118,7 +119,7 @@ async def _send_raw(platform: str, path: Path, api_url: str, keep: bool) -> int:
     print("=" * 55)
 
     async with httpx.AsyncClient() as client:
-        response = await _post_payload(client, api_url, data)
+        response = await _post_payload(client, api_url, data, api_key)
 
     print(f"  status   : {response.status_code}")
     print(f"  response : {_response_detail(response)}")
@@ -134,7 +135,7 @@ async def _send_raw(platform: str, path: Path, api_url: str, keep: bool) -> int:
     return 1
 
 
-async def _send_merged(platform: str, path: Path, api_url: str, keep: bool) -> int:
+async def _send_merged(platform: str, path: Path, api_url: str, keep: bool, api_key: str = "") -> int:
     data = _load_json(path)
     review_count = _count_reviews(data)
     if review_count == 0:
@@ -156,7 +157,7 @@ async def _send_merged(platform: str, path: Path, api_url: str, keep: bool) -> i
         for slug in list(data.keys()):
             payload = {slug: data[slug]}
             try:
-                response = await _post_payload(client, api_url, payload)
+                response = await _post_payload(client, api_url, payload, api_key)
             except (httpx.ConnectError, httpx.TimeoutException) as e:
                 print(f"  [FAIL] {slug}: {type(e).__name__}")
                 failed += 1
@@ -180,7 +181,7 @@ async def _send_merged(platform: str, path: Path, api_url: str, keep: bool) -> i
     return 0 if failed == 0 else 1
 
 
-async def send(platform: str, host: str, keep: bool = False) -> int:
+async def send(platform: str, host: str, keep: bool = False, api_key: str = "") -> int:
     api_url = _api_url(platform, host)
     path, mode = _find_input(platform)
     if path is None:
@@ -189,8 +190,8 @@ async def send(platform: str, host: str, keep: bool = False) -> int:
 
     try:
         if mode == "merged":
-            return await _send_merged(platform, path, api_url, keep=keep)
-        return await _send_raw(platform, path, api_url, keep=keep)
+            return await _send_merged(platform, path, api_url, keep=keep, api_key=api_key)
+        return await _send_raw(platform, path, api_url, keep=keep, api_key=api_key)
     except httpx.ConnectError:
         print(f"[{platform}] cannot connect to API server: {api_url}")
         return 1
@@ -208,6 +209,11 @@ if __name__ == "__main__":
         help="backend API host (default: http://localhost:8000)",
     )
     parser.add_argument("--keep", action="store_true", help="keep successfully sent merged entries")
+    parser.add_argument(
+        "--api-key",
+        default=os.getenv("API_SECRET_KEY", ""),
+        help="백엔드 API 키 (환경변수 API_SECRET_KEY로도 설정 가능)",
+    )
     args = parser.parse_args()
 
-    sys.exit(asyncio.run(send(args.platform, host=args.host, keep=args.keep)))
+    sys.exit(asyncio.run(send(args.platform, host=args.host, keep=args.keep, api_key=args.api_key)))

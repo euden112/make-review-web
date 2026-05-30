@@ -54,42 +54,42 @@ _GROQ_RATE_DELAY = 2.1  # ~28 RPM, free tier 30 RPM 이하 유지
 
 async def _summarize_chunk_with_groq(
     client: httpx.AsyncClient,
-    api_key: str,
+    rotator,
     model_name: str,
     prompt: str,
 ) -> tuple[str, int, int]:
-    # qwen3 계열은 기본적으로 chain-of-thought를 출력해 max_tokens를 잠식한다.
-    # /no_think 디렉티브로 reasoning 출력을 끈다.
+    # cloud의 키 로테이션(429 시 다음 키로 전환) + qwen3 계열 /no_think(reasoning 억제) 결합.
     is_qwen3 = "qwen3" in model_name.lower()
     system_content = "You are a JSON-only extractor. Return one valid JSON object and no markdown."
     if is_qwen3:
         system_content += " /no_think"
     user_content = prompt + (" /no_think" if is_qwen3 else "")
-    resp = await client.post(
-        _GROQ_API_URL,
-        headers={"Authorization": f"Bearer {api_key}"},
-        json={
-            "model": model_name,
-            "messages": [
-                {"role": "system", "content": system_content},
-                {"role": "user", "content": user_content},
-            ],
-            "temperature": 0.2,
-            "max_tokens": 2048,
-            "response_format": {"type": "json_object"},
-        },
-        timeout=60,
-    )
-    if resp.status_code == 429:
-        retry_after = float(resp.headers.get("retry-after", "10"))
-        print(f"  [Groq rate limit] {retry_after:.0f}s 대기...")
-        await asyncio.sleep(retry_after + 1)
-        return await _summarize_chunk_with_groq(client, api_key, model_name, prompt)
-    resp.raise_for_status()
-    data = resp.json()
-    content = data["choices"][0]["message"]["content"].strip()
-    usage = data.get("usage", {})
-    return content, usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0)
+    for attempt in range(rotator.key_count):
+        resp = await client.post(
+            _GROQ_API_URL,
+            headers={"Authorization": f"Bearer {rotator.current_key}"},
+            json={
+                "model": model_name,
+                "messages": [
+                    {"role": "system", "content": system_content},
+                    {"role": "user", "content": user_content},
+                ],
+                "temperature": 0.2,
+                "max_tokens": 2048,
+                "response_format": {"type": "json_object"},
+            },
+            timeout=60,
+        )
+        if resp.status_code == 429:
+            print(f"  [Groq 429] 키 {attempt + 1}/{rotator.key_count} 소진, 다음 키로 전환...")
+            rotator.rotate()
+            continue
+        resp.raise_for_status()
+        data = resp.json()
+        content = data["choices"][0]["message"]["content"].strip()
+        usage = data.get("usage", {})
+        return content, usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0)
+    raise RuntimeError("모든 Groq API 키가 rate limit에 걸렸습니다.")
 
 
 async def _run_map_stage_groq(
@@ -101,6 +101,8 @@ async def _run_map_stage_groq(
     prompt_version: str,
     groq_api_key: str,
 ) -> list[MapResult]:
+    from ai_module.map_reduce.key_rotator import GroqKeyRotator
+    rotator = GroqKeyRotator.from_key_string(groq_api_key)
     failure_counts: dict[str, int] = {
         "call_failed": 0,
         "map_llm_valid_chunks": 0,
@@ -138,7 +140,7 @@ async def _run_map_stage_groq(
                 try:
                     raw, prompt_tok, comp_tok = await _summarize_chunk_with_groq(
                         client,
-                        groq_api_key,
+                        rotator,
                         model_name,
                         prompt if attempt_no == 0 else retry_prompt,
                     )
@@ -258,20 +260,22 @@ def _chunk_by_bucket(tagged):
     return all_chunks
 
 
-def _fetch_reviews(cloud_url: str, game_id: int, force: bool) -> dict:
+def _fetch_reviews(cloud_url: str, game_id: int, force: bool, api_key: str = "") -> dict:
     resp = requests.get(
         f"{cloud_url}/api/v1/games/{game_id}/reviews-for-map",
         params={"force": "true" if force else "false"},
+        headers={"X-API-Key": api_key} if api_key else {},
         timeout=60,
     )
     resp.raise_for_status()
     return resp.json()
 
 
-def _post_reduce(cloud_url: str, game_id: int, payload: dict) -> dict:
+def _post_reduce(cloud_url: str, game_id: int, payload: dict, api_key: str = "") -> dict:
     resp = requests.post(
         f"{cloud_url}/api/v1/games/{game_id}/reduce",
         json=payload,
+        headers={"X-API-Key": api_key} if api_key else {},
         timeout=30,
     )
     resp.raise_for_status()
@@ -495,6 +499,11 @@ async def main():
         help="Groq API 키 (환경변수 GROQ_API_KEY로도 설정 가능)",
     )
     parser.add_argument(
+        "--api-key",
+        default=os.getenv("API_SECRET_KEY", ""),
+        help="클라우드 백엔드 API 키 (환경변수 API_SECRET_KEY로도 설정 가능)",
+    )
+    parser.add_argument(
         "--groq-model",
         default=os.getenv("GROQ_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct"),
         help="Groq map 모델명",
@@ -536,7 +545,7 @@ async def main():
     for game_id in game_ids:
         print(f"\n=== game_id={game_id} ===")
         try:
-            data = _fetch_reviews(cloud_url, game_id, args.force)
+            data = _fetch_reviews(cloud_url, game_id, args.force, args.api_key)
 
             if data.get("status") == "no_new_reviews":
                 print("  skip: 새 리뷰 없음")
@@ -556,7 +565,7 @@ async def main():
             chunks  = payload["map_stats"]["chunk_count"]
             print(f"  map 완료: {chunks} chunks | tokens in={in_tok} out={out_tok}")
 
-            result = _post_reduce(cloud_url, game_id, payload)
+            result = _post_reduce(cloud_url, game_id, payload, args.api_key)
             print(f"  reduce 전송: {result}")
             ok += 1
 

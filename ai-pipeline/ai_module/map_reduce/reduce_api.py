@@ -9,8 +9,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+import groq as _groq_module
 from groq import AsyncGroq
 from tenacity import retry, stop_after_attempt, wait_exponential
+from ai_module.map_reduce.key_rotator import GroqKeyRotator
 
 from ai_module.map_reduce.map_schema import SPOILER_TERM_PATTERNS, _redact_spoiler_terms
 
@@ -625,7 +627,7 @@ def _build_feature_prompt(
 
 async def _run_feature_json(
     *,
-    client: AsyncGroq,
+    rotator: GroqKeyRotator,
     model_name: str,
     feature: str,
     prompt: str,
@@ -636,26 +638,32 @@ async def _run_feature_json(
         "Every natural-language field must be grounded in the supplied evidence. "
         "When language=ko, write detailed Korean sentences using concrete review evidence, not vague category summaries."
     )
-    response = await asyncio.wait_for(
-        _generate_reduce_response(client, model_name, system_prompt, prompt),
-        timeout=timeout_sec,
-    )
-    raw_text = (response.choices[0].message.content or "").strip()
-    parsed = _safe_parse_json(raw_text)
-    usage = {
-        "requests": 1,
-        "input_tokens": int(response.usage.prompt_tokens or 0),
-        "output_tokens": int(response.usage.completion_tokens or 0),
-        "retry": 0,
-    }
-    logger.info(
-        "feature reduce completed: feature=%s input_tokens=%d output_tokens=%d chars=%d",
-        feature,
-        usage["input_tokens"],
-        usage["output_tokens"],
-        len(raw_text),
-    )
-    return parsed, usage
+    last_exc: Exception | None = None
+    for attempt in range(rotator.key_count):
+        client = rotator.make_client()
+        try:
+            response = await asyncio.wait_for(
+                _generate_reduce_response(client, model_name, system_prompt, prompt),
+                timeout=timeout_sec,
+            )
+            raw_text = (response.choices[0].message.content or "").strip()
+            parsed = _safe_parse_json(raw_text)
+            usage = {
+                "requests": 1,
+                "input_tokens": int(response.usage.prompt_tokens or 0),
+                "output_tokens": int(response.usage.completion_tokens or 0),
+                "retry": attempt,
+            }
+            logger.info(
+                "feature reduce completed: feature=%s input_tokens=%d output_tokens=%d chars=%d key_index=%d",
+                feature, usage["input_tokens"], usage["output_tokens"], len(raw_text), attempt,
+            )
+            return parsed, usage
+        except _groq_module.RateLimitError as e:
+            last_exc = e
+            logger.warning("Groq 429 on feature=%s key %d/%d, rotating...", feature, attempt + 1, rotator.key_count)
+            rotator.rotate()
+    raise last_exc
 
 
 def _bucket_to_dict(bucket: BucketSummary | None) -> dict[str, Any] | None:
@@ -1685,7 +1693,7 @@ async def run_feature_reduce_stage(
     if map_summaries is not None and not grouped_summaries:
         grouped_summaries = {"all": map_summaries}
 
-    client = AsyncGroq(api_key=api_key)
+    rotator = GroqKeyRotator.from_key_string(api_key)
     user_payloads = _parse_map_payloads(grouped_summaries.get("user") or grouped_summaries.get("all", []))
     critic_payloads = _parse_map_payloads(grouped_summaries.get("critic", []))
     early_payloads = _parse_map_payloads(grouped_summaries.get("early", []))
@@ -1705,7 +1713,7 @@ async def run_feature_reduce_stage(
             "caution_for": "array of 3-5 objects {label: short Korean player-type phrase to be cautious, reason: one concrete Korean sentence grounded in this game's evidence with review_id when available}",
         }
         user_data, usage["user"] = await _run_feature_json(
-            client=client,
+            rotator=rotator,
             model_name=model_name,
             feature="user",
             timeout_sec=timeout_sec,
@@ -1733,7 +1741,7 @@ async def run_feature_reduce_stage(
                 "evaluation_criteria": "4-6 strings",
             }
             critic_data, usage["critic"] = await _run_feature_json(
-                client=client,
+                rotator=rotator,
                 model_name=model_name,
                 feature="critic",
                 timeout_sec=timeout_sec,
@@ -1767,7 +1775,7 @@ async def run_feature_reduce_stage(
         playtime_data: dict[str, Any] = {}
         if sum(1 for is_valid in valid_playtime_buckets.values() if is_valid) >= 2:
             playtime_data, usage["playtime"] = await _run_feature_json(
-                client=client,
+                rotator=rotator,
                 model_name=model_name,
                 feature="playtime",
                 timeout_sec=timeout_sec,
@@ -1797,7 +1805,7 @@ async def run_feature_reduce_stage(
                 if not _is_degenerate_bucket(playtime_data.get(_bn)):
                     continue
                 _retry_data, _retry_usage = await _run_feature_json(
-                    client=client,
+                    rotator=rotator,
                     model_name=model_name,
                     feature="playtime",
                     timeout_sec=timeout_sec,
@@ -1868,7 +1876,7 @@ async def run_feature_reduce_stage(
             "keywords": "6-8 evidence-backed topics; prefer specific evidence topics over broad genre labels",
         }
         final_data, usage["final"] = await _run_feature_json(
-            client=client,
+            rotator=rotator,
             model_name=model_name,
             feature="final",
             timeout_sec=timeout_sec,
