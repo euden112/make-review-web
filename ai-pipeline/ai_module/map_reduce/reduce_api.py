@@ -289,6 +289,11 @@ class FinalSummary:
     critic: BucketSummary | None = None
     # B안: user 전용 요약 (unified body 폐지 후 "유저 리뷰 요약" 섹션의 데이터원)
     user: BucketSummary | None = None
+    # "이런 사람에게 추천": user reduce가 생성하는 game별 플레이어 유형 + 근거.
+    # 각 항목 {label, reason}. (이전엔 생성 후 폐기되어 엔드포인트가 카테고리별
+    # 하드코딩 문구를 써 모든 게임이 동일했음 → 실데이터로 교체.)
+    recommended_for: list[dict[str, str]] = field(default_factory=list)
+    caution_for: list[dict[str, str]] = field(default_factory=list)
     # 메타
     input_tokens: int = 0
     output_tokens: int = 0
@@ -1292,17 +1297,23 @@ def _compute_baseline_aspect_scores(
         except (TypeError, ValueError):
             pass
 
-    # 누적 카운트가 주어지면(전체 리뷰의 카테고리 태그 집계) 해당 aspect의 pos/neg/mixed를
-    # 그것으로 덮어쓴다. 카테고리에 대응 없는 aspect(예: gameplay)는 신규 evidence 카운트 유지.
-    # 증분 요약 시 aspect 점수가 신규 배치만이 아니라 전체를 대표하게 한다.
+    # aspect별 polarity는 map LLM evidence(문장 단위 판정)를 우선한다.
+    # 누적 카운트(crawler 카테고리 태그)는 sentiment를 리뷰 전체/키워드 기준으로 붙여
+    # default-positive 편향이 크다(예: 최적화 불만이 많은데도 긍정 23:부정 1). 이를 그대로
+    # 덮어쓰면 불만 aspect가 긍정으로 오염돼 점수 역전이 발생한다. 따라서 map evidence가
+    # 있는 aspect는 map polarity를 유지하고, map이 다루지 않은 aspect만 누적으로 폴백한다.
     if cumulative_counts:
         for asp, cc in cumulative_counts.items():
-            if asp in ASPECT_LABELS:
-                counts[asp] = {
-                    "positive": int(cc.get("positive", 0)),
-                    "mixed": int(cc.get("mixed", 0)),
-                    "negative": int(cc.get("negative", 0)),
-                }
+            if asp not in ASPECT_LABELS:
+                continue
+            map_bucket = counts.get(asp)
+            if map_bucket and sum(map_bucket.values()) > 0:
+                continue  # map polarity 우선
+            counts[asp] = {
+                "positive": int(cc.get("positive", 0)),
+                "mixed": int(cc.get("mixed", 0)),
+                "negative": int(cc.get("negative", 0)),
+            }
 
     # Sentiment anchor (0~100) → baseline_neutral (0~10) 선형 매핑.
     # 50% 추천 → 5.0, 90% → 6.6, 100% → 7.0. 기울기를 낮춰
@@ -1567,6 +1578,52 @@ def _has_min_evidence(payloads: list[dict[str, Any]], minimum: int = 5) -> bool:
     return len(_evidence_subset(payloads, limit=minimum)) >= minimum
 
 
+def _is_degenerate_bucket(obj: Any) -> bool:
+    """LLM이 버킷을 빈 pros·cons로 'phone in'한 경우 탐지.
+
+    early+mid+late를 단일 호출·단일 JSON으로 생성하면 마지막 버킷(주로 late)이
+    근거가 충분(_has_min_evidence 통과)해도 빈 배열 + 필러 요약으로 degrade된다.
+    pros·cons가 둘 다 비면 degenerate로 보고 단독 재호출 대상으로 삼는다.
+    """
+    if not isinstance(obj, dict):
+        return False
+    pros = obj.get("pros") or []
+    cons = obj.get("cons") or []
+    return len(pros) == 0 and len(cons) == 0
+
+
+def _parse_player_targets(raw: Any, *, limit: int = 5) -> list[dict[str, str]]:
+    """user reduce의 recommended_for/caution_for를 {label, reason} 리스트로 정규화.
+
+    LLM이 객체 배열을 주는 게 기본이나, 문자열 배열로 오는 경우도 방어적으로 처리한다.
+    스포일러/비속어는 _sanitize_public_text로 살균하고, label 없는 항목은 버린다.
+    """
+    if not isinstance(raw, list):
+        return []
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for item in raw:
+        label = ""
+        reason = ""
+        if isinstance(item, dict):
+            label = str(item.get("label") or item.get("type") or item.get("player_type") or "").strip()
+            reason = str(item.get("reason") or item.get("summary") or item.get("why") or "").strip()
+        elif isinstance(item, str):
+            label = item.strip()
+        if not label:
+            continue
+        label = _sanitize_public_text(label)
+        reason = _sanitize_public_text(reason) if reason else ""
+        key = label.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"label": label, "reason": reason})
+        if len(out) >= limit:
+            break
+    return out
+
+
 def _bucket_stats(payloads: list[dict[str, Any]]) -> tuple[float | None, str | None, int]:
     """버킷 map payload들에서 결정론 sentiment_score·label·review_count 산출.
 
@@ -1644,8 +1701,8 @@ async def run_feature_reduce_stage(
             "pros": "4-5 concrete evidence-backed Korean strings with situation/detail, not labels",
             "cons": "3-4 concrete evidence-backed Korean strings with failure mode or frustration detail",
             "keywords": "6-8 evidence-backed topics; include specific terms like boss, area, crash, pathfinding when present",
-            "recommended_for": "3-5 evidence-backed player types with concrete reason",
-            "caution_for": "3-5 evidence-backed caveats with concrete reason",
+            "recommended_for": "array of 3-5 objects {label: short Korean player-type phrase (예: '오픈월드 자유도를 즐기는 플레이어'), reason: one concrete Korean sentence grounded in this game's evidence with review_id when available}",
+            "caution_for": "array of 3-5 objects {label: short Korean player-type phrase to be cautious, reason: one concrete Korean sentence grounded in this game's evidence with review_id when available}",
         }
         user_data, usage["user"] = await _run_feature_json(
             client=client,
@@ -1728,6 +1785,40 @@ async def run_feature_reduce_stage(
                     evidence_limit=0,
                 ),
             )
+
+        # 마지막-버킷 degrade 보정: 유효 버킷(evidence≥5)인데 결합 호출 결과 pros·cons가
+        # 모두 비면 그 버킷만 단독 재호출한다(경쟁 버킷 없는 격리 프롬프트 → full effort).
+        # 재호출도 degenerate면 필러 대신 null 저장(정직하게 '데이터 부족' 표기).
+        if isinstance(playtime_data, dict):
+            _pt_ev = {"early": early_payloads, "mid": mid_payloads, "late": late_payloads}
+            for _bn in ("early", "mid", "late"):
+                if not valid_playtime_buckets[_bn]:
+                    continue
+                if not _is_degenerate_bucket(playtime_data.get(_bn)):
+                    continue
+                _retry_data, _retry_usage = await _run_feature_json(
+                    client=client,
+                    model_name=model_name,
+                    feature="playtime",
+                    timeout_sec=timeout_sec,
+                    prompt=_build_feature_prompt(
+                        feature="playtime",
+                        language_code=language_code,
+                        payloads=[],
+                        output_contract={_bn: "object with 3-4 sentence summary/pros/cons/keywords or null"},
+                        extra={
+                            "valid_buckets": {_bn: True},
+                            f"{_bn}_evidence": _evidence_subset(_pt_ev[_bn], limit=8),
+                        },
+                        evidence_limit=0,
+                    ),
+                )
+                _retry_bucket = _retry_data.get(_bn) if isinstance(_retry_data, dict) else None
+                playtime_data[_bn] = _retry_bucket if not _is_degenerate_bucket(_retry_bucket) else None
+                _pu = usage.setdefault("playtime", {})
+                for _k, _v in (_retry_usage or {}).items():
+                    if isinstance(_v, (int, float)):
+                        _pu[_k] = _pu.get(_k, 0) + _v
 
         # Evidence 기반 baseline 사전 산출: aspect 점수와 sentiment anchor.
         # LLM은 이 baseline을 입력으로 받아 인용 근거가 있는 작은 delta만 제안한다.
@@ -1922,8 +2013,15 @@ async def run_feature_reduce_stage(
         pt_payloads = {"early": early_payloads, "mid": mid_payloads, "late": late_payloads}
         playtime_buckets_out: dict[str, BucketSummary | None] = {}
         for _name in ("early", "mid", "late"):
+            _raw_bucket = playtime_data.get(_name) if isinstance(playtime_data, dict) else None
+            # invalid 버킷(evidence<5)은 LLM이 valid_buckets 지시를 무시하고 필러 객체를 채워
+            # 반환할 수 있다. 그대로 저장하면 pros·cons 빈 필러 요약이 노출되므로,
+            # 유효하지 않거나 pros·cons가 모두 빈 degenerate면 null(=데이터 부족)로 버린다.
+            if not valid_playtime_buckets.get(_name) or _is_degenerate_bucket(_raw_bucket):
+                playtime_buckets_out[_name] = None
+                continue
             _b = _sanitize_bucket(
-                _parse_feature_bucket(playtime_data.get(_name) if isinstance(playtime_data, dict) else None),
+                _parse_feature_bucket(_raw_bucket),
                 final_evidence_index,
             )
             if _b is not None:
@@ -1947,6 +2045,12 @@ async def run_feature_reduce_stage(
             playtime_late=playtime_buckets_out["late"],
             critic=critic_bucket,
             user=user_bucket,
+            recommended_for=_parse_player_targets(
+                user_data.get("recommended_for") if isinstance(user_data, dict) else None
+            ),
+            caution_for=_parse_player_targets(
+                user_data.get("caution_for") if isinstance(user_data, dict) else None
+            ),
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             reduce_usage=usage,
