@@ -115,7 +115,7 @@ function AspectRadarChart({ aspects, isDark }) {
   const n = aspects.length
   if (n < 3) return null
 
-  const W = 340, H = 300, cx = 170, cy = 148, R = 92, MAX = 10
+  const W = 340, H = 300, cx = 170, cy = 148, R = 92
   const labelR = R + 20
   const stroke = isDark ? '#3a3a5e' : '#e5e7eb'
   const labelColor = isDark ? '#e0e0e0' : '#374151'
@@ -125,9 +125,25 @@ function AspectRadarChart({ aspects, isDark }) {
   // 근거 없는(missing) 축은 평균값으로 채워 형상이 왜곡되지 않게 하고 회색으로 표시한다.
   const present = aspects.filter((a) => !a.missing && Number.isFinite(a.score))
   const mean = present.length ? present.reduce((s, a) => s + a.score, 0) / present.length : 5
+  const vals = present.map((a) => a.score)
+  const lo = vals.length ? Math.min(...vals) : 0
+  const hi = vals.length ? Math.max(...vals) : 10
+  const spread = hi - lo
   const NEUTRAL = '#9ca3af'
-  const scoreOf = (a) => (a.missing || !Number.isFinite(a.score) ? mean : a.score)
+  // 반지름 = 절대 점수가 아니라 "이 게임 안에서의 상대 위치". 점수가 baseline 근처(절대 6~8)로
+  // 뭉쳐 정다각형처럼 보이던 문제를, 게임 내 min-max로 펴서 능력치 프로파일처럼 강점=꼭짓점·
+  // 약점=안쪽으로 보이게 한다. FLOOR로 최약체도 0이 되지 않게(빈 축 방지) 하고, spread가 작으면
+  // (고른 게임) 과장 없이 균일(FLAT) 표시한다. missing 축은 FLOOR로 찍어 가짜 봉우리를 막는다.
+  const FLOOR = 0.55       // 최약 present 축: 0에 안 닿게 + min-max 과장 완화(작은 차가 floor↔꼭짓점으로 벌어지던 문제)
+  const FLAT = 0.72        // 분포 고르면(spread<0.8) 균일 표시
+  const MISSING_R = 0      // 데이터 부족 축은 꼭짓점을 중앙으로 붙여(반지름 0) 완전히 함몰 표시
+  const radiusNorm = (a) => {
+    if (a.missing || !Number.isFinite(a.score)) return MISSING_R
+    if (spread < 0.8) return FLAT
+    return FLOOR + 0.45 * ((a.score - lo) / spread)
+  }
   const relColor = (a) => { if (a.missing) return NEUTRAL; const d = a.score - mean; return d >= 0.3 ? '#22c55e' : d <= -0.3 ? '#ef4444' : NEUTRAL }
+  const tierOf = (a) => { if (a.missing) return null; const d = a.score - mean; return d >= 0.3 ? '강점' : d <= -0.3 ? '약점' : '보통' }
 
   const angleFor = (i) => (-90 + (360 / n) * i) * (Math.PI / 180)
   const pt = (i, r) => [cx + r * Math.cos(angleFor(i)), cy + r * Math.sin(angleFor(i))]
@@ -135,7 +151,7 @@ function AspectRadarChart({ aspects, isDark }) {
     aspects.map((_, i) => { const p = pt(i, r); return `${i === 0 ? 'M' : 'L'}${p[0].toFixed(1)},${p[1].toFixed(1)}` }).join(' ') + ' Z'
 
   const dataPath =
-    aspects.map((a, i) => { const p = pt(i, (Math.max(0, Math.min(MAX, scoreOf(a))) / MAX) * R); return `${i === 0 ? 'M' : 'L'}${p[0].toFixed(1)},${p[1].toFixed(1)}` }).join(' ') + ' Z'
+    aspects.map((a, i) => { const p = pt(i, radiusNorm(a) * R); return `${i === 0 ? 'M' : 'L'}${p[0].toFixed(1)},${p[1].toFixed(1)}` }).join(' ') + ' Z'
 
   return (
     <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ maxHeight: 300 }}>
@@ -149,7 +165,7 @@ function AspectRadarChart({ aspects, isDark }) {
       <path d={dataPath} fill={accent} fillOpacity={0.18} stroke={accent} strokeWidth={2} strokeLinejoin="round" />
 
       {aspects.map((a, i) => {
-        const p = pt(i, (Math.max(0, Math.min(MAX, scoreOf(a))) / MAX) * R)
+        const p = pt(i, radiusNorm(a) * R)
         const c = relColor(a)
         // 근거 없는 축은 속 빈 회색 점으로 구분.
         return <circle key={i} cx={p[0]} cy={p[1]} r={4} fill={a.missing ? 'none' : c} stroke={c} strokeWidth={a.missing ? 1.5 : 0} />
@@ -161,13 +177,16 @@ function AspectRadarChart({ aspects, isDark }) {
         const anchor = Math.abs(cos) < 0.3 ? 'middle' : cos > 0 ? 'start' : 'end'
         const label = CATEGORY_LABELS[a.key] || a.label || a.key
         const c = relColor(a)
-        // 절대 수치는 기준이 불명확해 표기하지 않는다. 색(강/약)과 형상으로만 비교.
+        const tier = tierOf(a)
+        // 절대 수치는 기준이 불명확해 표기하지 않는다. 색·형상 + 상대 tier(강점/보통/약점)로만 비교.
         return (
           <g key={i}>
-            <text x={lp[0]} y={lp[1] + (a.missing ? -2 : 3)} textAnchor={anchor} fontSize={11} fontWeight="bold"
+            <text x={lp[0]} y={lp[1] + (a.missing || tier ? -2 : 3)} textAnchor={anchor} fontSize={11} fontWeight="bold"
               fill={c === NEUTRAL ? labelColor : c}>{label}</text>
-            {a.missing && (
-              <text x={lp[0]} y={lp[1] + 9} textAnchor={anchor} fontSize={8} fill={NEUTRAL}>정보 없음</text>
+            {a.missing ? (
+              <text x={lp[0]} y={lp[1] + 9} textAnchor={anchor} fontSize={8} fill={NEUTRAL}>데이터 부족</text>
+            ) : (
+              <text x={lp[0]} y={lp[1] + 9} textAnchor={anchor} fontSize={8} fontWeight="bold" fill={c}>{tier}</text>
             )}
           </g>
         )
@@ -627,6 +646,17 @@ function GameDetailPage({ isDark, toggleDark }) {
             {game?.canonical_title || ''}
           </h1>
 
+          {game?.tags?.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 mb-3">
+              {game.tags.slice(0, 8).map((t, i) => (
+                <span key={i} className="px-2.5 py-0.5 rounded-full text-xs font-semibold"
+                  style={{ background: 'rgba(99,102,241,0.18)', color: '#c7d2fe', border: '1px solid rgba(99,102,241,0.35)' }}>
+                  {t}
+                </span>
+              ))}
+            </div>
+          )}
+
           {buySignal?.is_good_timing && (
             <div className="flex items-center gap-2 mb-3 flex-wrap">
               <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black"
@@ -684,10 +714,11 @@ function GameDetailPage({ isDark, toggleDark }) {
 
         {!loading && summary && (
           <>
-            {/* 키워드 (태그) 별도 섹션 — AI 종합 요약은 유저 리뷰 요약과 중복이라 제거 */}
+            {/* 리뷰 토픽 — 리뷰 근거에서 추출한 가변 토픽. 상단 장르 칩(Steam 인기 태그)과 구분. */}
             {summary.keywords && summary.keywords.length > 0 && (
               <div className="bg-white dark:bg-[#1e1e2e] rounded-xl p-7 border border-gray-200 dark:border-[#2a2a3e] shadow-sm">
-                <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0] mb-3">키워드</h2>
+                <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0] mb-1">리뷰 토픽</h2>
+                <p className="text-xs text-gray-400 dark:text-gray-500 mb-3">리뷰에서 자주 언급된 내용</p>
                 <div className="flex flex-wrap gap-2">
                   {summary.keywords.map((kw, i) => (
                     <span key={i} className="text-xs px-2 py-1 rounded-full bg-blue-50 dark:bg-[#1a2a4a] text-blue-600 dark:text-blue-300 border border-blue-200 dark:border-blue-700">
