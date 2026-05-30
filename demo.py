@@ -46,7 +46,8 @@ ROOT = Path(__file__).resolve().parent
 CRAWLING_DIR = ROOT / "crawling"
 BACKEND_URL = "http://localhost:8000"
 # Map/Reduce 분리: Map은 로컬 GPU Ollama(docker-compose.map.yml), Reduce는 backend(Groq).
-DEFAULT_LOCAL_MAP_MODEL = "qwen2.5:7b"
+# 로컬 map 기본 모델 = gemma4:e4b (A/B 결과 qwen2.5:7b 대비 ~18% 빠르고 JSON 준수 우위).
+DEFAULT_LOCAL_MAP_MODEL = "gemma4:e4b"
 MAP_COMPOSE = "docker-compose.map.yml"
 OLLAMA_CONTAINER = "capstone_ollama_map"
 OLLAMA_URL = "http://localhost:11434"

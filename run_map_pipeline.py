@@ -474,12 +474,20 @@ async def main():
     )
     parser.add_argument(
         "--model",
-        default=os.getenv("LOCAL_MAP_MODEL", "qwen2.5:7b"),
-        help="로컬 Ollama 모델명",
+        default=os.getenv("LOCAL_MAP_MODEL", "gemma4:e4b"),
+        help="로컬 Ollama 모델명 (map A/B 결과 gemma4:e4b가 속도·JSON준수 우위)",
     )
     parser.add_argument(
         "--groq-map", action="store_true",
-        help="map 단계를 Groq API로 실행 (로컬 GPU 불필요)",
+        help="map 단계를 Groq API로 강제 실행 (= --map-route groq)",
+    )
+    parser.add_argument(
+        "--map-route", choices=["auto", "local", "groq"], default="auto",
+        help="map 라우팅. auto=force/대형 배치는 로컬(TPM 회피), 소형 증분은 Groq. local/groq=강제",
+    )
+    parser.add_argument(
+        "--groq-review-threshold", type=int, default=80,
+        help="auto 라우팅: 이 리뷰 수 이하 증분은 Groq map (초과/force는 로컬)",
     )
     parser.add_argument(
         "--groq-api-key",
@@ -493,22 +501,35 @@ async def main():
     )
     args = parser.parse_args()
 
-    if args.groq_map and not args.groq_api_key:
-        print("ERROR: --groq-map 사용 시 --groq-api-key 또는 GROQ_API_KEY 환경변수가 필요합니다.")
+    # --groq-map은 하위호환: --map-route groq와 동일하게 취급
+    if args.groq_map:
+        args.map_route = "groq"
+    if args.map_route == "groq" and not args.groq_api_key:
+        print("ERROR: groq 라우팅에는 --groq-api-key 또는 GROQ_API_KEY 환경변수가 필요합니다.")
         sys.exit(1)
 
     cloud_url = args.cloud_url.rstrip("/")
-    use_groq = args.groq_map
-    map_model = args.groq_model if use_groq else args.model
+
+    def _route_to_groq(review_count: int) -> bool:
+        # 정책: 토큰 폭증하는 첫/전체 재처리(force)·대형 배치는 로컬(Groq free TPM 429 회피),
+        # 토큰 적은 소형 증분은 Groq map으로 보내 로컬 GPU 없이도 처리한다.
+        if args.map_route == "local":
+            return False
+        if args.map_route == "groq":
+            return bool(args.groq_api_key)
+        # auto: force/대형은 로컬, 소형 증분만 Groq
+        if not args.groq_api_key or args.force:
+            return False
+        return review_count <= args.groq_review_threshold
 
     if args.all:
         resp = requests.get(f"{cloud_url}/api/v1/games/", timeout=30)
         resp.raise_for_status()
         game_ids = [g["id"] for g in resp.json()]
-        print(f"전체 {len(game_ids)}개 게임 처리 ({'Groq: ' + map_model if use_groq else 'Ollama: ' + map_model})")
+        print(f"전체 {len(game_ids)}개 게임 처리 (라우팅={args.map_route}, 로컬={args.model}, groq={args.groq_model})")
     else:
         game_ids = [args.game_id]
-        print(f"game_id={args.game_id} 처리 ({'Groq: ' + map_model if use_groq else 'Ollama: ' + map_model})")
+        print(f"game_id={args.game_id} 처리 (라우팅={args.map_route}, 로컬={args.model}, groq={args.groq_model})")
 
     ok, skip, fail = 0, 0, 0
 
@@ -522,9 +543,12 @@ async def main():
                 skip += 1
                 continue
 
-            if use_groq:
-                payload = await _run_map_groq(game_id, data, args.groq_api_key, map_model)
+            review_count = len(data.get("reviews", []))
+            if _route_to_groq(review_count):
+                print(f"  라우팅→Groq map ({args.groq_model}) | 리뷰 {review_count}건")
+                payload = await _run_map_groq(game_id, data, args.groq_api_key, args.groq_model)
             else:
+                print(f"  라우팅→로컬 map ({args.model}) | 리뷰 {review_count}건")
                 payload = await _run_map(game_id, data, args.ollama_url, args.model)
 
             in_tok  = payload["map_stats"]["map_input_tokens"]
