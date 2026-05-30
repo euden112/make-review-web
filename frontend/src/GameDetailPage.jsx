@@ -10,7 +10,15 @@ const CATEGORY_LABELS = {
   optimization: '최적화',
   content: '콘텐츠 양',
   price_value: '가성비',
+  sound: '음향',
+  gameplay: '재미',
+  difficulty: '난이도',
 }
+
+// 카테고리 분석 차트는 모든 게임에 공통으로 존재하는 핵심 축만 고정 표시한다.
+// (난이도·음향·가성비 등 게임마다 언급 여부가 갈리는 축은 차트에서 제외 — 축 일관성 확보.
+//  이 축들은 파이프라인에서 계속 산출되어 장단점/키워드 텍스트에는 반영된다.)
+const CANONICAL_ASPECTS = ['content', 'gameplay', 'graphics', 'controls', 'optimization']
 
 const SENTIMENT_CONFIG = {
   positive: { label: '긍정적', cls: 'bg-green-50 text-green-600 dark:bg-green-900/20 dark:text-green-400' },
@@ -94,6 +102,92 @@ function PlaytimeBarChart({ buckets, isDark }) {
             <text x={cx} y={PAD.top + inner.h + 26} textAnchor="middle" fontSize={8} fill={axisColor}>
               {d?.label?.replace(/^[^\s]+\s/, '') || ''}
             </text>
+          </g>
+        )
+      })}
+    </svg>
+  )
+}
+
+// 카테고리별 점수를 다각형(레이더) 차트로 — 어느 축이 돌출/함몰됐는지 한눈에.
+// 절대 점수가 아니라 "이 게임 안에서" 강·약점 프로파일을 읽도록 한다.
+function AspectRadarChart({ aspects, isDark }) {
+  const n = aspects.length
+  if (n < 3) return null
+
+  const W = 340, H = 300, cx = 170, cy = 148, R = 92
+  const labelR = R + 20
+  const stroke = isDark ? '#3a3a5e' : '#e5e7eb'
+  const labelColor = isDark ? '#e0e0e0' : '#374151'
+  const accent = '#6366f1'
+  // 절대 점수가 아니라 "이 게임 평균 대비" 상대 강약으로 색을 정한다.
+  // 평균 위 = 강점(녹), 평균 아래 = 약점(적), 평균 근처 = 보통(회색).
+  // 근거 없는(missing) 축은 평균값으로 채워 형상이 왜곡되지 않게 하고 회색으로 표시한다.
+  const present = aspects.filter((a) => !a.missing && Number.isFinite(a.score))
+  const mean = present.length ? present.reduce((s, a) => s + a.score, 0) / present.length : 5
+  const vals = present.map((a) => a.score)
+  const lo = vals.length ? Math.min(...vals) : 0
+  const hi = vals.length ? Math.max(...vals) : 10
+  const spread = hi - lo
+  const NEUTRAL = '#9ca3af'
+  // 반지름 = 절대 점수가 아니라 "이 게임 안에서의 상대 위치". 점수가 baseline 근처(절대 6~8)로
+  // 뭉쳐 정다각형처럼 보이던 문제를, 게임 내 min-max로 펴서 능력치 프로파일처럼 강점=꼭짓점·
+  // 약점=안쪽으로 보이게 한다. FLOOR로 최약체도 0이 되지 않게(빈 축 방지) 하고, spread가 작으면
+  // (고른 게임) 과장 없이 균일(FLAT) 표시한다. missing 축은 FLOOR로 찍어 가짜 봉우리를 막는다.
+  const FLOOR = 0.55       // 최약 present 축: 0에 안 닿게 + min-max 과장 완화(작은 차가 floor↔꼭짓점으로 벌어지던 문제)
+  const FLAT = 0.72        // 분포 고르면(spread<0.8) 균일 표시
+  const MISSING_R = 0      // 데이터 부족 축은 꼭짓점을 중앙으로 붙여(반지름 0) 완전히 함몰 표시
+  const radiusNorm = (a) => {
+    if (a.missing || !Number.isFinite(a.score)) return MISSING_R
+    if (spread < 0.8) return FLAT
+    return FLOOR + 0.45 * ((a.score - lo) / spread)
+  }
+  const relColor = (a) => { if (a.missing) return NEUTRAL; const d = a.score - mean; return d >= 0.3 ? '#22c55e' : d <= -0.3 ? '#ef4444' : NEUTRAL }
+  const tierOf = (a) => { if (a.missing) return null; const d = a.score - mean; return d >= 0.3 ? '강점' : d <= -0.3 ? '약점' : '보통' }
+
+  const angleFor = (i) => (-90 + (360 / n) * i) * (Math.PI / 180)
+  const pt = (i, r) => [cx + r * Math.cos(angleFor(i)), cy + r * Math.sin(angleFor(i))]
+  const polyPath = (r) =>
+    aspects.map((_, i) => { const p = pt(i, r); return `${i === 0 ? 'M' : 'L'}${p[0].toFixed(1)},${p[1].toFixed(1)}` }).join(' ') + ' Z'
+
+  const dataPath =
+    aspects.map((a, i) => { const p = pt(i, radiusNorm(a) * R); return `${i === 0 ? 'M' : 'L'}${p[0].toFixed(1)},${p[1].toFixed(1)}` }).join(' ') + ' Z'
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ maxHeight: 300 }}>
+      {[0.25, 0.5, 0.75, 1].map((rr, ri) => (
+        <path key={ri} d={polyPath(rr * R)} fill="none" stroke={stroke} strokeWidth={1} />
+      ))}
+      {aspects.map((_, i) => { const p = pt(i, R); return (
+        <line key={i} x1={cx} y1={cy} x2={p[0]} y2={p[1]} stroke={stroke} strokeWidth={1} />
+      ) })}
+
+      <path d={dataPath} fill={accent} fillOpacity={0.18} stroke={accent} strokeWidth={2} strokeLinejoin="round" />
+
+      {aspects.map((a, i) => {
+        const p = pt(i, radiusNorm(a) * R)
+        const c = relColor(a)
+        // 근거 없는 축은 속 빈 회색 점으로 구분.
+        return <circle key={i} cx={p[0]} cy={p[1]} r={4} fill={a.missing ? 'none' : c} stroke={c} strokeWidth={a.missing ? 1.5 : 0} />
+      })}
+
+      {aspects.map((a, i) => {
+        const lp = pt(i, labelR)
+        const cos = Math.cos(angleFor(i))
+        const anchor = Math.abs(cos) < 0.3 ? 'middle' : cos > 0 ? 'start' : 'end'
+        const label = CATEGORY_LABELS[a.key] || a.label || a.key
+        const c = relColor(a)
+        const tier = tierOf(a)
+        // 절대 수치는 기준이 불명확해 표기하지 않는다. 색·형상 + 상대 tier(강점/보통/약점)로만 비교.
+        return (
+          <g key={i}>
+            <text x={lp[0]} y={lp[1] + (a.missing || tier ? -2 : 3)} textAnchor={anchor} fontSize={11} fontWeight="bold"
+              fill={c === NEUTRAL ? labelColor : c}>{label}</text>
+            {a.missing ? (
+              <text x={lp[0]} y={lp[1] + 9} textAnchor={anchor} fontSize={8} fill={NEUTRAL}>데이터 부족</text>
+            ) : (
+              <text x={lp[0]} y={lp[1] + 9} textAnchor={anchor} fontSize={8} fontWeight="bold" fill={c}>{tier}</text>
+            )}
           </g>
         )
       })}
@@ -552,6 +646,17 @@ function GameDetailPage({ isDark, toggleDark }) {
             {game?.canonical_title || ''}
           </h1>
 
+          {game?.tags?.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 mb-3">
+              {game.tags.slice(0, 8).map((t, i) => (
+                <span key={i} className="px-2.5 py-0.5 rounded-full text-xs font-semibold"
+                  style={{ background: 'rgba(99,102,241,0.18)', color: '#c7d2fe', border: '1px solid rgba(99,102,241,0.35)' }}>
+                  {t}
+                </span>
+              ))}
+            </div>
+          )}
+
           {buySignal?.is_good_timing && (
             <div className="flex items-center gap-2 mb-3 flex-wrap">
               <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black"
@@ -609,10 +714,11 @@ function GameDetailPage({ isDark, toggleDark }) {
 
         {!loading && summary && (
           <>
-            {/* 키워드 (태그) 별도 섹션 — AI 종합 요약은 유저 리뷰 요약과 중복이라 제거 */}
+            {/* 리뷰 토픽 — 리뷰 근거에서 추출한 가변 토픽. 상단 장르 칩(Steam 인기 태그)과 구분. */}
             {summary.keywords && summary.keywords.length > 0 && (
               <div className="bg-white dark:bg-[#1e1e2e] rounded-xl p-7 border border-gray-200 dark:border-[#2a2a3e] shadow-sm">
-                <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0] mb-3">키워드</h2>
+                <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0] mb-1">리뷰 토픽</h2>
+                <p className="text-xs text-gray-400 dark:text-gray-500 mb-3">리뷰에서 자주 언급된 내용</p>
                 <div className="flex flex-wrap gap-2">
                   {summary.keywords.map((kw, i) => (
                     <span key={i} className="text-xs px-2 py-1 rounded-full bg-blue-50 dark:bg-[#1a2a4a] text-blue-600 dark:text-blue-300 border border-blue-200 dark:border-blue-700">
@@ -714,27 +820,54 @@ function GameDetailPage({ isDark, toggleDark }) {
               </div>
             )}
 
-            {/* 카테고리별 세부 분석 */}
-            {summary.aspect_sentiment && Object.keys(summary.aspect_sentiment).length > 0 && (
-              <div className="bg-white dark:bg-[#1e1e2e] rounded-xl p-7 border border-gray-200 dark:border-[#2a2a3e] shadow-sm">
-                <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0] mb-4">카테고리별 분석</h2>
-                <div className="grid grid-cols-2 gap-3">
-                  {Object.entries(summary.aspect_sentiment).map(([key, value], i) => (
-                    <div key={i} className="flex items-center justify-between bg-gray-50 dark:bg-[#2a2a3e] rounded-lg px-4 py-2">
-                      <span className="text-sm text-gray-700 dark:text-[#e0e0e0] font-bold">
-                        {CATEGORY_LABELS[key] || key}
-                      </span>
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs text-gray-500 dark:text-gray-400">{value.label}</span>
-                        <span className="text-sm font-bold" style={{ color: value.score >= 7 ? '#22c55e' : value.score >= 5 ? '#f5a623' : '#ef4444' }}>
-                          {value.score?.toFixed(1)}
-                        </span>
-                      </div>
+            {/* 카테고리별 분석 — 게임 내 상대 강·약점 프로파일 (다각형 차트) */}
+            {summary.aspect_sentiment && Object.keys(summary.aspect_sentiment).length > 0 && (() => {
+              const raw = summary.aspect_sentiment || {}
+              // 핵심 5축 고정. 게임에 근거 없는 축은 missing(중립)으로 채워 축을 항상 동일하게 유지.
+              const aspects = CANONICAL_ASPECTS.map((key) => {
+                const v = raw[key]
+                const num = v ? (typeof v.score === 'number' ? v.score : Number(v.score)) : NaN
+                const has = v != null && Number.isFinite(num)
+                return { key, label: v?.label, score: has ? num : null, missing: !has }
+              })
+              const present = aspects.filter((a) => !a.missing)
+              const sorted = [...present].sort((a, b) => b.score - a.score)
+              const strength = sorted[0]
+              const weakness = sorted[sorted.length - 1]
+              const labelOf = (a) => CATEGORY_LABELS[a.key] || a?.label || a?.key
+              return (
+                <div className="bg-white dark:bg-[#1e1e2e] rounded-xl p-7 border border-gray-200 dark:border-[#2a2a3e] shadow-sm">
+                  <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0] mb-1">카테고리별 분석</h2>
+                  <p className="text-xs text-gray-400 dark:text-gray-500 mb-4">이 게임 안에서의 상대적 강점과 약점</p>
+                  {aspects.length >= 3 ? (
+                    <div className="flex flex-col items-center">
+                      <AspectRadarChart aspects={aspects} isDark={isDark} />
+                      {strength && weakness && strength !== weakness && (
+                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                          강점 <span className="font-bold" style={{ color: '#22c55e' }}>{labelOf(strength)}</span>
+                          <span className="mx-1.5 text-gray-300 dark:text-gray-600">·</span>
+                          약점 <span className="font-bold" style={{ color: '#ef4444' }}>{labelOf(weakness)}</span>
+                        </p>
+                      )}
                     </div>
-                  ))}
+                  ) : (
+                    <div className="grid grid-cols-2 gap-3">
+                      {aspects.map((a, i) => (
+                        <div key={i} className="flex items-center justify-between bg-gray-50 dark:bg-[#2a2a3e] rounded-lg px-4 py-2">
+                          <span className="text-sm text-gray-700 dark:text-[#e0e0e0] font-bold">{labelOf(a)}</span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-gray-500 dark:text-gray-400">{a.label}</span>
+                            <span className="text-sm font-bold" style={{ color: a.score >= 7 ? '#22c55e' : a.score >= 5 ? '#f5a623' : '#ef4444' }}>
+                              {a.score?.toFixed(1)}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
-              </div>
-            )}
+              )
+            })()}
           </>
         )}
 
