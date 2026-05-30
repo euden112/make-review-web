@@ -54,38 +54,42 @@ _GROQ_RATE_DELAY = 2.1  # ~28 RPM, free tier 30 RPM 이하 유지
 
 async def _summarize_chunk_with_groq(
     client: httpx.AsyncClient,
-    api_key: str,
+    rotator,
     model_name: str,
     prompt: str,
 ) -> tuple[str, int, int]:
-    resp = await client.post(
-        _GROQ_API_URL,
-        headers={"Authorization": f"Bearer {api_key}"},
-        json={
-            "model": model_name,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": "You are a JSON-only extractor. Return one valid JSON object and no markdown.",
-                },
-                {"role": "user", "content": prompt},
-            ],
-            "temperature": 0.2,
-            "max_tokens": 2048,
-            "response_format": {"type": "json_object"},
-        },
-        timeout=60,
-    )
-    if resp.status_code == 429:
-        retry_after = float(resp.headers.get("retry-after", "10"))
-        print(f"  [Groq rate limit] {retry_after:.0f}s 대기...")
-        await asyncio.sleep(retry_after + 1)
-        return await _summarize_chunk_with_groq(client, api_key, model_name, prompt)
-    resp.raise_for_status()
-    data = resp.json()
-    content = data["choices"][0]["message"]["content"].strip()
-    usage = data.get("usage", {})
-    return content, usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0)
+    # cloud의 키 로테이션(429 시 다음 키로 전환) + qwen3 계열 /no_think(reasoning 억제) 결합.
+    is_qwen3 = "qwen3" in model_name.lower()
+    system_content = "You are a JSON-only extractor. Return one valid JSON object and no markdown."
+    if is_qwen3:
+        system_content += " /no_think"
+    user_content = prompt + (" /no_think" if is_qwen3 else "")
+    for attempt in range(rotator.key_count):
+        resp = await client.post(
+            _GROQ_API_URL,
+            headers={"Authorization": f"Bearer {rotator.current_key}"},
+            json={
+                "model": model_name,
+                "messages": [
+                    {"role": "system", "content": system_content},
+                    {"role": "user", "content": user_content},
+                ],
+                "temperature": 0.2,
+                "max_tokens": 2048,
+                "response_format": {"type": "json_object"},
+            },
+            timeout=60,
+        )
+        if resp.status_code == 429:
+            print(f"  [Groq 429] 키 {attempt + 1}/{rotator.key_count} 소진, 다음 키로 전환...")
+            rotator.rotate()
+            continue
+        resp.raise_for_status()
+        data = resp.json()
+        content = data["choices"][0]["message"]["content"].strip()
+        usage = data.get("usage", {})
+        return content, usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0)
+    raise RuntimeError("모든 Groq API 키가 rate limit에 걸렸습니다.")
 
 
 async def _run_map_stage_groq(
@@ -97,6 +101,8 @@ async def _run_map_stage_groq(
     prompt_version: str,
     groq_api_key: str,
 ) -> list[MapResult]:
+    from ai_module.map_reduce.key_rotator import GroqKeyRotator
+    rotator = GroqKeyRotator.from_key_string(groq_api_key)
     failure_counts: dict[str, int] = {
         "call_failed": 0,
         "map_llm_valid_chunks": 0,
@@ -134,7 +140,7 @@ async def _run_map_stage_groq(
                 try:
                     raw, prompt_tok, comp_tok = await _summarize_chunk_with_groq(
                         client,
-                        groq_api_key,
+                        rotator,
                         model_name,
                         prompt if attempt_no == 0 else retry_prompt,
                     )
@@ -210,20 +216,66 @@ class _NullCache:
         return None
 
 
-def _fetch_reviews(cloud_url: str, game_id: int, force: bool) -> dict:
+def _compute_bucket_stats(all_steam, buckets) -> dict:
+    """버킷별 실제 리뷰 수/추천 비율(is_recommended)을 all_steam 모집단에서 산출.
+
+    map payload의 sentiment는 추천 수가 아니므로 신뢰할 수 없다. 감성 점수는 전체 추천률
+    anchor와 동일하게 '추천 / 전체 × 100'으로 직접 계산해 Reduce/DB로 넘긴다.
+    """
+    stats: dict[str, dict] = {}
+    if buckets is None:
+        return stats
+    all_tagged = tag_reviews(all_steam, buckets)
+    for name in ("early", "mid", "late"):
+        in_b = [r for r in all_tagged if r.playtime_bucket == name]
+        cnt = len(in_b)
+        rec = sum(1 for r in in_b if r.is_recommended)
+        stats[name] = {"count": cnt, "score": round(rec / cnt * 100) if cnt else None}
+    return stats
+
+
+def _chunk_by_bucket(tagged):
+    """버킷별로 분리해 청킹한다 (방안 A).
+
+    기존 char 기준 청킹은 한 청크에 early/mid/late가 섞여, map이 청크당 salient
+    evidence ≤6개만 뽑을 때 특정 버킷(특히 late)이 누락돼 _has_min_evidence 게이트에서
+    탈락했다. 버킷마다 별도 청크를 만들면 map이 버킷별 evidence를 보장한다.
+    steam은 playtime_bucket(early/mid/late/unknown), 그 외는 platform_code로 묶는다.
+    """
+    groups: dict[str, list] = {}
+    for r in tagged:
+        key = r.playtime_bucket if r.platform_code == "steam" else r.platform_code
+        groups.setdefault(key, []).append(r)
+
+    all_chunks = []
+    for rows in groups.values():
+        cs = chunk_reviews_by_chars(
+            [(r.id, r.review_text_clean, r.helpful_count, r.playtime_hours) for r in rows],
+            max_chars=None,
+        )
+        all_chunks.extend(cs)
+    # 버킷별로 chunk_no가 1부터 재시작하므로 전역 고유번호로 재부여.
+    for i, c in enumerate(all_chunks, 1):
+        c.chunk_no = i
+    return all_chunks
+
+
+def _fetch_reviews(cloud_url: str, game_id: int, force: bool, api_key: str = "") -> dict:
     resp = requests.get(
         f"{cloud_url}/api/v1/games/{game_id}/reviews-for-map",
         params={"force": "true" if force else "false"},
+        headers={"X-API-Key": api_key} if api_key else {},
         timeout=60,
     )
     resp.raise_for_status()
     return resp.json()
 
 
-def _post_reduce(cloud_url: str, game_id: int, payload: dict) -> dict:
+def _post_reduce(cloud_url: str, game_id: int, payload: dict, api_key: str = "") -> dict:
     resp = requests.post(
         f"{cloud_url}/api/v1/games/{game_id}/reduce",
         json=payload,
+        headers={"X-API-Key": api_key} if api_key else {},
         timeout=30,
     )
     resp.raise_for_status()
@@ -272,11 +324,10 @@ async def _run_map(game_id: int, data: dict, ollama_url: str, model: str) -> dic
     if buckets is not None:
         tagged = _ensure_bucket_coverage(tagged, all_steam, buckets)
 
-    chunks = chunk_reviews_by_chars(
-        [(r.id, r.review_text_clean, r.helpful_count, r.playtime_hours) for r in tagged],
-        max_chars=None,
-    )
-    print(f"  {len(tagged)} reviews → {len(chunks)} chunks")
+    bucket_stats = _compute_bucket_stats(all_steam, buckets)
+
+    chunks = _chunk_by_bucket(tagged)
+    print(f"  {len(tagged)} reviews → {len(chunks)} chunks (버킷별 청킹)")
 
     map_results = await run_map_stage(
         game_id=game_id,
@@ -286,6 +337,7 @@ async def _run_map(game_id: int, data: dict, ollama_url: str, model: str) -> dic
         prompt_version="json_v3_spoiler_safe_map",
         cache=_NullCache(),
         ollama_base_url=ollama_url,
+        max_concurrency=int(os.getenv("MAP_CONCURRENCY", "1")),
     )
 
     grouped = _group_map_outputs_by_tags(map_results, tagged)
@@ -314,7 +366,7 @@ async def _run_map(game_id: int, data: dict, ollama_url: str, model: str) -> dic
         "category_frequency":  data["category_frequency"],
         "prior_summary_text":  data.get("prior_summary_text"),
         "playtime_buckets": (
-            {"early_max": buckets.early_max, "mid_max": buckets.mid_max}
+            {"early_max": buckets.early_max, "mid_max": buckets.mid_max, "bucket_stats": bucket_stats}
             if buckets else None
         ),
         "map_stats":    stats,
@@ -362,11 +414,10 @@ async def _run_map_groq(game_id: int, data: dict, groq_api_key: str, model: str)
     if buckets is not None:
         tagged = _ensure_bucket_coverage(tagged, all_steam, buckets)
 
-    chunks = chunk_reviews_by_chars(
-        [(r.id, r.review_text_clean, r.helpful_count, r.playtime_hours) for r in tagged],
-        max_chars=None,
-    )
-    print(f"  {len(tagged)} reviews → {len(chunks)} chunks")
+    bucket_stats = _compute_bucket_stats(all_steam, buckets)
+
+    chunks = _chunk_by_bucket(tagged)
+    print(f"  {len(tagged)} reviews → {len(chunks)} chunks (버킷별 청킹)")
 
     map_results = await _run_map_stage_groq(
         game_id=game_id,
@@ -403,7 +454,7 @@ async def _run_map_groq(game_id: int, data: dict, groq_api_key: str, model: str)
         "category_frequency":  data["category_frequency"],
         "prior_summary_text":  data.get("prior_summary_text"),
         "playtime_buckets": (
-            {"early_max": buckets.early_max, "mid_max": buckets.mid_max}
+            {"early_max": buckets.early_max, "mid_max": buckets.mid_max, "bucket_stats": bucket_stats}
             if buckets else None
         ),
         "map_stats":    stats,
@@ -427,17 +478,30 @@ async def main():
     )
     parser.add_argument(
         "--model",
-        default=os.getenv("LOCAL_MAP_MODEL", "qwen2.5:7b"),
-        help="로컬 Ollama 모델명",
+        default=os.getenv("LOCAL_MAP_MODEL", "gemma4:e4b"),
+        help="로컬 Ollama 모델명 (map A/B 결과 gemma4:e4b가 속도·JSON준수 우위)",
     )
     parser.add_argument(
         "--groq-map", action="store_true",
-        help="map 단계를 Groq API로 실행 (로컬 GPU 불필요)",
+        help="map 단계를 Groq API로 강제 실행 (= --map-route groq)",
+    )
+    parser.add_argument(
+        "--map-route", choices=["auto", "local", "groq"], default="auto",
+        help="map 라우팅. auto=force/대형 배치는 로컬(TPM 회피), 소형 증분은 Groq. local/groq=강제",
+    )
+    parser.add_argument(
+        "--groq-review-threshold", type=int, default=80,
+        help="auto 라우팅: 이 리뷰 수 이하 증분은 Groq map (초과/force는 로컬)",
     )
     parser.add_argument(
         "--groq-api-key",
         default=os.getenv("GROQ_API_KEY", ""),
         help="Groq API 키 (환경변수 GROQ_API_KEY로도 설정 가능)",
+    )
+    parser.add_argument(
+        "--api-key",
+        default=os.getenv("API_SECRET_KEY", ""),
+        help="클라우드 백엔드 API 키 (환경변수 API_SECRET_KEY로도 설정 가능)",
     )
     parser.add_argument(
         "--groq-model",
@@ -446,38 +510,54 @@ async def main():
     )
     args = parser.parse_args()
 
-    if args.groq_map and not args.groq_api_key:
-        print("ERROR: --groq-map 사용 시 --groq-api-key 또는 GROQ_API_KEY 환경변수가 필요합니다.")
+    # --groq-map은 하위호환: --map-route groq와 동일하게 취급
+    if args.groq_map:
+        args.map_route = "groq"
+    if args.map_route == "groq" and not args.groq_api_key:
+        print("ERROR: groq 라우팅에는 --groq-api-key 또는 GROQ_API_KEY 환경변수가 필요합니다.")
         sys.exit(1)
 
     cloud_url = args.cloud_url.rstrip("/")
-    use_groq = args.groq_map
-    map_model = args.groq_model if use_groq else args.model
+
+    def _route_to_groq(review_count: int) -> bool:
+        # 정책: 토큰 폭증하는 첫/전체 재처리(force)·대형 배치는 로컬(Groq free TPM 429 회피),
+        # 토큰 적은 소형 증분은 Groq map으로 보내 로컬 GPU 없이도 처리한다.
+        if args.map_route == "local":
+            return False
+        if args.map_route == "groq":
+            return bool(args.groq_api_key)
+        # auto: force/대형은 로컬, 소형 증분만 Groq
+        if not args.groq_api_key or args.force:
+            return False
+        return review_count <= args.groq_review_threshold
 
     if args.all:
         resp = requests.get(f"{cloud_url}/api/v1/games/", timeout=30)
         resp.raise_for_status()
         game_ids = [g["id"] for g in resp.json()]
-        print(f"전체 {len(game_ids)}개 게임 처리 ({'Groq: ' + map_model if use_groq else 'Ollama: ' + map_model})")
+        print(f"전체 {len(game_ids)}개 게임 처리 (라우팅={args.map_route}, 로컬={args.model}, groq={args.groq_model})")
     else:
         game_ids = [args.game_id]
-        print(f"game_id={args.game_id} 처리 ({'Groq: ' + map_model if use_groq else 'Ollama: ' + map_model})")
+        print(f"game_id={args.game_id} 처리 (라우팅={args.map_route}, 로컬={args.model}, groq={args.groq_model})")
 
     ok, skip, fail = 0, 0, 0
 
     for game_id in game_ids:
         print(f"\n=== game_id={game_id} ===")
         try:
-            data = _fetch_reviews(cloud_url, game_id, args.force)
+            data = _fetch_reviews(cloud_url, game_id, args.force, args.api_key)
 
             if data.get("status") == "no_new_reviews":
                 print("  skip: 새 리뷰 없음")
                 skip += 1
                 continue
 
-            if use_groq:
-                payload = await _run_map_groq(game_id, data, args.groq_api_key, map_model)
+            review_count = len(data.get("reviews", []))
+            if _route_to_groq(review_count):
+                print(f"  라우팅→Groq map ({args.groq_model}) | 리뷰 {review_count}건")
+                payload = await _run_map_groq(game_id, data, args.groq_api_key, args.groq_model)
             else:
+                print(f"  라우팅→로컬 map ({args.model}) | 리뷰 {review_count}건")
                 payload = await _run_map(game_id, data, args.ollama_url, args.model)
 
             in_tok  = payload["map_stats"]["map_input_tokens"]
@@ -485,7 +565,7 @@ async def main():
             chunks  = payload["map_stats"]["chunk_count"]
             print(f"  map 완료: {chunks} chunks | tokens in={in_tok} out={out_tok}")
 
-            result = _post_reduce(cloud_url, game_id, payload)
+            result = _post_reduce(cloud_url, game_id, payload, args.api_key)
             print(f"  reduce 전송: {result}")
             ok += 1
 

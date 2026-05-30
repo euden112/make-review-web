@@ -361,6 +361,7 @@ async def run_hybrid_summary_pipeline(
     reduce_api_key: str,
     reduce_model_name: str,
     prior_summary_text: str | None = None,
+    cumulative_aspect_counts: dict[str, dict[str, int]] | None = None,
     map_runner: MapRunner | None = None,
     reduce_runner: ReduceRunner | None = None,
 ) -> tuple[list[MapResult], FinalSummary, Any]:
@@ -434,6 +435,7 @@ async def run_hybrid_summary_pipeline(
         category_frequency=category_frequency,
         prior_summary_text=prior_summary_text,
         representative_quotes=representative_quotes,
+        cumulative_aspect_counts=cumulative_aspect_counts,
     )
 
     return map_results, final, buckets

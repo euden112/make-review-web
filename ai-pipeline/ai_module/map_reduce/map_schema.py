@@ -12,9 +12,8 @@ ALLOWED_ASPECTS = {
     "content",
     "price_value",
     "sound",
+    "gameplay",
     "difficulty",
-    "multiplayer",
-    "bugs",
 }
 
 # 게임 무관(genre-agnostic) 일반 스포일러 카테고리어만 둔다. 특정 게임 고유명사
@@ -311,13 +310,13 @@ def dumps_map_payload(payload: dict[str, Any]) -> str:
 def _guess_aspect(text: str) -> str:
     lower = text.lower()
     checks = [
-        ("sound", ("bgm", "ost", "음악", "사운드")),
-        ("difficulty", ("난이도", "어렵", "보스", "말레니아", "트리가드")),
         ("optimization", ("프레임", "렉", "버그", "crash", "fps", "최적화")),
         ("controls", ("조작", "키보드", "패드", "마우스")),
         ("graphics", ("그래픽", "비주얼", "visual", "graphic")),
         ("price_value", ("가격", "가성비", "할인")),
-        ("multiplayer", ("멀티", "친구", "코옵", "pvp")),
+        ("sound", ("사운드", "음악", "음향", "효과음", "bgm", "ost", "soundtrack", "sound design", "audio")),
+        ("difficulty", ("난이도", "어렵", "쉽", "보스", "도전", "빡세", "souls", "difficulty", "challenging")),
+        ("gameplay", ("재미", "재밌", "노잼", "지루", "갓겜", "꿀잼", "게임성", "할맛", "fun", "gameplay", "addictive")),
     ]
     for aspect, keywords in checks:
         if any(keyword in lower for keyword in keywords):

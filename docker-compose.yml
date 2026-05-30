@@ -23,6 +23,7 @@ services:
       - ./database/10_migration_sprint6_fixes.sql:/docker-entrypoint-initdb.d/11_migration_sprint6_fixes.sql
       - ./database/12_migration_one_liner_separation.sql:/docker-entrypoint-initdb.d/12_migration_one_liner_separation.sql
       - ./database/13_migration_user_summary_split.sql:/docker-entrypoint-initdb.d/13_migration_user_summary_split.sql
+      - ./database/14_migration_recommendation_targets.sql:/docker-entrypoint-initdb.d/14_migration_recommendation_targets.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s
@@ -62,7 +63,9 @@ services:
       - REDIS_PORT=6379
       - REDIS_DB=0
       - GROQ_API_KEY=${GROQ_API_KEY}
+      - GROQ_API_KEYS=${GROQ_API_KEYS}
       - GROQ_MODEL=${GROQ_MODEL:-meta-llama/llama-4-scout-17b-16e-instruct}
+      - API_SECRET_KEY=${API_SECRET_KEY}
       - PYTHONPATH=/workspace/backend:/workspace/ai-pipeline:/workspace/crawling/steam
     command: sh -c "pip install -r requirements.txt && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
     depends_on:

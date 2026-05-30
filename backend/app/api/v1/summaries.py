@@ -9,6 +9,7 @@ from sqlalchemy import and_
 from sqlalchemy.orm import joinedload
 
 from app.core.database import get_db
+from app.core.auth import require_api_key
 from app.core.redis_client import get_summary_cache, set_summary_cache
 from app.models.domain import Game, GamePlatformMap, Platform, GameReviewSummary, ReviewSummaryJob, ExternalReview
 from app.services.ai_service import run_ai_pipeline_task, get_pipeline_tasks
@@ -17,6 +18,8 @@ from app.services.ai_service import run_ai_pipeline_task, get_pipeline_tasks
 class _PlaytimeBucketsInput(BaseModel):
     early_max: float | None = None
     mid_max: float | None = None
+    # 버킷별 실제 리뷰 수/추천 비율(0~100). 로컬 Map 단계에서 원본 리뷰로 산출해 전달.
+    bucket_stats: dict[str, Any] | None = None
 
 
 class _MapStatsInput(BaseModel):
@@ -123,7 +126,7 @@ async def get_games(db: AsyncSession = Depends(get_db)):
     return result
 
 
-@router.post("/{game_id}/summarize")
+@router.post("/{game_id}/summarize", dependencies=[Depends(require_api_key)])
 async def trigger_summarization(
     game_id: int,
     background_tasks: BackgroundTasks,
@@ -146,7 +149,7 @@ async def trigger_summarization(
     }
 
 
-@router.get("/{game_id}/reviews-for-map")
+@router.get("/{game_id}/reviews-for-map", dependencies=[Depends(require_api_key)])
 async def get_reviews_for_map(
     game_id: int,
     force: bool = Query(False, description="커서 무시하고 전체 리뷰 반환"),
@@ -156,7 +159,7 @@ async def get_reviews_for_map(
     return await _svc(game_id, force=force)
 
 
-@router.post("/{game_id}/reduce")
+@router.post("/{game_id}/reduce", dependencies=[Depends(require_api_key)])
 async def trigger_reduce_from_map(
     game_id: int,
     body: ReduceRequest,

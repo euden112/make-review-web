@@ -59,7 +59,7 @@ def test_map_payload_requires_evidence_from_chunk_reviews() -> None:
         "source_mix": {"steam_user": 2},
         "sentiment": {"positive": 1, "mixed": 1, "negative": 0},
         "aspects": {
-            "sound": {
+            "content": {
                 "pros": ["boss theme builds combat tension"],
                 "cons": [],
                 "evidence_ids": [10, 999],
@@ -69,7 +69,7 @@ def test_map_payload_requires_evidence_from_chunk_reviews() -> None:
             {
                 "review_id": 10,
                 "source": "steam_user",
-                "aspect": "sound",
+                "aspect": "content",
                 "polarity": "positive",
                 "detail": "boss theme builds tension during dodge-and-counter combat",
                 "snippet": "The boss theme makes every dodge and counterattack feel tense.",
@@ -77,7 +77,7 @@ def test_map_payload_requires_evidence_from_chunk_reviews() -> None:
             {
                 "review_id": 999,
                 "source": "steam_user",
-                "aspect": "sound",
+                "aspect": "content",
                 "polarity": "positive",
                 "detail": "this evidence is outside the chunk",
                 "snippet": "this evidence is outside the chunk",
@@ -88,7 +88,7 @@ def test_map_payload_requires_evidence_from_chunk_reviews() -> None:
     normalized = normalize_map_payload(payload, chunk_no=1, review_ids=[10, 11])
 
     assert normalized["review_ids"] == [10, 11]
-    assert normalized["aspects"]["sound"]["evidence_ids"] == [10]
+    assert normalized["aspects"]["content"]["evidence_ids"] == [10]
     assert len(normalized["evidence_items"]) == 1
     assert normalized["evidence_items"][0]["review_id"] == 10
     assert "boss theme" in normalized["evidence_items"][0]["detail"]
@@ -102,7 +102,7 @@ def test_map_payload_preserves_public_detail_and_spoiler_metadata() -> None:
             {
                 "review_id": 10,
                 "source": "steam_user",
-                "aspect": "difficulty",
+                "aspect": "content",
                 "polarity": "negative",
                 "detail": "Malenia fight becomes exhausting after repeated deaths",
                 "public_detail": "후반부 고난도 전투가 반복 실패로 피로해진다는 반응",
@@ -131,7 +131,7 @@ def test_map_payload_redacts_public_detail_when_missing() -> None:
             {
                 "review_id": 10,
                 "source": "steam_user",
-                "aspect": "difficulty",
+                "aspect": "content",
                 "polarity": "negative",
                 "detail": "Malenia fight becomes exhausting after repeated deaths",
                 "snippet": "Malenia fight becomes exhausting after repeated deaths",
@@ -1309,7 +1309,7 @@ def test_map_stage_uses_local_llm_as_primary_by_default(monkeypatch) -> None:
                     "source_mix": {"steam_user": 1, "metacritic_user": 0, "metacritic_critic": 0},
                     "sentiment": {"positive": 1, "mixed": 0, "negative": 0},
                     "aspects": {
-                        "sound": {
+                        "content": {
                             "pros": ["boss music raises tension during dodges"],
                             "cons": [],
                             "evidence_ids": [1],
@@ -1321,7 +1321,7 @@ def test_map_stage_uses_local_llm_as_primary_by_default(monkeypatch) -> None:
                         {
                             "review_id": 1,
                             "polarity": "positive",
-                            "aspect": "sound",
+                            "aspect": "content",
                             "snippet": "보스전 BGM이 긴박하고 회피 후 반격이 재밌다.",
                         }
                     ],
@@ -1329,7 +1329,7 @@ def test_map_stage_uses_local_llm_as_primary_by_default(monkeypatch) -> None:
                         {
                             "review_id": 1,
                             "source": "steam_user",
-                            "aspect": "sound",
+                            "aspect": "content",
                             "polarity": "positive",
                             "detail": "boss music makes dodging and counterattacking feel tense",
                             "snippet": "보스전 BGM이 긴박하고 회피 후 반격이 재밌다.",

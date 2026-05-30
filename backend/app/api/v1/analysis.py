@@ -54,8 +54,23 @@ async def get_playtime_analysis(
         pros     = getattr(row, f"{prefix}_pros")
         cons     = getattr(row, f"{prefix}_cons")
         keywords = getattr(row, f"{prefix}_keywords")
+        review_count = getattr(row, f"{prefix}_review_count", None)
 
         if summary is None:
+            # 안전망(방안 C): LLM 요약이 없어도 실제 추천비율(score)+리뷰수가 있으면
+            # 점수/카운트는 노출해 차트가 비지 않게 한다. 요약 텍스트만 비운다.
+            if score is not None and review_count:
+                return {
+                    "label": _format_label(early_max, mid_max, prefix),
+                    "data_available": True,
+                    "sentiment_overall": sentiment,
+                    "sentiment_score": float(score),
+                    "review_count": review_count,
+                    "pros": [],
+                    "cons": [],
+                    "keywords": [],
+                    "summary": None,
+                }
             return {
                 "label": _format_label(early_max, mid_max, prefix),
                 "data_available": False,
@@ -66,6 +81,7 @@ async def get_playtime_analysis(
             "data_available":   True,
             "sentiment_overall": sentiment,
             "sentiment_score":  float(score) if score is not None else None,
+            "review_count":     getattr(row, f"{prefix}_review_count", None),
             "pros":             pros or [],
             "cons":             cons or [],
             "keywords":         keywords or [],

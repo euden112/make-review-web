@@ -199,6 +199,10 @@ class GameReviewSummary(Base):
     pros_json = Column(JSONB)
     cons_json = Column(JSONB)
     keywords_json = Column(JSONB)
+    # "이런 사람에게 추천": user reduce가 생성하는 game별 플레이어 유형 [{label, reason}].
+    # 마이그레이션: 14_migration_recommendation_targets.sql
+    recommended_for_json = Column(JSONB)
+    caution_for_json = Column(JSONB)
     steam_recommend_ratio = Column(Numeric(5, 2))
     metacritic_critic_avg = Column(Numeric(5, 2))
     metacritic_user_avg = Column(Numeric(5, 2))
