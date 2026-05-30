@@ -29,6 +29,13 @@ for _stream in (sys.stdout, sys.stderr):
 # ============================================================
 
 MAX_REVIEWS_PER_GAME = 200
+# 최신성·대표성 균형: 언어당 수집을 recent(최신순) + helpful(filter=all, 전기간 도움순)로
+# 분할한다. recent만 쓰면 세일 유입·최근 패치 이슈로 편향되고, 명작의 핵심 호평(고-helpful
+# 과거 리뷰)이 누락된다. 둘을 합쳐 seen으로 교차 중복 제거한다.
+# 도움순 우세 배분: substance(길고 구체적·aspect 풍부한 핵심 리뷰) 확보를 우선한다.
+# recent는 현재 여론 반영용으로 일부만 유지.
+RECENT_PER_LANG  = 80
+HELPFUL_PER_LANG = 120
 MAX_BODY_LENGTH      = 1000
 MIN_BODY_LENGTH      = 10
 MAX_URLS             = 2
@@ -220,6 +227,32 @@ def get_image_urls(app_id: str) -> dict:
         pass
 
     return {"cover_image": fallback_cover, "hero_image": fallback_hero}
+
+def fetch_popular_tags(app_id: str, max_tags: int = 8) -> list[str]:
+    """Steam store 페이지의 "이 제품의 인기 태그"(유저 정의 태그) 상위 N개를 수집한다.
+
+    공식 appdetails JSON에는 인기 태그가 없고 genres(액션/RPG 수준의 coarse)만 있다.
+    인기 태그(로그라이크/덱빌딩 등)는 store 페이지 HTML의 InitAppTagModal(appid, [...])
+    배열에 임베드돼 있어 이를 파싱한다. SteamSpy는 신작에서 집계 지연으로 비어 있어
+    store HTML이 더 신뢰도 높다. 성인 게임 연령게이트 우회용 쿠키를 함께 보낸다.
+    LLM 키워드(리뷰 토픽, 가변)와 달리 장르를 일관되게 분리하는 신호로 쓴다.
+    """
+    try:
+        resp = requests.get(
+            f"https://store.steampowered.com/app/{app_id}/?cc=kr&l=koreana",
+            headers={"Cookie": "birthtime=283993201; lastagecheckage=1-January-1990; wants_mature_content=1"},
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            return []
+        m = re.search(r"InitAppTagModal\(\s*\d+\s*,\s*(\[.*?\])\s*,", resp.text, re.S)
+        if not m:
+            return []
+        tags = json.loads(m.group(1))
+        names = [str(t.get("name", "")).strip() for t in tags if isinstance(t, dict) and t.get("name")]
+        return names[:max_tags]
+    except Exception:
+        return []
 
 # ============================================================
 # Steam 리뷰 API 호출 (페이지네이션)
@@ -433,19 +466,33 @@ def collect_game(slug: str, app_id: str, name: str, game_list_id: int | None = N
     print(f"  [{slug}] 수집 시작 (app_id={app_id})")
 
     images = get_image_urls(app_id)
+    tags = fetch_popular_tags(app_id)
     all_reviews: list[dict] = []
     seen: set[str] = set()
 
     for lang in ("koreana", "english"):
-        print(f"    [{slug}] {lang} 최신 리뷰 최대 {MAX_REVIEWS_PER_GAME}개 수집")
-        raw, _ = fetch_raw_reviews(
+        print(
+            f"    [{slug}] {lang} recent {RECENT_PER_LANG} + helpful {HELPFUL_PER_LANG} 수집"
+        )
+        # 1) 최신순(recent): 현재 여론·최근 패치 반영
+        raw_recent, _ = fetch_raw_reviews(
             app_id,
-            max_count=MAX_REVIEWS_PER_GAME,
+            max_count=RECENT_PER_LANG,
             filter_type="recent",
             review_type="all",
             language=lang,
         )
-        all_reviews.extend(parse_and_dedup(raw, seen, f"{lang} 전체", slug))
+        # 2) 도움순(filter=all, 전기간): 대표성 — 오래됐어도 핵심 호평/비판 확보
+        raw_helpful, _ = fetch_raw_reviews(
+            app_id,
+            max_count=HELPFUL_PER_LANG,
+            filter_type="all",
+            review_type="all",
+            language=lang,
+        )
+        # recent 먼저 dedup 등록 → helpful은 seen으로 중복 제거(겹치면 recent 유지)
+        all_reviews.extend(parse_and_dedup(raw_recent, seen, f"{lang} 최신", slug))
+        all_reviews.extend(parse_and_dedup(raw_helpful, seen, f"{lang} 도움순", slug))
 
     print(f"  [{slug}] 완료 → {len(all_reviews)}개 저장")
 
@@ -457,6 +504,7 @@ def collect_game(slug: str, app_id: str, name: str, game_list_id: int | None = N
                 "name_ko"     : name,
                 "cover_image" : images["cover_image"],
                 "hero_image"  : images["hero_image"],
+                "tags"        : tags,
                 "crawled_at"  : datetime.now().isoformat(),
             },
             "reviews": all_reviews,
