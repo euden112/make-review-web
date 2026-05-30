@@ -85,6 +85,23 @@ def _strip_grounding_anchor_list(items):
     return [_strip_grounding_anchor(x) for x in items]
 
 
+def _strip_grounding_anchor_targets(items):
+    """recommended_for/caution_for([{label, reason}])의 label·reason에서 (review_id=N) 제거.
+
+    추천 섹션은 공개 노출 텍스트이므로 grounding 앵커가 새어나가면 안 된다(pros/cons와 동일 처리).
+    """
+    if not isinstance(items, list):
+        return []
+    out = []
+    for it in items:
+        if isinstance(it, dict):
+            out.append({
+                "label": _strip_grounding_anchor(it.get("label", "")),
+                "reason": _strip_grounding_anchor(it.get("reason", "")),
+            })
+    return out
+
+
 def _select_platform_representative_reviews(
     reviews,
     steam_pid,
@@ -591,6 +608,8 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
                 pros_json=_strip_grounding_anchor_list(ai_result.pros),
                 cons_json=_strip_grounding_anchor_list(ai_result.cons),
                 keywords_json=_strip_grounding_anchor_list(ai_result.keywords),
+                recommended_for_json=_strip_grounding_anchor_targets(getattr(ai_result, "recommended_for", None)),
+                caution_for_json=_strip_grounding_anchor_targets(getattr(ai_result, "caution_for", None)),
                 steam_recommend_ratio=steam_recommend_ratio,
                 metacritic_critic_avg=metacritic_critic_avg,
                 metacritic_user_avg=metacritic_user_avg,
@@ -965,6 +984,8 @@ async def run_reduce_from_precomputed_map(
                 pros_json=_strip_grounding_anchor_list(ai_result.pros),
                 cons_json=_strip_grounding_anchor_list(ai_result.cons),
                 keywords_json=_strip_grounding_anchor_list(ai_result.keywords),
+                recommended_for_json=_strip_grounding_anchor_targets(getattr(ai_result, "recommended_for", None)),
+                caution_for_json=_strip_grounding_anchor_targets(getattr(ai_result, "caution_for", None)),
                 steam_recommend_ratio=steam_recommend_ratio,
                 metacritic_critic_avg=metacritic_critic_avg,
                 metacritic_user_avg=metacritic_user_avg,

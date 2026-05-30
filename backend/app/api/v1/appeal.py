@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
 from app.core.database import get_db
-from app.models.domain import ExternalReview
+from app.models.domain import ExternalReview, GameReviewSummary
 
 router = APIRouter()
 
@@ -112,7 +112,38 @@ async def _build_recommendation_targets(
     limit: int,
     db: AsyncSession,
 ) -> dict:
-    """긍정 리뷰 카테고리를 추천 대상 유형으로 변환."""
+    """추천 대상 유형 반환.
+
+    1순위: AI 요약이 생성한 game별 recommended_for(플레이어 유형 + 근거)를 그대로 서빙.
+    폴백: recommended_for 미생성(구버전 요약)이면 긍정 리뷰 카테고리 추론을 사용.
+    """
+    stored = (await db.execute(
+        select(GameReviewSummary.recommended_for_json).where(
+            and_(
+                GameReviewSummary.game_id == game_id,
+                GameReviewSummary.summary_type == "unified",
+                GameReviewSummary.review_language.is_(None),
+                GameReviewSummary.is_current == True,
+            )
+        )
+    )).scalar_one_or_none()
+    if isinstance(stored, list) and stored:
+        recommendations = [
+            {
+                "type": "recommended",
+                "label": (item.get("label") or "").strip(),
+                "category": None,
+                "basis_categories": [],
+                "summary": (item.get("reason") or "").strip(),
+                "evidence_count": 0,
+            }
+            for item in stored
+            if isinstance(item, dict) and (item.get("label") or "").strip()
+        ][:limit]
+        if recommendations:
+            return {"game_id": game_id, "recommendations": recommendations}
+
+    # ── 폴백: 카테고리 추론 ──────────────────────────────────────────────────────
     rows = (await db.execute(
         select(ExternalReview)
         .where(
