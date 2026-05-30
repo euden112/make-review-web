@@ -491,6 +491,8 @@ Quality rules:
 - Every summary must mention at least four concrete details from evidence_items unless fewer than four evidence items exist.
 - pros and cons must be self-contained review-grounded sentences, not short labels.
 - pros and cons must be 35-120 Korean characters, include a concrete reason or condition, and include review_id when available.
+- NEVER quote review text verbatim in a foreign language. If the source review is English (or any non-Korean), paraphrase its meaning in natural Korean. The output must be Korean only; do not paste English sentences.
+- Do NOT enumerate quotes like "리뷰어는 '...'라고 작성했습니다" or "한 리뷰는 ...라고 했습니다" repeatedly. Synthesize multiple reviews into one flowing Korean explanation instead of listing individual quotes.
 """.strip()
 
 
@@ -1909,9 +1911,14 @@ async def run_feature_reduce_stage(
         output_tokens = sum(int(item.get("output_tokens", 0) or 0) for item in usage.values())
         final_evidence_items = _evidence_subset(user_payloads + critic_payloads, limit=80)
         final_evidence_index = _evidence_text_index(user_payloads + critic_payloads)
-        final_pros: list[str] = []
-        final_cons: list[str] = []
-        final_pros = _fallback_natural_items_from_evidence(final_evidence_items, polarities=("positive",), existing=final_pros, limit=5)
+        # pros/cons는 LLM이 한국어로 의역·종합한 결과를 우선 사용한다. 결정론 fallback은 원문
+        # 스니펫(원어)을 짜깁기해 영어 리뷰가 영어로 새거나 "재밌었음는" 같은 비문이 나왔다.
+        # LLM 결과는 영어 리뷰도 한국어로 반영하며, _sanitize_public_list가 review_id 근거·길이를
+        # 검증한다. LLM 결과가 부족할 때만 결정론 evidence 문장으로 채운다.
+        final_pros: list[str] = _sanitize_public_list(final_data.get("pros"), final_evidence_index)[:5]
+        final_cons: list[str] = _sanitize_public_list(final_data.get("cons"), final_evidence_index)[:4]
+        if len(final_pros) < 3:
+            final_pros = _fallback_natural_items_from_evidence(final_evidence_items, polarities=("positive",), existing=final_pros, limit=5)
         if len(final_pros) < 3:
             final_pros = _fallback_natural_items_from_evidence(
                 final_evidence_items,
@@ -1920,7 +1927,8 @@ async def run_feature_reduce_stage(
                 limit=5,
                 sentence_polarity="positive",
             )
-        final_cons = _fallback_natural_items_from_evidence(final_evidence_items, polarities=("negative",), existing=final_cons, limit=4)
+        if len(final_cons) < 2:
+            final_cons = _fallback_natural_items_from_evidence(final_evidence_items, polarities=("negative",), existing=final_cons, limit=4)
         if len(final_cons) < 2:
             final_cons = _fallback_natural_items_from_evidence(final_evidence_items, polarities=("mixed",), existing=final_cons, limit=4)
         if len(final_cons) < 2:
