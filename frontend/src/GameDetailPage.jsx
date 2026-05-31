@@ -184,7 +184,7 @@ function AspectRadarChart({ aspects, isDark }) {
             <text x={lp[0]} y={lp[1] + (a.missing || tier ? -2 : 3)} textAnchor={anchor} fontSize={11} fontWeight="bold"
               fill={c === NEUTRAL ? labelColor : c}>{label}</text>
             {a.missing ? (
-              <text x={lp[0]} y={lp[1] + 9} textAnchor={anchor} fontSize={8} fill={NEUTRAL}>데이터 부족</text>
+              <text x={lp[0]} y={lp[1] + 9} textAnchor={anchor} fontSize={8} fill={NEUTRAL}>관련 리뷰 부족</text>
             ) : (
               <text x={lp[0]} y={lp[1] + 9} textAnchor={anchor} fontSize={8} fontWeight="bold" fill={c}>{tier}</text>
             )}
@@ -211,7 +211,7 @@ function PlaytimeBucketCard({ bucket, data }) {
 
       {!data?.data_available ? (
         <p className="text-xs text-gray-400 dark:text-gray-500">
-          데이터 부족
+          관련 리뷰 부족
         </p>
       ) : (
         <>
