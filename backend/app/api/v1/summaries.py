@@ -132,20 +132,30 @@ async def trigger_summarization(
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     force: bool = Query(False, description="커서를 무시하고 전체 리뷰 재처리"),
+    map_backend: str | None = Query(
+        None,
+        description="Map 단계 백엔드 강제: 'groq'(Groq API) 또는 'local'(로컬 Ollama). "
+                    "미지정 시 MAP_BACKEND 환경변수(클라우드 기본 groq)를 따른다. "
+                    "첫 요약을 로컬 GPU로 돌릴 때 'local' 지정.",
+    ),
 ):
     """AI 요약 파이프라인 트리거
 
     force=true: 커서 위치를 무시하고 전체 리뷰를 다시 처리합니다.
     오류 후 재실행하거나 요약을 강제 재생성할 때 사용합니다.
+    map_backend: 'local'로 지정하면 첫 요약을 로컬 Ollama로 처리합니다.
     """
     tasks = await get_pipeline_tasks(game_id, db)
     for mode, lang in tasks:
-        background_tasks.add_task(run_ai_pipeline_task, game_id, mode, lang, force=force)
+        background_tasks.add_task(
+            run_ai_pipeline_task, game_id, mode, lang, force=force, map_backend=map_backend
+        )
     return {
         "status": "processing",
         "message": f"게임 {game_id}의 AI 요약 작업이 비동기로 시작되었습니다.",
         "tasks": [{"mode": m, "language_code": l} for m, l in tasks],
         "force": force,
+        "map_backend": map_backend,
     }
 
 

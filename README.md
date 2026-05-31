@@ -109,6 +109,87 @@ python demo.py                  # 크롤링 → 적재 → Map-Reduce → 비교
 
 ---
 
+## 운영 모드: Map 단계를 어디서 돌릴 것인가
+
+이 서비스의 AI 요약은 **Map(근거 추출) → Reduce(최종 요약)** 두 단계로 나뉩니다. Reduce는 항상 클라우드 LLM(Groq API)에서 실행되지만, **Map 단계는 두 가지 방식 중에서 선택**할 수 있습니다. 클라우드 백엔드에는 GPU가 없으므로, 운영 환경에서는 Map을 어디서 돌릴지가 핵심 결정 사항입니다.
+
+Map 백엔드는 `MAP_BACKEND` 환경 변수로 정해지며, `docker-compose.yml`에서는 기본값이 `groq`입니다.
+
+| 모드 | Map 실행 위치 | 언제 쓰는가 |
+|---|---|---|
+| **Groq Map** (`MAP_BACKEND=groq`) | 클라우드 백엔드 안에서 Groq API 호출 | 일상적인 증분 요약, GPU가 없는 클라우드 배포 |
+| **로컬 Map** (`MAP_BACKEND=local` 또는 `run_map_pipeline.py`) | 로컬 GPU의 Ollama | 첫 요약·전체 재처리처럼 리뷰가 많아 토큰이 폭증하는 작업 |
+
+### 모드 A — 클라우드 백엔드 단독 (기본값)
+
+클라우드에 올린 백엔드 한 대로 수집·요약·서빙을 모두 처리하는 가장 단순한 구성입니다. Ollama가 필요 없습니다.
+
+- **스케줄러 자동 파이프라인**: `scheduler` 컨테이너가 매일 정해진 시각(17:05 UTC)에 **① 가격·여론 갱신 → ② Steam 증분 리뷰 크롤 → ③ AI 증분 요약**을 한 타임라인으로 직렬 실행합니다. 크롤이 신규 리뷰를 적재한 뒤 요약이 그 신규분만 처리하도록 크롤을 요약 앞에 둡니다. `MAP_BACKEND=groq`이므로 Map도 Groq API로 처리됩니다.
+- **증분의 보장**: 크롤은 매일 최신순으로 얕게 수집해 재전송하지만, ingestion이 `(platform, game, 리뷰키)` 유니크키로 upsert하므로 중복 리뷰는 흡수되고 신규 리뷰만 새 ID를 얻습니다. 요약 커서는 그 신규 ID만 처리합니다. 따라서 "지난번 이후"만 요약되는 흐름이 DB 계층에서 보장됩니다. 수집 깊이는 `CRAWL_RECENT_PER_LANG`(언어당, 기본 100)로 조절합니다.
+- **Metacritic은 자동 크롤 제외**: Metacritic 크롤러는 브라우저(playwright) 기반으로 무겁고 평론가 리뷰가 거의 고정이라, 일일 스케줄러에서는 제외하고 필요할 때 수동으로 수집합니다.
+- **수동 트리거**: 특정 게임을 즉시 요약하려면 아래처럼 호출합니다.
+
+  ```bash
+  curl -X POST "https://<클라우드주소>/api/v1/games/{game_id}/summarize" \
+       -H "X-API-Key: <API_SECRET_KEY>"
+  ```
+
+이 모드에서 동작에 필요한 환경 변수는 `GROQ_API_KEY`(또는 키 로테이션용 `GROQ_API_KEYS`)와 `MAP_BACKEND=groq`입니다. 요청이 많아 Groq 무료 한도(분당 토큰·요청 수)에 걸릴 수 있으므로, 쉼표로 구분한 여러 키를 `GROQ_API_KEYS`에 넣어 두면 한도 초과(429) 시 자동으로 다음 키로 전환합니다.
+
+### 모드 B — 로컬 GPU에서 Map, 클라우드에서 Reduce
+
+첫 요약이나 전체 재처리처럼 리뷰 수가 많을 때는, 토큰이 많이 드는 Map을 **로컬 GPU에서 돌려 비용과 한도 부담을 피하는** 구성을 사용합니다. 로컬 머신과 클라우드 백엔드는 **Cloudflare Tunnel로 공개된 백엔드 URL을 통해** 연결됩니다.
+
+연결 흐름은 다음과 같습니다.
+
+```
+[로컬 GPU 머신]                         [클라우드 백엔드]
+run_map_pipeline.py
+  │  ① GET  /api/v1/games/{id}/reviews-for-map   ← 요약할 리뷰를 내려받음
+  │  ② 로컬 Ollama로 Map 단계 실행 (근거 추출)
+  │  ③ POST /api/v1/games/{id}/reduce            → 추출한 근거를 보내 Reduce·저장 요청
+  ▼                                              ▼
+ (GPU)                                    Groq Reduce → DB 저장 → 캐시 무효화
+```
+
+실행 절차:
+
+```bash
+# 1) 로컬 GPU 머신에서 Ollama 기동 후 Map 모델 준비
+docker compose -f docker-compose.map.yml up -d
+docker exec capstone_ollama_map ollama pull gemma4:e4b
+
+# 2) 클라우드 백엔드를 Cloudflare Tunnel로 외부에 노출 (클라우드 측에서 실행)
+#    예: cloudflared tunnel --url http://localhost:8000  →  https://xxx.trycloudflare.com
+
+# 3) 로컬에서 클라우드 백엔드를 향해 Map 파이프라인 실행
+python run_map_pipeline.py \
+  --cloud-url https://xxx.trycloudflare.com \
+  --all \
+  --api-key <API_SECRET_KEY>
+```
+
+주요 옵션:
+
+| 옵션 | 설명 |
+|---|---|
+| `--cloud-url` | 연결할 클라우드 백엔드 주소 (Cloudflare Tunnel URL) |
+| `--all` / `--game-id N` | 전체 게임 처리 / 특정 게임만 처리 |
+| `--force` | 커서를 무시하고 전체 리뷰를 다시 처리 (첫 요약·재생성) |
+| `--map-route auto\|local\|groq` | Map을 어디서 돌릴지. `auto`는 리뷰가 많은 배치는 로컬, 작은 증분은 Groq로 보냄 |
+| `--api-key` | 클라우드 백엔드 인증 키(`API_SECRET_KEY`) |
+
+> 백엔드 컨테이너 자체에서 로컬 Ollama를 쓰고 싶다면(백엔드와 Ollama가 같은 네트워크에 있을 때), `run_map_pipeline.py` 대신 요약 요청에 `?map_backend=local`을 붙여 한 번만 로컬로 처리할 수도 있습니다.
+>
+> ```bash
+> curl -X POST "https://<클라우드주소>/api/v1/games/{game_id}/summarize?force=true&map_backend=local" \
+>      -H "X-API-Key: <API_SECRET_KEY>"
+> ```
+>
+> 이때 백엔드에는 `OLLAMA_BASE_URL`로 접근 가능한 Ollama가 떠 있어야 합니다.
+
+---
+
 ## 더 알아보기
 
 구현 세부 사항은 별도 문서로 정리해 두었습니다.

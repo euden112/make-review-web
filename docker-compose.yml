@@ -65,6 +65,9 @@ services:
       - GROQ_API_KEY=${GROQ_API_KEY}
       - GROQ_API_KEYS=${GROQ_API_KEYS}
       - GROQ_MODEL=${GROQ_MODEL:-meta-llama/llama-4-scout-17b-16e-instruct}
+      # Map 단계 백엔드. 클라우드는 Ollama 미배포이므로 groq 강제.
+      # 로컬 GPU로 첫 요약을 돌릴 땐 /summarize?map_backend=local 로 요청별 override.
+      - MAP_BACKEND=${MAP_BACKEND:-groq}
       - API_SECRET_KEY=${API_SECRET_KEY}
       - PYTHONPATH=/workspace/backend:/workspace/ai-pipeline:/workspace/crawling/steam
     command: sh -c "pip install -r requirements.txt && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
@@ -92,7 +95,14 @@ services:
       - REDIS_PORT=6379
       - REDIS_DB=0
       - GROQ_API_KEY=${GROQ_API_KEY}
+      - GROQ_API_KEYS=${GROQ_API_KEYS}
       - GROQ_MODEL=${GROQ_MODEL:-meta-llama/llama-4-scout-17b-16e-instruct}
+      # 스케줄러 증분 요약은 Groq map으로 처리(클라우드 Ollama 미배포).
+      - MAP_BACKEND=${MAP_BACKEND:-groq}
+      # 증분 크롤 → ingestion 자기호출용. backend 컨테이너로 POST.
+      - API_SECRET_KEY=${API_SECRET_KEY}
+      - INTERNAL_API_BASE=${INTERNAL_API_BASE:-http://backend:8000}
+      - CRAWL_RECENT_PER_LANG=${CRAWL_RECENT_PER_LANG:-100}
       - PYTHONPATH=/workspace/backend:/workspace/ai-pipeline:/workspace/crawling/steam
     command: sh -c "pip install -r requirements.txt && python -m app.jobs.scheduler --loop"
     restart: unless-stopped
@@ -101,6 +111,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      backend:
+        condition: service_started
 
   frontend:
     build:

@@ -362,6 +362,9 @@ async def run_hybrid_summary_pipeline(
     reduce_model_name: str,
     prior_summary_text: str | None = None,
     cumulative_aspect_counts: dict[str, dict[str, int]] | None = None,
+    map_backend: str | None = None,
+    groq_map_model: str | None = None,
+    groq_map_api_key: str | None = None,
     map_runner: MapRunner | None = None,
     reduce_runner: ReduceRunner | None = None,
 ) -> tuple[list[MapResult], FinalSummary, Any]:
@@ -406,7 +409,30 @@ async def run_hybrid_summary_pipeline(
         overlap_reviews=_summary_chunk_overlap(),
     )
 
-    map_func = map_runner or run_map_stage
+    # map 백엔드 선택: groq = Groq API map(클라우드, Ollama 미사용), 그 외 = 로컬 Ollama.
+    # map_runner가 명시 주입되면 그것이 최우선(테스트/특수 경로).
+    map_func = map_runner
+    if map_func is None:
+        if (map_backend or "local").strip().lower() == "groq":
+            from ai_module.map_reduce.map_groq import run_map_stage_groq
+
+            _groq_model = groq_map_model or local_model_name
+            _groq_key = groq_map_api_key or reduce_api_key
+
+            async def map_func(*, game_id, language_code, chunks, model_name, prompt_version, cache, ollama_base_url):
+                # ollama_base_url은 Groq 경로에서 무시한다.
+                return await run_map_stage_groq(
+                    game_id=game_id,
+                    language_code=language_code,
+                    chunks=chunks,
+                    model_name=_groq_model,
+                    prompt_version=prompt_version,
+                    groq_api_key=_groq_key,
+                    cache=cache,
+                )
+        else:
+            map_func = run_map_stage
+
     reduce_func = reduce_runner or run_feature_reduce_stage
 
     map_results = await map_func(

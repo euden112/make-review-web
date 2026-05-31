@@ -327,14 +327,28 @@ async def _upsert_user_summary(db, game_id: int, ai_result: FinalSummary) -> Non
         db.add(UserSummary(**fields))
 
 
-async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | None = None, force: bool = False):
-    """AI 요약 파이프라인 실행 (unified 전용)."""
+async def run_ai_pipeline_task(
+    game_id: int,
+    mode: str,
+    language_code: str | None = None,
+    force: bool = False,
+    map_backend: str | None = None,
+):
+    """AI 요약 파이프라인 실행 (unified 전용).
+
+    map_backend: "groq" = Map 단계를 Groq API로(클라우드 기본, Ollama 불필요),
+    "local" = 로컬 Ollama. None이면 MAP_BACKEND 환경변수(미설정 시 "local")를 따른다.
+    클라우드 스케줄러는 MAP_BACKEND=groq로 기동하고, 첫 요약 수동 작업은
+    /summarize?map_backend=local 로 로컬 Ollama를 선택할 수 있다.
+    """
     cursor_language_code = "unified"
     review_language = None
 
+    resolved_map_backend = (map_backend or os.getenv("MAP_BACKEND") or "local").strip().lower()
+
     logger.info(
-        "run_ai_pipeline_task started: game_id=%s mode=%s",
-        game_id, mode,
+        "run_ai_pipeline_task started: game_id=%s mode=%s map_backend=%s",
+        game_id, mode, resolved_map_backend,
     )
 
     job = None
@@ -533,6 +547,9 @@ async def run_ai_pipeline_task(game_id: int, mode: str, language_code: str | Non
                 local_model_name=os.getenv("LOCAL_MAP_MODEL", "gemma4:e4b"),
                 reduce_api_key=os.getenv("GROQ_API_KEYS") or os.getenv("GROQ_API_KEY", ""),
                 reduce_model_name=os.getenv("GROQ_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct"),
+                map_backend=resolved_map_backend,
+                groq_map_model=os.getenv("GROQ_MAP_MODEL") or os.getenv("GROQ_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct"),
+                groq_map_api_key=os.getenv("GROQ_API_KEYS") or os.getenv("GROQ_API_KEY", ""),
                 prior_summary_text=prior_summary_text,
                 score_anchors=score_anchors,
                 category_frequency=top_categories,
@@ -880,7 +897,7 @@ async def run_reduce_from_precomputed_map(
             await db.flush()
 
             ai_result = await run_feature_reduce_stage(
-                api_key=os.getenv("GROQ_API_KEY", ""),
+                api_key=os.getenv("GROQ_API_KEYS") or os.getenv("GROQ_API_KEY", ""),
                 model_name=os.getenv("GROQ_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct"),
                 language_code=language_code,
                 grouped_summaries=grouped_summaries,
