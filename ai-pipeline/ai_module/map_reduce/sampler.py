@@ -9,7 +9,11 @@ from ai_module.map_reduce.rules import is_spam_review
 
 logger = logging.getLogger(__name__)
 
-MIN_REVIEWS_PER_BUCKET = 30
+# 플레이타임 버킷을 계산/표시하는 최소 Steam(playtime 보유) 리뷰 수.
+# 이 값 미만이면 버킷을 만들지 않아 프론트가 "관련 리뷰 부족"으로 표시한다.
+# 30은 비인기작에서 너무 자주 버킷을 통째로 비워, 표본 안정성을 크게 해치지 않는
+# 선에서 18로 낮춰 표시 커버리지를 넓힌다(버킷당 ~6).
+MIN_REVIEWS_PER_BUCKET = 18
 MIN_CRITIC_REVIEWS     = 10
 STEAM_PLATFORM_CODE    = "steam"
 METACRITIC_PLATFORM_CODE = "metacritic"

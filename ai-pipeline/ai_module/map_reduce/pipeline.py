@@ -272,7 +272,7 @@ def _ensure_bucket_coverage(
     tagged: list[ReviewRow],
     all_steam: list[ReviewRow],
     buckets: PlaytimeBuckets,
-    min_per_bucket: int = 20,
+    min_per_bucket: int = 12,
 ) -> list[ReviewRow]:
     existing_ids = {row.id for row in tagged}
     all_steam_tagged = tag_reviews(all_steam, buckets)
@@ -301,7 +301,7 @@ def _ensure_bucket_coverage(
 
 def _has_playtime_bucket_coverage(
     tagged: list[ReviewRow],
-    min_per_bucket: int = 20,
+    min_per_bucket: int = 12,
 ) -> bool:
     counts = {"early": 0, "mid": 0, "late": 0}
     for row in tagged:
@@ -397,7 +397,7 @@ async def run_hybrid_summary_pipeline(
 
     tagged = tag_reviews(selected, buckets)
     if buckets is not None:
-        min_bucket_coverage = _summary_min_bucket_coverage(min(20, max(6, review_target // 6)))
+        min_bucket_coverage = _summary_min_bucket_coverage(min(12, max(6, review_target // 6)))
         tagged = _ensure_bucket_coverage(tagged, all_steam_reviews, buckets, min_per_bucket=min_bucket_coverage)
 
     chunks = chunk_reviews_by_chars(
