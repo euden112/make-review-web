@@ -312,8 +312,9 @@ async def _run_map_groq(game_id: int, data: dict, groq_api_key: str, model: str)
 async def main():
     parser = argparse.ArgumentParser(description="로컬 Map → 클라우드 Reduce 파이프라인")
     parser.add_argument(
-        "--cloud-url", required=True,
-        help="Cloudflare 터널 URL (예: https://xxx.trycloudflare.com)",
+        "--cloud-url",
+        default=os.getenv("CLOUD_URL", ""),
+        help="클라우드 backend URL (환경변수 CLOUD_URL로도 설정 가능). 예: https://xxx.trycloudflare.com",
     )
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--game-id", type=int, help="특정 game_id 처리")
@@ -356,6 +357,10 @@ async def main():
         help="Groq map 모델명",
     )
     args = parser.parse_args()
+
+    if not args.cloud_url:
+        print("ERROR: --cloud-url 또는 CLOUD_URL 환경변수가 필요합니다.")
+        sys.exit(1)
 
     # --groq-map은 하위호환: --map-route groq와 동일하게 취급
     if args.groq_map:
