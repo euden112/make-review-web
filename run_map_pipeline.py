@@ -392,8 +392,8 @@ async def _run_map_groq(game_id: int, data: dict, groq_api_key: str, model: str,
 
     stats = {
         "chunk_count":       len(map_results),
-        "map_cache_hit":     0,
-        "map_cache_miss":    len(map_results),
+        "map_cache_hit":     sum(1 for r in map_results if r.cached),
+        "map_cache_miss":    sum(1 for r in map_results if not r.cached),
         "map_input_tokens":  sum(getattr(r, "input_tokens", 0) for r in map_results),
         "map_output_tokens": sum(getattr(r, "output_tokens", 0) for r in map_results),
     }
