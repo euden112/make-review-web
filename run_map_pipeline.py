@@ -9,8 +9,11 @@
 """
 import argparse
 import asyncio
+import json
 import os
+import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
@@ -48,6 +51,7 @@ from ai_module.map_reduce.map_local import (
     _build_map_prompt,
     _build_map_retry_prompt,
 )
+from ai_module.cache.redis_cache import RedisCache
 from ai_module.map_reduce.map_schema import (
     dumps_map_payload,
     legacy_text_to_map_payload,
@@ -69,6 +73,100 @@ class _NullCache:
 
     async def set(self, key: str, value: str, ttl_sec: int = 0):
         return None
+
+
+async def _build_map_cache(enabled: bool):
+    if not enabled:
+        print("  redis map cache: disabled")
+        return _NullCache(), None
+
+    try:
+        import redis.asyncio as redis
+
+        client = redis.Redis(
+            host=os.getenv("REDIS_HOST", "localhost"),
+            port=int(os.getenv("REDIS_PORT", "6379")),
+            db=int(os.getenv("REDIS_DB", "0")),
+            decode_responses=True,
+        )
+        await client.ping()
+        print("  redis map cache: enabled")
+        return RedisCache(client), client
+    except Exception as exc:
+        print(f"  redis map cache: unavailable ({exc}); using no cache")
+        return _NullCache(), None
+
+
+def _safe_slug(value: object) -> str:
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", str(value or "unknown")).strip("-")
+    return slug or "unknown"
+
+
+def _is_full_or_force_payload(payload: dict, *, force: bool) -> bool:
+    if force:
+        return True
+    source_stats = payload.get("source_stats") or {}
+    return (
+        source_stats.get("batch_from_review_id") is not None
+        and source_stats.get("covered_from_review_id") == source_stats.get("batch_from_review_id")
+    )
+
+
+def _save_reduce_payload_artifact(
+    *,
+    payload_dir: Path,
+    game_id: int,
+    payload: dict,
+    map_route: str,
+    map_model: str,
+    save_reason: str,
+) -> Path:
+    source_stats = payload.get("source_stats") or {}
+    from_id = source_stats.get("batch_from_review_id") or "na"
+    to_id = source_stats.get("new_max_review_id") or source_stats.get("covered_to_review_id") or "na"
+    prompt_version = "json_v3_spoiler_safe_map"
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    target_dir = payload_dir / "keep"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    path = target_dir / (
+        f"game_{game_id}_{_safe_slug(save_reason)}_{from_id}-{to_id}_"
+        f"{_safe_slug(map_route)}_{_safe_slug(map_model)}_{prompt_version}_{timestamp}.json"
+    )
+    artifact = {
+        "artifact_meta": {
+            "game_id": game_id,
+            "saved_at": timestamp,
+            "save_reason": save_reason,
+            "map_route": map_route,
+            "map_model": map_model,
+            "map_prompt_version": prompt_version,
+            "retention": "keep",
+        },
+        "reduce_payload": payload,
+    }
+    path.write_text(json.dumps(artifact, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
+
+def _infer_game_id_from_path(path: Path) -> int | None:
+    match = re.search(r"game[_-](\d+)", path.name)
+    return int(match.group(1)) if match else None
+
+
+def _load_reduce_payload_artifact(path: Path) -> tuple[int, dict]:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(data, dict) and "reduce_payload" in data:
+        payload = data["reduce_payload"]
+        meta = data.get("artifact_meta") or {}
+        game_id = meta.get("game_id") or data.get("game_id") or _infer_game_id_from_path(path)
+    else:
+        payload = data
+        game_id = data.get("game_id") if isinstance(data, dict) else None
+        game_id = game_id or _infer_game_id_from_path(path)
+    if not isinstance(payload, dict):
+        raise ValueError("payload artifact must contain a JSON object")
+    if not game_id:
+        raise ValueError("payload artifact does not include game_id and filename does not contain game_<id>")
+    return int(game_id), payload
 
 
 def _compute_bucket_stats(all_steam, buckets) -> dict:
@@ -137,7 +235,7 @@ def _post_reduce(cloud_url: str, game_id: int, payload: dict, api_key: str = "")
     return resp.json()
 
 
-async def _run_map(game_id: int, data: dict, ollama_url: str, model: str) -> dict:
+async def _run_map(game_id: int, data: dict, ollama_url: str, model: str, cache) -> dict:
     language_code = data["language_code"]
 
     rows = []
@@ -190,7 +288,7 @@ async def _run_map(game_id: int, data: dict, ollama_url: str, model: str) -> dic
         chunks=chunks,
         model_name=model,
         prompt_version="json_v3_spoiler_safe_map",
-        cache=_NullCache(),
+        cache=cache,
         ollama_base_url=ollama_url,
         max_concurrency=int(os.getenv("MAP_CONCURRENCY", "1")),
     )
@@ -229,7 +327,7 @@ async def _run_map(game_id: int, data: dict, ollama_url: str, model: str) -> dic
     }
 
 
-async def _run_map_groq(game_id: int, data: dict, groq_api_key: str, model: str) -> dict:
+async def _run_map_groq(game_id: int, data: dict, groq_api_key: str, model: str, cache) -> dict:
     language_code = data["language_code"]
 
     rows = []
@@ -281,6 +379,7 @@ async def _run_map_groq(game_id: int, data: dict, groq_api_key: str, model: str)
         model_name=model,
         prompt_version="json_v3_spoiler_safe_map",
         groq_api_key=groq_api_key,
+        cache=cache,
     )
 
     grouped = _group_map_outputs_by_tags(map_results, tagged)
@@ -364,6 +463,37 @@ async def main():
         default=os.getenv("GROQ_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct"),
         help="Groq map 모델명",
     )
+    parser.add_argument(
+        "--no-redis-cache",
+        action="store_true",
+        help="로컬 run_map_pipeline Map 단계의 Redis chunk cache 사용을 끕니다.",
+    )
+    parser.add_argument(
+        "--save-payload",
+        action="store_true",
+        help="증분 여부와 관계없이 /reduce 전송 payload를 JSON artifact로 저장합니다.",
+    )
+    parser.add_argument(
+        "--no-save-payload",
+        action="store_true",
+        help="force/full-run 자동 payload 저장을 끕니다.",
+    )
+    parser.add_argument(
+        "--keep-payload",
+        action="store_true",
+        help="저장 payload를 keep 디렉터리에 보존합니다. 기본값도 keep입니다.",
+    )
+    parser.add_argument(
+        "--payload-dir",
+        type=Path,
+        default=ROOT / "ai-pipeline" / "artifacts" / "reduce_payloads",
+        help="payload artifact 저장 루트 디렉터리",
+    )
+    group.add_argument(
+        "--from-payload",
+        type=Path,
+        help="저장된 reduce payload JSON을 사용해 Map 없이 /reduce만 다시 전송",
+    )
     args = parser.parse_args()
 
     if not args.cloud_url:
@@ -378,6 +508,16 @@ async def main():
         sys.exit(1)
 
     cloud_url = args.cloud_url.rstrip("/")
+
+    if args.from_payload:
+        try:
+            game_id, payload = _load_reduce_payload_artifact(args.from_payload)
+            result = _post_reduce(cloud_url, game_id, payload, args.api_key)
+            print(f"payload reduce 전송: game_id={game_id} result={result}")
+            return
+        except Exception as exc:
+            print(f"ERROR: payload reduce 전송 실패: {exc}")
+            sys.exit(1)
 
     def _route_to_groq(review_count: int) -> bool:
         # 정책: 토큰 폭증하는 첫/전체 재처리(force)·대형 배치는 로컬(Groq free TPM 429 회피),
@@ -401,42 +541,67 @@ async def main():
         print(f"game_id={args.game_id} 처리 (라우팅={args.map_route}, 로컬={args.model}, groq={args.groq_model})")
 
     ok, skip, fail = 0, 0, 0
+    map_cache, redis_client = await _build_map_cache(not args.no_redis_cache)
 
-    for game_id in game_ids:
-        print(f"\n=== game_id={game_id} ===")
-        try:
-            data = _fetch_reviews(cloud_url, game_id, args.force, args.api_key)
+    try:
+        for game_id in game_ids:
+            print(f"\n=== game_id={game_id} ===")
+            try:
+                data = _fetch_reviews(cloud_url, game_id, args.force, args.api_key)
 
-            if data.get("status") == "no_new_reviews":
-                print("  skip: 새 리뷰 없음")
-                skip += 1
-                continue
+                if data.get("status") == "no_new_reviews":
+                    print("  skip: 새 리뷰 없음")
+                    skip += 1
+                    continue
 
-            review_count = len(data.get("reviews", []))
-            if _route_to_groq(review_count):
-                print(f"  라우팅→Groq map ({args.groq_model}) | 리뷰 {review_count}건")
-                payload = await _run_map_groq(game_id, data, args.groq_api_key, args.groq_model)
-            else:
-                print(f"  라우팅→로컬 map ({args.model}) | 리뷰 {review_count}건")
-                payload = await _run_map(game_id, data, args.ollama_url, args.model)
+                review_count = len(data.get("reviews", []))
+                if _route_to_groq(review_count):
+                    map_route = "groq"
+                    map_model = args.groq_model
+                    print(f"  라우팅→Groq map ({map_model}) | 리뷰 {review_count}건")
+                    payload = await _run_map_groq(game_id, data, args.groq_api_key, map_model, map_cache)
+                else:
+                    map_route = "local"
+                    map_model = args.model
+                    print(f"  라우팅→로컬 map ({map_model}) | 리뷰 {review_count}건")
+                    payload = await _run_map(game_id, data, args.ollama_url, map_model, map_cache)
 
-            in_tok  = payload["map_stats"]["map_input_tokens"]
-            out_tok = payload["map_stats"]["map_output_tokens"]
-            chunks  = payload["map_stats"]["chunk_count"]
-            print(f"  map 완료: {chunks} chunks | tokens in={in_tok} out={out_tok}")
+                in_tok  = payload["map_stats"]["map_input_tokens"]
+                out_tok = payload["map_stats"]["map_output_tokens"]
+                chunks  = payload["map_stats"]["chunk_count"]
+                print(f"  map 완료: {chunks} chunks | tokens in={in_tok} out={out_tok}")
 
-            result = _post_reduce(cloud_url, game_id, payload, args.api_key)
-            print(f"  reduce 전송: {result}")
-            ok += 1
+                should_save_payload = (
+                    args.save_payload
+                    or (not args.no_save_payload and _is_full_or_force_payload(payload, force=args.force))
+                )
+                if should_save_payload:
+                    reason = "manual" if args.save_payload else ("force_full_run" if args.force else "first_full_run")
+                    artifact_path = _save_reduce_payload_artifact(
+                        payload_dir=args.payload_dir,
+                        game_id=game_id,
+                        payload=payload,
+                        map_route=map_route,
+                        map_model=map_model,
+                        save_reason=reason,
+                    )
+                    print(f"  payload 저장: {artifact_path}")
 
-        except KeyboardInterrupt:
-            print("\n중단됨")
-            break
-        except Exception as exc:
-            print(f"  ERROR: {exc}")
-            import traceback
-            traceback.print_exc()
-            fail += 1
+                result = _post_reduce(cloud_url, game_id, payload, args.api_key)
+                print(f"  reduce 전송: {result}")
+                ok += 1
+
+            except KeyboardInterrupt:
+                print("\n중단됨")
+                break
+            except Exception as exc:
+                print(f"  ERROR: {exc}")
+                import traceback
+                traceback.print_exc()
+                fail += 1
+    finally:
+        if redis_client is not None:
+            await redis_client.aclose()
 
     print(f"\n완료 — 성공: {ok}  스킵: {skip}  실패: {fail}")
 

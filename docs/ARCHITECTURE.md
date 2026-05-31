@@ -18,6 +18,7 @@
   run_map_pipeline.py                                     ▼
    │ 1) GET /reviews-for-map (커서 기반 증분)  ◀──── [백엔드(클라우드)]
    │ 2) Map: 로컬 ollama gemma4:e4b 가 리뷰 묶음별 근거 추출
+   │    └─ Redis chunk cache + 첫/force payload artifact 보존
    │ 3) POST /reduce (모은 근거 전송) ───────────▶  Reduce: Groq API(scout) + 키 로테이션
    ▼ (Cloudflare 터널을 통해 클라우드에 도달)          ▼
                                           game_review_summaries / playtime_analyses
@@ -66,7 +67,9 @@
 3. Steam 리뷰의 `playtime_at_review` 분포에서 p33·p66 백분위를 구해 초반·중반·후반 경계를 정합니다. 백분위 기반이라 항상 약 3등분되며 극단값에 흔들리지 않습니다. 리뷰가 30개 미만이면 버킷을 만들지 않습니다.
 4. 초반·중반·후반을 따로 묶어 청크로 나눕니다(버킷별 청킹). 이렇게 하면 각 구간의 근거가 누락되지 않습니다.
 5. 청크마다 LLM이 `{review_id, aspect, polarity, detail}` 형태의 근거(evidence)를 추출합니다. 라우팅 정책에 따라 로컬 gemma4 또는 Groq를 사용하며, 결정성을 위해 순차로 처리합니다(`MAP_CONCURRENCY=1`).
-6. 버킷·타입별로 묶은 근거와 점수 기준값(score anchors), 카테고리 빈도를 `POST /reduce`로 전송합니다.
+6. Map 결과는 `map:{game_id}:{language}:{model}:{prompt_version}:{chunk_hash}` 키로 Redis에 저장합니다. 백엔드 내부 실행과 `run_map_pipeline.py` 모두 같은 키 전략을 쓰며, Redis 연결 실패 시 로컬 스크립트는 no-cache로 계속 진행합니다.
+7. 첫 요약 또는 `force` 전체 재처리에서는 Reduce 입력 전체를 `ai-pipeline/artifacts/reduce_payloads/keep/`에 JSON artifact로 보존합니다. 이 파일은 버킷·타입별 Map 근거, 점수 기준값(score anchors), 카테고리 빈도, 플레이타임 버킷, `source_stats`를 포함합니다.
+8. 버킷·타입별로 묶은 근거와 점수 기준값(score anchors), 카테고리 빈도를 `POST /reduce`로 전송합니다. 저장된 artifact는 `run_map_pipeline.py --from-payload <파일>`로 Map 없이 Reduce만 다시 실행하는 데 사용할 수 있습니다.
 
 ### 3-3. Reduce 단계 (`reduce_api.py`, 백엔드에서 실행)
 
@@ -91,6 +94,8 @@ Groq 클라이언트는 `GroqKeyRotator`로 감싸 두어, 429(요청 초과)가
 ### 4-4. 증분 요약의 누적 처리
 
 항목 점수의 기준값과 플레이타임 버킷은 새로 들어온 배치만이 아니라 **전체 리뷰 누적치**를 기준으로 산출해 대표성을 확보합니다. 반면 Map은 새 청크만 처리하여 비용을 아낍니다.
+
+일반 스케줄러 증분 요약은 JSON artifact를 저장하지 않습니다. 단, 커서가 없는 게임의 첫 요약이나 수동 `force` 재처리는 재실행 비용이 큰 Map 입력을 보존하기 위해 artifact를 저장합니다. 운영 환경에서 이 저장을 완전히 끄려면 `AI_REDUCE_PAYLOAD_SAVE=false`를 설정합니다.
 
 ---
 

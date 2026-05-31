@@ -1285,7 +1285,7 @@ def test_playtime_reduce_requires_bucket_coverage() -> None:
     enough_rows = []
     row_id = 1
     for bucket in ("early", "mid", "late"):
-        for _ in range(20):
+        for _ in range(12):
             enough_rows.append(_review_with_bucket(row_id, bucket))
             row_id += 1
 

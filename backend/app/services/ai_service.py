@@ -1,5 +1,6 @@
 import sys
 import os
+import json
 from pathlib import Path
 
 if os.path.exists("/workspace/ai-pipeline"):
@@ -52,6 +53,59 @@ logger.setLevel(logging.INFO)
 
 
 import re
+
+
+def _safe_artifact_slug(value: object) -> str:
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", str(value or "unknown")).strip("-")
+    return slug or "unknown"
+
+
+def _should_save_reduce_payload_artifact(*, force: bool, source_stats: dict) -> bool:
+    if os.getenv("AI_REDUCE_PAYLOAD_SAVE", "auto").strip().lower() in {"0", "false", "no", "off"}:
+        return False
+    if force:
+        return True
+    return (
+        source_stats.get("batch_from_review_id") is not None
+        and source_stats.get("covered_from_review_id") == source_stats.get("batch_from_review_id")
+    )
+
+
+def _save_reduce_payload_artifact(
+    *,
+    game_id: int,
+    payload: dict,
+    map_backend: str,
+    map_model: str,
+    save_reason: str,
+) -> Path:
+    root = Path(os.getenv("AI_REDUCE_PAYLOAD_DIR", "ai-pipeline/artifacts/reduce_payloads"))
+    target_dir = root / "keep"
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    source_stats = payload.get("source_stats") or {}
+    from_id = source_stats.get("batch_from_review_id") or "na"
+    to_id = source_stats.get("new_max_review_id") or source_stats.get("covered_to_review_id") or "na"
+    timestamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    path = target_dir / (
+        f"game_{game_id}_{_safe_artifact_slug(save_reason)}_{from_id}-{to_id}_"
+        f"{_safe_artifact_slug(map_backend)}_{_safe_artifact_slug(map_model)}_"
+        f"json_v3_spoiler_safe_map_{timestamp}.json"
+    )
+    artifact = {
+        "artifact_meta": {
+            "game_id": game_id,
+            "saved_at": timestamp,
+            "save_reason": save_reason,
+            "map_route": map_backend,
+            "map_model": map_model,
+            "map_prompt_version": "json_v3_spoiler_safe_map",
+            "retention": "keep",
+        },
+        "reduce_payload": payload,
+    }
+    path.write_text(json.dumps(artifact, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
 
 # grounding 감사용 (review_id=N) 앵커. 파이프라인 산출물에는 검증을 위해 남기되,
 # 사용자에게 저장·노출되는 텍스트에서는 제거한다(원문 근거는 representative_reviews_json으로 보존).
@@ -559,6 +613,20 @@ async def run_ai_pipeline_task(
             )).scalar_one_or_none()
 
             prior_summary_text = existing_summary.summary_text if existing_summary else None
+            source_stats = {
+                "total_reviews_in_db":    total_reviews_in_db,
+                "new_count_since_last":   new_count_since_last,
+                "batch_from_review_id":   batch_from_review_id,
+                "new_max_review_id":      new_max_review_id,
+                "covered_from_review_id": covered_from_review_id,
+                "covered_to_review_id":   covered_to_review_id,
+                "source_review_count":    source_review_count,
+            }
+            captured_reduce_payload: dict = {}
+
+            def _capture_reduce_payload(payload: dict) -> None:
+                captured_reduce_payload.clear()
+                captured_reduce_payload.update(payload)
 
             # 9. 파이프라인 실행 (Sprint 4: 단일 unified 실행)
             map_results, ai_result, playtime_buckets = await run_hybrid_summary_pipeline(
@@ -579,6 +647,7 @@ async def run_ai_pipeline_task(
                 score_anchors=score_anchors,
                 category_frequency=top_categories,
                 cumulative_aspect_counts=cumulative_aspect_counts,
+                reduce_payload_hook=_capture_reduce_payload,
             )
 
             # 10. Job 토큰/캐시 기록
@@ -598,6 +667,43 @@ async def run_ai_pipeline_task(
                 failure_reasons["reduce_usage"] = reduce_usage
             if failure_reasons:
                 job.failure_reasons_json = failure_reasons
+
+            if captured_reduce_payload and _should_save_reduce_payload_artifact(force=force, source_stats=source_stats):
+                map_stats_for_artifact = {
+                    "chunk_count":       job.chunk_count,
+                    "map_cache_hit":     job.map_cache_hit,
+                    "map_cache_miss":    job.map_cache_miss,
+                    "map_input_tokens":  job.map_input_tokens,
+                    "map_output_tokens": job.map_output_tokens,
+                    "failure_reasons":   failure_reasons or None,
+                }
+                artifact_payload = {
+                    "language_code":       captured_reduce_payload.get("language_code", "ko"),
+                    "grouped_summaries":   captured_reduce_payload.get("grouped_summaries", {}),
+                    "representative_quotes": captured_reduce_payload.get("representative_quotes", []),
+                    "score_anchors":       captured_reduce_payload.get("score_anchors") or score_anchors,
+                    "category_frequency":  captured_reduce_payload.get("category_frequency") or top_categories,
+                    "prior_summary_text":  captured_reduce_payload.get("prior_summary_text"),
+                    "playtime_buckets": (
+                        {"early_max": playtime_buckets.early_max, "mid_max": playtime_buckets.mid_max}
+                        if playtime_buckets else None
+                    ),
+                    "map_stats":           map_stats_for_artifact,
+                    "source_stats":        source_stats,
+                }
+                save_reason = "force_full_run" if force else "first_full_run"
+                artifact_path = _save_reduce_payload_artifact(
+                    game_id=game_id,
+                    payload=artifact_payload,
+                    map_backend=resolved_map_backend,
+                    map_model=(
+                        os.getenv("GROQ_MAP_MODEL") or os.getenv("GROQ_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
+                        if resolved_map_backend == "groq"
+                        else os.getenv("LOCAL_MAP_MODEL", "gemma4:e4b")
+                    ),
+                    save_reason=save_reason,
+                )
+                logger.info("reduce payload artifact saved: %s", artifact_path)
 
             # 11. DB 버전 결정
             latest_summary_version = (await db.execute(

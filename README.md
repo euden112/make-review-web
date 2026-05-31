@@ -146,10 +146,11 @@ Map 백엔드는 `MAP_BACKEND` 환경 변수로 정해지며, `docker-compose.ym
 [로컬 GPU 머신]                         [클라우드 백엔드]
 run_map_pipeline.py
   │  ① GET  /api/v1/games/{id}/reviews-for-map   ← 요약할 리뷰를 내려받음
-  │  ② 로컬 Ollama로 Map 단계 실행 (근거 추출)
-  │  ③ POST /api/v1/games/{id}/reduce            → 추출한 근거를 보내 Reduce·저장 요청
+  │  ② 로컬 Ollama로 Map 단계 실행 (근거 추출, Redis chunk cache 사용)
+  │  ③ 첫 요약/force payload를 artifacts에 보존
+  │  ④ POST /api/v1/games/{id}/reduce            → 추출한 근거를 보내 Reduce·저장 요청
   ▼                                              ▼
- (GPU)                                    Groq Reduce → DB 저장 → 캐시 무효화
+(GPU)                                    Groq Reduce → DB 저장 → 캐시 무효화
 ```
 
 실행 절차:
@@ -178,6 +179,13 @@ python run_map_pipeline.py \
 | `--force` | 커서를 무시하고 전체 리뷰를 다시 처리 (첫 요약·재생성) |
 | `--map-route auto\|local\|groq` | Map을 어디서 돌릴지. `auto`는 리뷰가 많은 배치는 로컬, 작은 증분은 Groq로 보냄 |
 | `--api-key` | 클라우드 백엔드 인증 키(`API_SECRET_KEY`) |
+| `--no-redis-cache` | 로컬 Map 실행 시 Redis chunk cache를 사용하지 않음 |
+| `--save-payload` | 증분 여부와 관계없이 `/reduce` 요청 payload를 JSON artifact로 저장 |
+| `--no-save-payload` | 첫 요약·`--force` 실행의 payload 자동 저장을 끔 |
+| `--payload-dir` | payload artifact 저장 루트 변경(기본 `ai-pipeline/artifacts/reduce_payloads`) |
+| `--from-payload` | 저장된 payload JSON으로 Map을 건너뛰고 Reduce만 다시 전송 |
+
+`run_map_pipeline.py`는 기본적으로 Redis에 chunk별 Map 결과를 캐시합니다. Redis가 없거나 연결에 실패하면 경고만 출력하고 no-cache로 계속 진행합니다. 첫 요약·`--force` 전체 재처리에서는 `/reduce`에 보낸 전체 payload를 `ai-pipeline/artifacts/reduce_payloads/keep/` 아래에 저장합니다. 이 파일에는 `grouped_summaries`, `representative_quotes`, `score_anchors`, `category_frequency`, `playtime_buckets`, `source_stats`가 포함되어 있어 Reduce 로직을 바꾼 뒤 Map을 다시 돌리지 않고 `--from-payload`로 재실행할 수 있습니다. 일반 증분 요약은 기본적으로 payload JSON을 저장하지 않습니다.
 
 > 백엔드 컨테이너 자체에서 로컬 Ollama를 쓰고 싶다면(백엔드와 Ollama가 같은 네트워크에 있을 때), `run_map_pipeline.py` 대신 요약 요청에 `?map_backend=local`을 붙여 한 번만 로컬로 처리할 수도 있습니다.
 >

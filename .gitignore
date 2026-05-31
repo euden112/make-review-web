@@ -10,6 +10,9 @@ CLAUDE.md
 __pycache__/
 *.py[cod]
 
+# AI pipeline generated artifacts
+ai-pipeline/artifacts/
+
 # Virtual environments
 .venv/
 venv/

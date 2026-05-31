@@ -367,6 +367,7 @@ async def run_hybrid_summary_pipeline(
     groq_map_api_key: str | None = None,
     map_runner: MapRunner | None = None,
     reduce_runner: ReduceRunner | None = None,
+    reduce_payload_hook: Callable[[dict[str, Any]], None] | None = None,
 ) -> tuple[list[MapResult], FinalSummary, Any]:
     normalized_reviews = _normalize_reviews(all_reviews, language_code)
     if not normalized_reviews:
@@ -452,16 +453,22 @@ async def run_hybrid_summary_pipeline(
         grouped_summaries["late"] = []
     representative_quotes = _select_representative_quotes(tagged)
 
+    reduce_payload = {
+        "language_code": language_code,
+        "grouped_summaries": grouped_summaries,
+        "score_anchors": score_anchors,
+        "category_frequency": category_frequency,
+        "prior_summary_text": prior_summary_text,
+        "representative_quotes": representative_quotes,
+        "cumulative_aspect_counts": cumulative_aspect_counts,
+    }
+    if reduce_payload_hook is not None:
+        reduce_payload_hook(dict(reduce_payload))
+
     final = await reduce_func(
         api_key=reduce_api_key,
         model_name=reduce_model_name,
-        language_code=language_code,
-        grouped_summaries=grouped_summaries,
-        score_anchors=score_anchors,
-        category_frequency=category_frequency,
-        prior_summary_text=prior_summary_text,
-        representative_quotes=representative_quotes,
-        cumulative_aspect_counts=cumulative_aspect_counts,
+        **reduce_payload,
     )
 
     return map_results, final, buckets
