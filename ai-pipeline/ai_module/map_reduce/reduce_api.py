@@ -772,7 +772,19 @@ def _repair_period_josa(text: str) -> str:
     return re.sub(r"([.!?。])([은는이가을를과와로의도만에])(?=[가-힣\s])", r"\1 \2", str(text or ""))
 
 
-def _sanitize_grounded_text(text: Any, evidence_index: dict[int, str] | None = None) -> str:
+def _sanitize_grounded_text(
+    text: Any,
+    evidence_index: dict[int, str] | None = None,
+    *,
+    drop_vague: bool = True,
+) -> str:
+    """문장 단위 살균. drop_vague=False면 vague(합성 표현) 문장을 버리지 않는다.
+
+    pros/cons는 항목마다 구체성이 필요하므로 vague 컷을 유지(drop_vague=True)하지만,
+    critic/user/playtime 같은 합성 요약은 "유저들은…", "대부분…", "높은 평가" 같은
+    일반화 표현이 자연스러워, vague 컷을 적용하면 문장이 대거 삭제돼 요약이 빈약해진다.
+    따라서 요약 본문은 drop_vague=False로 두고 anchor 검증·중복제거·josa 수리만 적용한다.
+    """
     sanitized = _repair_review_id_anchors(_sanitize_public_text(str(text or "")), evidence_index)
     sanitized = _repair_period_josa(sanitized)
     if not evidence_index:
@@ -783,7 +795,7 @@ def _sanitize_grounded_text(text: Any, evidence_index: dict[int, str] | None = N
     kept: list[str] = []
     seen_segments: set[str] = set()
     for segment in segments:
-        if _is_vague_public_sentence(segment):
+        if drop_vague and _is_vague_public_sentence(segment):
             continue
         if _segment_anchor_failures(segment, evidence_index):
             continue
@@ -1483,7 +1495,8 @@ def _sanitize_bucket(bucket: BucketSummary | None, evidence_index: dict[int, str
     if bucket is None:
         return None
     return BucketSummary(
-        summary=_sanitize_grounded_text(bucket.summary, evidence_index),
+        # 합성 요약 본문은 vague 컷 제외(과삭제 방지). pros/cons는 구체성 위해 vague 컷 유지.
+        summary=_sanitize_grounded_text(bucket.summary, evidence_index, drop_vague=False),
         sentiment_overall=bucket.sentiment_overall,
         sentiment_score=bucket.sentiment_score,
         pros=_sanitize_public_list(bucket.pros, evidence_index),
