@@ -145,11 +145,6 @@ ASPECT_LABELS = {
     "difficulty": "난이도",
 }
 
-# 레이더에 항상 표시하는 정규 aspect 5축(프론트 CANONICAL_ASPECTS와 일치).
-# baseline 산출은 이 5축을 빠짐없이 순회해 데이터가 없어도 중립 폴백으로 채운다
-# → 축마다 "데이터 부족"으로 빠지지 않고 모든 aspect가 동일 로직으로 산출된다.
-CANONICAL_ASPECTS: tuple[str, ...] = ("content", "gameplay", "graphics", "controls", "optimization")
-
 
 CandidateDecision = Literal["accept", "ambiguous", "reject"]
 
@@ -1267,26 +1262,22 @@ def _compute_baseline_aspect_scores(
             baseline_neutral = max(2.5, min(7.0, baseline_neutral))
 
     result: dict[str, dict[str, Any]] = {}
-    # CANONICAL 5축은 데이터 유무와 무관하게 빠짐없이 산출(없으면 중립 폴백)하고,
-    # 데이터가 있는 비-canonical aspect는 그대로 유지한다. 모든 축이 동일 경로를 탄다.
-    aspects_to_emit = list(dict.fromkeys((*CANONICAL_ASPECTS, *counts.keys())))
-    for aspect in aspects_to_emit:
-        bucket = counts.get(aspect) or {"positive": 0, "mixed": 0, "negative": 0}
-        total = bucket["positive"] + bucket["mixed"] + bucket["negative"]
-        if total > 0:
-            # 비율 기반 skew: (pos − neg) / (pos + neg + 1) ∈ [-1, +1]. mixed는 분모만 키워 희석.
-            skew = (bucket["positive"] - bucket["negative"]) / (bucket["positive"] + bucket["negative"] + 1)
-            # 표본 수축(shrinkage): 증거가 적은 aspect는 skew를 baseline 쪽으로 끌어당겨
-            # run마다 1~2건 차이로 점수가 크게 흔들리는 일관성 문제를 막는다.
-            # n이 충분히 크면 full skew, 작으면 0으로 수축. K는 절반-신뢰 표본 수.
-            _K = 5.0
-            confidence = total / (total + _K)
-            score = baseline_neutral + skew * 2.0 * confidence
-            score = round(max(2.0, min(9.0, score)), 1)
-        else:
-            # 데이터 없음: 게임 전체 톤(baseline_neutral)으로 중립 폴백. evidence_count=0으로
-            # 표시해 저신뢰임을 downstream이 구분할 수 있게 한다(레이더 누락 방지).
-            score = round(baseline_neutral, 1)
+    # 데이터(map evidence 또는 누적 태그)가 있는 aspect만 산출한다. 무데이터 aspect는
+    # 점수를 지어내지 않고 누락시켜 프론트가 "데이터 부족"으로 정직하게 표시한다.
+    # (graphics·controls 등은 태그 백필이 들어오면 여기서 데이터 보유 → 점수 산출.)
+    for aspect, bucket in counts.items():
+        total = sum(bucket.values())
+        if total <= 0:
+            continue
+        # 비율 기반 skew: (pos − neg) / (pos + neg + 1) ∈ [-1, +1]. mixed는 분모만 키워 희석.
+        skew = (bucket["positive"] - bucket["negative"]) / (bucket["positive"] + bucket["negative"] + 1)
+        # 표본 수축(shrinkage): 증거가 적은 aspect는 skew를 baseline 쪽으로 끌어당겨
+        # run마다 1~2건 차이로 점수가 크게 흔들리는 일관성 문제를 막는다.
+        # n이 충분히 크면 full skew, 작으면 0으로 수축. K는 절반-신뢰 표본 수.
+        _K = 5.0
+        confidence = total / (total + _K)
+        score = baseline_neutral + skew * 2.0 * confidence
+        score = round(max(2.0, min(9.0, score)), 1)
         result[aspect] = {
             "label": ASPECT_LABELS.get(aspect, "리뷰"),
             "score": score,
@@ -1339,8 +1330,6 @@ def _apply_aspect_score_deltas(
         result[aspect] = {
             "label": base.get("label") or ASPECT_LABELS.get(aspect, "리뷰"),
             "score": final_score,
-            # evidence_count=0은 근거 없는 중립 폴백(저신뢰) — 프론트가 구분 표시 가능.
-            "evidence_count": int(base.get("evidence_count") or 0),
         }
     return result
 
