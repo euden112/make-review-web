@@ -134,6 +134,14 @@ GAME_CATEGORIES: dict[str, list[str]] = {
         "matchmaking", "online play", "server", "lobby", "party system",
         "cross-play", "crossplay",
     ],
+    "재미": [
+        "재미", "재밌", "노잼", "꿀잼", "갓겜", "명작", "중독성", "시간순삭",
+        "손맛", "타격감", "전투", "게임성", "쾌감", "지루",
+        "gameplay", "game play", "addictive", "addicting", "gripping",
+        "gunplay", "combat feels", "game feel", "satisfying gameplay",
+        "fun to play", "really fun", "so much fun", "boring gameplay",
+        "core loop", "gameplay loop",
+    ],
     "버그": [
         "버그", "오류", "에러", "충돌", "불안정", "패치", "수정", "먹통",
         "씹힘", "꼬임",

@@ -81,6 +81,12 @@ GAME_CATEGORIES: dict[str, list[str]] = {
         "multiplayer", "co-op", "coop", "online", "pvp", "matchmaking",
         "server", "cooperative", "party", "versus",
     ],
+    "재미": [
+        "gameplay", "game play", "addictive", "addicting", "gripping",
+        "gunplay", "combat", "game feel", "satisfying", "fun to play",
+        "really fun", "so much fun", "boring", "core loop", "gameplay loop",
+        "engaging", "mechanics",
+    ],
     "버그": [
         "bug", "crash", "glitch", "broken", "patch", "fix", "error",
         "unstable", "freeze", "issue",

@@ -155,6 +155,43 @@ def _select_platform_representative_reviews(
     return selected
 
 
+# 크롤러 한글 카테고리 → 파이프라인 aspect 키. in-process(run_ai_pipeline_task)와
+# precomputed(run_reduce_from_precomputed_map) 경로가 동일한 aspect 백필을 쓰도록
+# 모듈 상수로 공유한다(경로별 인라인 정의가 갈라지던 드리프트 제거).
+# 5 canonical aspect(content·gameplay·graphics·controls·optimization)는 모두 소스가 있다:
+# gameplay는 "재미"·"멀티플레이"에서 온다(크롤러 카테고리 신설로 연결).
+CATEGORY_TO_ASPECT: dict[str, str] = {
+    "그래픽": "graphics", "조작감": "controls", "최적화": "optimization",
+    "콘텐츠 양": "content", "스토리": "content", "가성비": "price_value",
+    "사운드": "sound", "난이도": "difficulty", "버그": "optimization",
+    "재미": "gameplay", "멀티플레이": "gameplay",
+}
+
+
+def _compute_cumulative_aspect_counts(reviews) -> dict[str, dict[str, int]]:
+    """전체 리뷰의 review_categories_json 태그를 aspect별 긍/부/중립 카운트로 집계.
+
+    reduce의 aspect baseline 백필 입력. CATEGORY_TO_ASPECT로 매핑되는 카테고리만 센다.
+    두 요약 경로가 같은 결과를 내도록 단일 헬퍼로 둔다(정합성).
+    """
+    counts: dict[str, dict[str, int]] = {}
+    for review in reviews:
+        for item in (getattr(review, "review_categories_json", None) or []):
+            if isinstance(item, dict):
+                category = item.get("category")
+                sentiment = item.get("sentiment")
+            elif isinstance(item, str):
+                category, sentiment = item, None
+            else:
+                continue
+            asp = CATEGORY_TO_ASPECT.get(str(category)) if category else None
+            if not asp:
+                continue
+            d = counts.setdefault(asp, {"positive": 0, "negative": 0, "mixed": 0})
+            d[sentiment if sentiment in ("positive", "negative", "mixed") else "mixed"] += 1
+    return counts
+
+
 async def get_pipeline_tasks(game_id: int, db) -> list[tuple[str, str | None]]:
     """unified 1회만 실행."""
     return [("unified", None)]
@@ -466,19 +503,10 @@ async def run_ai_pipeline_task(
             metacritic_user_avg   = round(sum(meta_user_scores) / len(meta_user_scores), 2) if meta_user_scores else None
             source_review_count   = len(summary_reviews)
 
-            # 6. 카테고리별 긍/부정 비율 집계
+            # 6. 카테고리별 긍/부정 비율 집계(category_frequency) + aspect 누적 카운트
+            # aspect 백필은 전체 리뷰 태그 기준(증분 대표성). 두 경로 공용 헬퍼로 산출한다.
             category_total:    Counter = Counter()
             category_positive: Counter = Counter()
-            # 크롤러 한글 카테고리 → 파이프라인 aspect 키. 전체 리뷰의 카테고리 태그를 누적해
-            # aspect baseline을 신규 배치가 아닌 전체 기준으로 만든다(증분 대표성). gameplay는
-            # 대응 카테고리가 없어 신규 evidence 카운트로 폴백된다(reduce 쪽 처리).
-            _CATEGORY_TO_ASPECT = {
-                "그래픽": "graphics", "조작감": "controls", "최적화": "optimization",
-                "콘텐츠 양": "content", "스토리": "content", "가성비": "price_value",
-                "사운드": "sound", "난이도": "difficulty", "버그": "optimization",
-            }
-            cumulative_aspect_counts: dict[str, dict[str, int]] = {}
-
             for review in summary_reviews:
                 for item in (review.review_categories_json or []):
                     if isinstance(item, dict):
@@ -488,15 +516,12 @@ async def run_ai_pipeline_task(
                         category, sentiment = item, None
                     else:
                         category = None
-
                     if category:
                         category_total[str(category)] += 1
                         if sentiment == "positive":
                             category_positive[str(category)] += 1
-                        asp = _CATEGORY_TO_ASPECT.get(str(category))
-                        if asp:
-                            d = cumulative_aspect_counts.setdefault(asp, {"positive": 0, "negative": 0, "mixed": 0})
-                            d[sentiment if sentiment in ("positive", "negative", "mixed") else "mixed"] += 1
+
+            cumulative_aspect_counts = _compute_cumulative_aspect_counts(summary_reviews)
 
             top_categories = [
                 (cat, total, round(category_positive[cat] / total, 3))
@@ -896,6 +921,16 @@ async def run_reduce_from_precomputed_map(
             db.add(job)
             await db.flush()
 
+            # aspect baseline 백필: 전체 리뷰 태그를 DB에서 직접 집계해 reduce에 전달.
+            # in-process 경로와 동일 헬퍼를 써서 mode B에서도 태그 기반 점수가 누락되지 않게 한다.
+            aspect_reviews = (await db.execute(
+                select(ExternalReview).where(and_(
+                    ExternalReview.game_id == game_id,
+                    ExternalReview.is_deleted == False,
+                ))
+            )).scalars().all()
+            cumulative_aspect_counts = _compute_cumulative_aspect_counts(aspect_reviews)
+
             ai_result = await run_feature_reduce_stage(
                 api_key=os.getenv("GROQ_API_KEYS") or os.getenv("GROQ_API_KEY", ""),
                 model_name=os.getenv("GROQ_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct"),
@@ -905,6 +940,7 @@ async def run_reduce_from_precomputed_map(
                 category_frequency=category_frequency,
                 prior_summary_text=prior_summary_text,
                 representative_quotes=representative_quotes,
+                cumulative_aspect_counts=cumulative_aspect_counts,
             )
 
             job.chunk_count          = map_stats.get("chunk_count", 0)
