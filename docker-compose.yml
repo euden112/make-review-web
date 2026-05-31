@@ -68,6 +68,10 @@ services:
       # Map 단계 백엔드. 클라우드는 Ollama 미배포이므로 groq 강제.
       # 로컬 GPU로 첫 요약을 돌릴 땐 /summarize?map_backend=local 로 요청별 override.
       - MAP_BACKEND=${MAP_BACKEND:-groq}
+      # map_backend=local 경로 전용. .env에 로컬 Ollama 터널 URL을 넣으면 첫 요약을
+      # 로컬 GPU로 처리한다(미설정 시 컨테이너 자기자신 — 사실상 비활성).
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://localhost:11434}
+      - LOCAL_MAP_MODEL=${LOCAL_MAP_MODEL:-gemma4:e4b}
       - API_SECRET_KEY=${API_SECRET_KEY}
       - PYTHONPATH=/workspace/backend:/workspace/ai-pipeline:/workspace/crawling/steam
     command: sh -c "pip install -r requirements.txt && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
