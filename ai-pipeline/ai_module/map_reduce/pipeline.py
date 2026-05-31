@@ -441,7 +441,7 @@ async def run_hybrid_summary_pipeline(
         language_code=language_code,
         chunks=chunks,
         model_name=local_model_name,
-        prompt_version="json_v3_spoiler_safe_map",
+        prompt_version="json_v4_polarity_satisfaction",
         cache=cache or _NullAsyncCache(),
         ollama_base_url=ollama_base_url,
     )
