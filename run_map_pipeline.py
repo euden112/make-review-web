@@ -16,6 +16,14 @@ from pathlib import Path
 import httpx
 import requests
 
+# Windows 콘솔(cp949)이 em대시 등 비-cp949 문자를 못 찍어 print에서 UnicodeEncodeError로
+# 죽는 것을 막는다(작업은 끝났는데 마지막 print가 비정상 종료시키는 문제). utf-8 강제.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / "ai-pipeline"))
 
