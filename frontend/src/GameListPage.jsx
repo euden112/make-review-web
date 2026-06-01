@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import Navbar from './Navbar'
+import StarBar from './StarBar'
 
 const API_BASE = import.meta.env.VITE_API_BASE || ''
 
@@ -58,13 +59,7 @@ function HeroBanner({ games }) {
               {banner.rating.toFixed(1)}
             </span>
             <span className="text-base text-white">/ 5.0</span>
-            <div className="flex gap-0.5">
-              {[1, 2, 3, 4, 5].map((star) => (
-                <span key={star} className="text-xl"
-                  style={{ color: star <= Math.round(banner.rating) ? '#ffb020' : 'rgba(255,255,255,0.3)' }}
-                >★</span>
-              ))}
-            </div>
+            <StarBar rating={banner.rating} size={20} fillColor="#ffb020" emptyColor="rgba(255,255,255,0.3)" />
           </div>
         )}
 
@@ -228,12 +223,14 @@ function SearchBar({ searchText, setSearchText, selectedGenre, setSelectedGenre,
 
 function StarRating({ rating }) {
   return (
-    <div className="flex gap-0.5">
-      {[1, 2, 3, 4, 5].map((star) => (
-        <span key={star} className="text-sm"
-          style={{ color: rating && star <= rating ? '#f5a623' : '#d9d9d9' }}
-        >★</span>
-      ))}
+    <div className="flex items-center gap-1.5">
+      <StarBar rating={rating} />
+      {rating != null && (
+        <span className="flex items-baseline gap-0.5" style={{ lineHeight: 1 }}>
+          <span className="text-xs font-bold" style={{ color: '#f5a623' }}>{rating.toFixed(1)}</span>
+          <span className="text-xs text-gray-900 dark:text-[#e0e0e0]">/5.0</span>
+        </span>
+      )}
     </div>
   )
 }
@@ -286,19 +283,10 @@ function GameCard({ game, onClick, isSelected, onToggleCompare, compareDisabled,
                   ✦ 적기{buySignal.discount_percent > 0 ? ` -${buySignal.discount_percent}%` : ''}
                 </span>
               )}
-              {game.rating != null && (
-                <div className="bg-[#f5a623] text-[#eeeeee] text-xs font-bold rounded px-1.5 py-0.5 min-w-[38px] text-center">
-                  {game.rating.toFixed(1)}
-                </div>
-              )}
             </div>
           </div>
 
-          <StarRating rating={game.rating != null ? Math.round(game.rating) : null} />
-
-          <p className="text-xs leading-snug m-0 line-clamp-2 text-gray-500 dark:text-[#cccccc]">
-            AI 리뷰 요약 보기
-          </p>
+          <StarRating rating={game.rating} />
         </div>
 
         <button

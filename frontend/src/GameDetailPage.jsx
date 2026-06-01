@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import Navbar from './Navbar'
+import StarBar from './StarBar'
 
 const API_BASE = import.meta.env.VITE_API_BASE || ''
 
@@ -690,13 +691,7 @@ function GameDetailPage({ isDark, toggleDark }) {
                 {game.rating.toFixed(1)}
               </span>
               <span className="text-white text-base">/ 5.0</span>
-              <div className="flex gap-0.5">
-                {[1, 2, 3, 4, 5].map((star) => (
-                  <span key={star} className="text-xl"
-                    style={{ color: star <= Math.round(game.rating) ? '#ffb020' : 'rgba(255,255,255,0.3)' }}
-                  >★</span>
-                ))}
-              </div>
+              <StarBar rating={game.rating} size={20} fillColor="#ffb020" emptyColor="rgba(255,255,255,0.3)" />
             </div>
           )}
 
