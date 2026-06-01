@@ -24,6 +24,10 @@ from ai_module.map_reduce.sampler import (
 MapRunner = Callable[..., Awaitable[list[Any]]]
 ReduceRunner = Callable[..., Awaitable[FinalSummary]]
 
+# map 청크 캐시 키와 저장 artifact 라벨이 같은 값을 쓰도록 하는 단일 소스.
+# 프롬프트 내용이 바뀌면 이 값을 올려 캐시를 무효화한다(이전 결과 재사용 방지).
+MAP_PROMPT_VERSION = "json_v5_aspect_polarity_isolation"
+
 
 class _NullAsyncCache:
     async def get(self, key: str) -> str | None:
@@ -441,7 +445,7 @@ async def run_hybrid_summary_pipeline(
         language_code=language_code,
         chunks=chunks,
         model_name=local_model_name,
-        prompt_version="json_v5_aspect_polarity_isolation",
+        prompt_version=MAP_PROMPT_VERSION,
         cache=cache or _NullAsyncCache(),
         ollama_base_url=ollama_base_url,
     )

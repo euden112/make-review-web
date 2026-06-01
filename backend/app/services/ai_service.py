@@ -32,7 +32,7 @@ from app.core.redis_client import (
 from ai_module.cache.redis_cache import RedisCache
 from app.core.database import AsyncSessionLocal
 
-from ai_module.map_reduce.pipeline import run_hybrid_summary_pipeline
+from ai_module.map_reduce.pipeline import run_hybrid_summary_pipeline, MAP_PROMPT_VERSION
 from ai_module.map_reduce.reduce_api import FinalSummary
 from app.services.recommendation_targets import sanitize_player_targets
 
@@ -91,7 +91,7 @@ def _save_reduce_payload_artifact(
     path = target_dir / (
         f"game_{game_id}_{_safe_artifact_slug(save_reason)}_{from_id}-{to_id}_"
         f"{_safe_artifact_slug(map_backend)}_{_safe_artifact_slug(map_model)}_"
-        f"json_v3_spoiler_safe_map_{timestamp}.json"
+        f"{MAP_PROMPT_VERSION}_{timestamp}.json"
     )
     artifact = {
         "artifact_meta": {
@@ -100,7 +100,7 @@ def _save_reduce_payload_artifact(
             "save_reason": save_reason,
             "map_route": map_backend,
             "map_model": map_model,
-            "map_prompt_version": "json_v3_spoiler_safe_map",
+            "map_prompt_version": MAP_PROMPT_VERSION,
             "retention": "keep",
         },
         "reduce_payload": payload,
