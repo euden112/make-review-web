@@ -316,6 +316,7 @@ def _guess_aspect(text: str) -> str:
         ("price_value", ("가격", "가성비", "할인")),
         ("sound", ("사운드", "음악", "음향", "효과음", "bgm", "ost", "soundtrack", "sound design", "audio")),
         ("difficulty", ("난이도", "어렵", "쉽", "보스", "도전", "빡세", "souls", "difficulty", "challenging")),
+        ("content", ("스토리", "이야기", "서사", "세계관", "설정", "분위기", "캐릭터", "story", "narrative", "plot", "writing", "characters", "lore", "worldbuilding", "world building")),
         ("gameplay", ("재미", "재밌", "노잼", "지루", "갓겜", "꿀잼", "게임성", "할맛", "fun", "gameplay", "addictive")),
     ]
     for aspect, keywords in checks:

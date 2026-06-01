@@ -15,6 +15,7 @@ if BACKEND_ROOT not in sys.path:
 from ai_module.map_reduce import map_local
 from ai_module.map_reduce.chunker import Chunk
 from ai_module.map_reduce.map_schema import (
+    _guess_aspect,
     legacy_text_to_map_payload,
     normalize_map_payload,
     normalize_map_text_with_candidate,
@@ -148,6 +149,11 @@ def test_map_payload_redacts_public_detail_when_missing() -> None:
     assert "Malenia" not in item["public_detail"]
     assert item["spoiler_risk"] == "medium"
     assert "malenia" in [term.lower() for term in item["spoiler_terms"]]
+
+
+def test_story_terms_are_content_before_generic_fun_aspect() -> None:
+    assert _guess_aspect("스토리가 재밌고 캐릭터 서사가 좋다") == "content"
+    assert _guess_aspect("The narrative and characters are fun") == "content"
 
 
 def test_final_summary_tracks_feature_reduce_usage() -> None:
