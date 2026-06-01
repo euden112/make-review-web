@@ -21,7 +21,7 @@ from sqlalchemy.future import select
 from sqlalchemy import and_, func
 
 from app.models.domain import (
-    ExternalReview, GameSummaryCursor, ReviewSummaryJob,
+    ExternalReview, Game, GameSummaryCursor, ReviewSummaryJob,
     GameReviewSummary, Platform, ReviewType,
     PlaytimeAnalysis, CriticSummary, UserSummary,
 )
@@ -629,6 +629,10 @@ async def run_ai_pipeline_task(
                 captured_reduce_payload.clear()
                 captured_reduce_payload.update(payload)
 
+            game_title = (await db.execute(
+                select(Game.canonical_title).where(Game.id == game_id)
+            )).scalar_one_or_none()
+
             # 9. 파이프라인 실행 (Sprint 4: 단일 unified 실행)
             map_results, ai_result, playtime_buckets = await run_hybrid_summary_pipeline(
                 game_id=game_id,
@@ -641,6 +645,7 @@ async def run_ai_pipeline_task(
                 local_model_name=os.getenv("LOCAL_MAP_MODEL", "gemma4:e4b"),
                 reduce_api_key=os.getenv("GROQ_API_KEYS") or os.getenv("GROQ_API_KEY", ""),
                 reduce_model_name=os.getenv("GROQ_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct"),
+                target_game_title=game_title,
                 map_backend=resolved_map_backend,
                 groq_map_model=os.getenv("GROQ_MAP_MODEL") or os.getenv("GROQ_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct"),
                 groq_map_api_key=os.getenv("GROQ_API_KEYS") or os.getenv("GROQ_API_KEY", ""),
@@ -684,6 +689,7 @@ async def run_ai_pipeline_task(
                     "representative_quotes": captured_reduce_payload.get("representative_quotes", []),
                     "score_anchors":       captured_reduce_payload.get("score_anchors") or score_anchors,
                     "category_frequency":  captured_reduce_payload.get("category_frequency") or top_categories,
+                    "target_game_title":    captured_reduce_payload.get("target_game_title") or game_title,
                     "prior_summary_text":  captured_reduce_payload.get("prior_summary_text"),
                     "playtime_buckets": (
                         {"early_max": playtime_buckets.early_max, "mid_max": playtime_buckets.mid_max}
@@ -853,6 +859,10 @@ async def run_ai_pipeline_task(
 async def get_reviews_for_map(game_id: int, force: bool = False) -> dict:
     """로컬 Map 단계용 리뷰 데이터와 메타데이터 반환."""
     async with AsyncSessionLocal() as db:
+        game_title = (await db.execute(
+            select(Game.canonical_title).where(Game.id == game_id)
+        )).scalar_one_or_none()
+
         cursor = (await db.execute(
             select(GameSummaryCursor).where(and_(
                 GameSummaryCursor.game_id == game_id,
@@ -969,6 +979,7 @@ async def get_reviews_for_map(game_id: int, force: bool = False) -> dict:
 
         return {
             "game_id": game_id,
+            "target_game_title": game_title,
             "language_code": "ko",
             "reviews": [_serialize(r) for r in new_reviews],
             "steam_ratio": [steam_pos, steam_neg],
@@ -998,6 +1009,7 @@ async def run_reduce_from_precomputed_map(
     game_id: int,
     language_code: str,
     grouped_summaries: dict,
+    target_game_title: str | None = None,
     representative_quotes: list,
     score_anchors: dict,
     category_frequency: list,
@@ -1037,12 +1049,16 @@ async def run_reduce_from_precomputed_map(
                 ))
             )).scalars().all()
             cumulative_aspect_counts = _compute_cumulative_aspect_counts(aspect_reviews)
+            game_title = target_game_title or (await db.execute(
+                select(Game.canonical_title).where(Game.id == game_id)
+            )).scalar_one_or_none()
 
             ai_result = await run_feature_reduce_stage(
                 api_key=os.getenv("GROQ_API_KEYS") or os.getenv("GROQ_API_KEY", ""),
                 model_name=os.getenv("GROQ_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct"),
                 language_code=language_code,
                 grouped_summaries=grouped_summaries,
+                target_game_title=game_title,
                 score_anchors=score_anchors,
                 category_frequency=category_frequency,
                 prior_summary_text=prior_summary_text,

@@ -44,6 +44,7 @@ class _SourceStatsInput(BaseModel):
 class ReduceRequest(BaseModel):
     language_code: str = "ko"
     grouped_summaries: dict[str, list[str]]
+    target_game_title: str | None = None
     representative_quotes: list[str] = []
     score_anchors: dict[str, Any] = {}
     category_frequency: list[list[Any]] = []
@@ -182,6 +183,7 @@ async def trigger_reduce_from_map(
         game_id=game_id,
         language_code=body.language_code,
         grouped_summaries=body.grouped_summaries,
+        target_game_title=body.target_game_title,
         representative_quotes=body.representative_quotes,
         score_anchors=body.score_anchors,
         category_frequency=body.category_frequency,

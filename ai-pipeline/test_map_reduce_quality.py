@@ -26,6 +26,7 @@ from ai_module.map_reduce.reduce_api import (
     SUMMARY_RULES,
     SUMMARY_RULES_PATH,
     _apply_summary_rules,
+    _build_feature_prompt,
     _candidate_quality_decision,
     _evidence_subset,
     _fallback_one_liner_from_evidence,
@@ -154,6 +155,36 @@ def test_map_payload_redacts_public_detail_when_missing() -> None:
 def test_story_terms_are_content_before_generic_fun_aspect() -> None:
     assert _guess_aspect("스토리가 재밌고 캐릭터 서사가 좋다") == "content"
     assert _guess_aspect("The narrative and characters are fun") == "content"
+
+
+def test_reduce_prompt_pins_target_game_identity() -> None:
+    prompt = _build_feature_prompt(
+        feature="user",
+        language_code="ko",
+        payloads=[
+            {
+                "chunk_no": 1,
+                "review_ids": [1839],
+                "evidence_items": [
+                    {
+                        "review_id": 1839,
+                        "source": "steam_user",
+                        "aspect": "content",
+                        "polarity": "mixed",
+                        "detail": "Elden Ring was not for me, but Sekiro clicked.",
+                        "public_detail": "Elden Ring was not for me, but Sekiro clicked.",
+                        "snippet": "Elden Ring was not for me, but Sekiro clicked.",
+                    }
+                ],
+            }
+        ],
+        output_contract={"summary": "string"},
+        target_game_title="Sekiro: Shadows Die Twice",
+    )
+
+    assert "target_game_title=Sekiro: Shadows Die Twice" in prompt
+    assert "comparative mentions inside reviews" in prompt
+    assert "do not make that title the subject of output" in prompt
 
 
 def test_final_summary_tracks_feature_reduce_usage() -> None:

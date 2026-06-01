@@ -315,6 +315,7 @@ async def _run_map(game_id: int, data: dict, ollama_url: str, model: str, cache)
     return {
         "language_code":       language_code,
         "grouped_summaries":   grouped,
+        "target_game_title":    data.get("target_game_title"),
         "representative_quotes": quotes,
         "score_anchors":       data["score_anchors"],
         "category_frequency":  data["category_frequency"],
@@ -404,6 +405,7 @@ async def _run_map_groq(game_id: int, data: dict, groq_api_key: str, model: str,
     return {
         "language_code":       language_code,
         "grouped_summaries":   grouped,
+        "target_game_title":    data.get("target_game_title"),
         "representative_quotes": quotes,
         "score_anchors":       data["score_anchors"],
         "category_frequency":  data["category_frequency"],

@@ -507,6 +507,7 @@ def _build_feature_prompt(
     language_code: str,
     payloads: list[dict[str, Any]],
     output_contract: dict[str, Any],
+    target_game_title: str | None = None,
     score_anchors: dict[str, float | None] | None = None,
     category_frequency: list[tuple[str, int, float]] | None = None,
     representative_quotes: list[str] | None = None,
@@ -522,6 +523,7 @@ def _build_feature_prompt(
             "Avoid filler Korean such as '다양한 경험', '다양한 의견', '일부 사용자', '어려울 수 있습니다', and '다양한 콘텐츠'.",
             "Do not expose specific boss names, ending names, plot twists, character deaths, late-area names, or quest resolutions in public output.",
             "Do not write reviewer labels such as '리뷰어 9'. Use '(review_id=9)' only when the sentence is grounded in that exact evidence item.",
+            "Never infer the target game title from comparative mentions inside reviews. Other game titles in evidence are comparison context only.",
         ],
             "minimum_detail": {
             "summary": "At least 5 Korean sentences for user/final context when enough evidence exists; each sentence should include concrete evidence detail.",
@@ -533,6 +535,13 @@ def _build_feature_prompt(
     sections = [
         f"feature={feature}",
         f"language={language_code}",
+        f"target_game_title={target_game_title or 'unknown'}",
+        (
+            "Target game identity rule: all summaries/pros/cons/keywords/recommended_for/caution_for "
+            "must describe the target_game_title above. If evidence mentions another game title "
+            "for comparison, do not make that title the subject of output; paraphrase it as "
+            "'다른 프롬소프트웨어 작품' or '다른 게임' only when the comparison is essential."
+        ),
         FEATURE_QUALITY_RULES,
         _json_block("strict_requirements", strict_requirements, 5000),
         _json_block("output_contract", output_contract, 4000),
@@ -1732,6 +1741,7 @@ async def run_feature_reduce_stage(
     language_code: str,
     grouped_summaries: dict[str, list[str]],
     timeout_sec: int = 180,
+    target_game_title: str | None = None,
     score_anchors: dict[str, float | None] | None = None,
     category_frequency: list[tuple[str, int, float]] | None = None,
     prior_summary_text: str | None = None,
@@ -1775,6 +1785,7 @@ async def run_feature_reduce_stage(
                 language_code=language_code,
                 payloads=user_payloads,
                 output_contract=user_contract,
+                target_game_title=target_game_title,
                 score_anchors=score_anchors,
                 category_frequency=category_frequency,
                 representative_quotes=representative_quotes,
@@ -1803,6 +1814,7 @@ async def run_feature_reduce_stage(
                     language_code=language_code,
                     payloads=critic_payloads,
                     output_contract=critic_contract,
+                    target_game_title=target_game_title,
                     score_anchors=score_anchors,
                     evidence_limit=20,
                 ),
@@ -1837,6 +1849,7 @@ async def run_feature_reduce_stage(
                     language_code=language_code,
                     payloads=[],
                     output_contract=playtime_contract,
+                    target_game_title=target_game_title,
                     extra={
                         "valid_buckets": valid_playtime_buckets,
                         "early_evidence": _evidence_subset(early_payloads, limit=8) if valid_playtime_buckets["early"] else [],
@@ -1867,6 +1880,7 @@ async def run_feature_reduce_stage(
                         language_code=language_code,
                         payloads=[],
                         output_contract={_bn: "object with 3-4 sentence summary/pros/cons/keywords or null"},
+                        target_game_title=target_game_title,
                         extra={
                             "valid_buckets": {_bn: True},
                             f"{_bn}_evidence": _evidence_subset(_pt_ev[_bn], limit=8),
@@ -1938,6 +1952,7 @@ async def run_feature_reduce_stage(
                 language_code=language_code,
                 payloads=user_payloads + critic_payloads,
                 output_contract=final_contract,
+                target_game_title=target_game_title,
                 score_anchors=score_anchors,
                 category_frequency=category_frequency,
                 representative_quotes=representative_quotes,

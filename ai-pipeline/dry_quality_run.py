@@ -444,6 +444,7 @@ async def run(args: argparse.Namespace) -> list[dict[str, Any]]:
             local_model_name=os.getenv("LOCAL_MAP_MODEL", "qwen2.5:7b"),
             reduce_api_key=os.environ["GROQ_API_KEY"],
             reduce_model_name=os.getenv("GROQ_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct"),
+            target_game_title=title,
             score_anchors=_score_anchors(reviews),
         )
         stats = getattr(map_results[0], "failure_stats", {}) if map_results else {}
