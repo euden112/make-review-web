@@ -1047,6 +1047,36 @@ def test_build_tool_variety_uses_general_rule_instead_of_raw_grammar() -> None:
     assert "재밌음는" not in sentence
 
 
+def test_positive_sentence_without_rule_does_not_emit_raw_suffix_template() -> None:
+    sentence = _review_based_sentence(
+        "멀기트 말고 나에게 10시간 이상의 보스전을 시킨애가 없다 재밌슴",
+        polarity="positive",
+    )
+
+    assert sentence == ""
+    assert "재밌슴는" not in sentence
+
+
+def test_positive_fallback_skips_raw_colloquial_sentence_without_rule() -> None:
+    filled = _fallback_natural_items_from_evidence(
+        [
+            {
+                "review_id": 30,
+                "aspect": "content",
+                "polarity": "positive",
+                "public_detail": "멀기트 말고 나에게 10시간 이상의 보스전을 시킨애가 없다 재밌슴",
+                "detail": "멀기트 말고 나에게 10시간 이상의 보스전을 시킨애가 없다 재밌슴",
+                "snippet": "멀기트 말고 나에게 10시간 이상의 보스전을 시킨애가 없다 재밌슴",
+            }
+        ],
+        polarities=("positive",),
+        existing=[],
+        limit=1,
+    )
+
+    assert filled == []
+
+
 def test_crash_rule_requires_failure_context_not_positive_quit_context() -> None:
     positive_context = _review_based_sentence(
         "머리도 아팠고 어려웠고 스트레스도 받았고 강제종료도 했지만 전투방식을 익힌순간 재밌다",

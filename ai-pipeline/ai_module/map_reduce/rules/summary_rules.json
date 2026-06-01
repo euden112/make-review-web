@@ -18,6 +18,15 @@
       "aspects": ["content"]
     },
     {
+      "name": "singleplayer_fun",
+      "priority": 25,
+      "template": "싱글 플레이만으로도 재미있게 즐겼다는 반응이 있습니다",
+      "all_terms": ["싱글"],
+      "any_terms": ["재밌", "재미", "즐겼"],
+      "genres": ["common"],
+      "aspects": ["content", "multiplayer"]
+    },
+    {
       "name": "purchase_recommendation",
       "priority": 30,
       "template": "구매를 권할 만큼 재미있다는 반응이 있습니다",

@@ -1036,12 +1036,6 @@ def _review_based_sentence(detail: str, *, polarity: str) -> str:
     if decision != "accept":
         return ""
 
-    if polarity == "positive":
-        if "재밌" in text or "재미" in text:
-            return f"{text}는 반응이 있습니다"
-        if "좋" in text or "추천" in text:
-            return f"{text}는 긍정 반응이 있습니다"
-        return f"{text}는 장점으로 언급됐습니다"
     return ""
 
 
