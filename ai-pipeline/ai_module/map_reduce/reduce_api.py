@@ -1616,6 +1616,121 @@ def _bucket_stats(payloads: list[dict[str, Any]]) -> tuple[float | None, str | N
     return score, overall, len(rids)
 
 
+def _coarse_playtime_evidence_items(
+    evidence_items: list[dict[str, Any]],
+    *,
+    polarities: tuple[str, ...],
+    existing: list[str],
+    limit: int,
+    sentence_polarity: str,
+) -> list[str]:
+    result = list(existing)
+    seen_ids = {int(match.group(1)) for text in result for match in re.finditer(r"review_id\s*=\s*(\d+)", text)}
+    for item in evidence_items:
+        if len(result) >= limit:
+            break
+        if str(item.get("polarity")) not in polarities:
+            continue
+        try:
+            review_id = int(item.get("review_id"))
+        except (TypeError, ValueError):
+            continue
+        if review_id in seen_ids:
+            continue
+        detail = _compact_detail_for_sentence(_public_detail_for_sentence(item))
+        if len(detail) < 8:
+            continue
+        detail = detail.rstrip(" .。")
+        if not re.search(r"[가-힣]", detail):
+            detail = f"{_aspect_label(item)} 관련 평가"
+        if sentence_polarity == "positive":
+            sentence = f"해당 플레이타임 구간에서는 {detail} 내용이 긍정 근거로 확인됩니다 (review_id={review_id})."
+        else:
+            sentence = f"해당 플레이타임 구간에서는 {detail} 내용이 주의 근거로 확인됩니다 (review_id={review_id})."
+        result.append(sentence)
+        seen_ids.add(review_id)
+    return result
+
+
+def _fallback_playtime_bucket_from_evidence(payloads: list[dict[str, Any]]) -> BucketSummary | None:
+    """Build a non-empty playtime bucket when valid evidence exists but LLM output is blank."""
+    evidence_items = _evidence_subset(payloads, limit=8)
+    if not evidence_items:
+        return None
+
+    score, overall, count = _bucket_stats(payloads)
+    pros = _fallback_natural_items_from_evidence(
+        evidence_items,
+        polarities=("positive",),
+        existing=[],
+        limit=3,
+    )
+    if len(pros) < 2:
+        pros = _fallback_natural_items_from_evidence(
+            evidence_items,
+            polarities=("mixed",),
+            existing=pros,
+            limit=3,
+            sentence_polarity="positive",
+        )
+    if len(pros) < 2:
+        pros = _coarse_playtime_evidence_items(
+            evidence_items,
+            polarities=("positive", "mixed"),
+            existing=pros,
+            limit=3,
+            sentence_polarity="positive",
+        )
+    cons = _fallback_natural_items_from_evidence(
+        evidence_items,
+        polarities=("negative",),
+        existing=[],
+        limit=3,
+    )
+    if len(cons) < 2:
+        cons = _fallback_natural_items_from_evidence(
+            evidence_items,
+            polarities=("mixed",),
+            existing=cons,
+            limit=3,
+        )
+    if len(cons) < 1:
+        cons = _coarse_playtime_evidence_items(
+            evidence_items,
+            polarities=("negative", "mixed"),
+            existing=cons,
+            limit=3,
+            sentence_polarity="negative",
+        )
+
+    summary = _fallback_user_summary_from_evidence(evidence_items, limit=4)
+    if not summary:
+        summary = " ".join(pros + cons).strip()
+    if not summary:
+        summary = _fallback_one_liner_from_evidence(evidence_items)
+    if not summary:
+        return None
+
+    keywords: list[str] = []
+    for item in evidence_items:
+        aspect = str(item.get("aspect") or "").strip().lower()
+        label = ASPECT_LABELS.get(aspect, aspect)
+        if label and label not in keywords:
+            keywords.append(label)
+        if len(keywords) >= 6:
+            break
+
+    return BucketSummary(
+        summary=summary,
+        sentiment_overall=overall,
+        sentiment_score=score,
+        pros=pros,
+        cons=cons,
+        keywords=keywords,
+        review_count=count,
+    )
+
+
 async def run_feature_reduce_stage(
     *,
     api_key: str,
@@ -1963,25 +2078,33 @@ async def run_feature_reduce_stage(
             else:
                 critic_bucket.sentiment_overall = "mixed"
 
-        # playtime 버킷별 결정론 sentiment·review_count 부착 (reduce LLM은 summary만 생성).
+        # playtime 버킷별 결정론 sentiment·review_count 부착.
+        # valid evidence가 있는데 LLM이 late 등을 비워 반환하면 evidence fallback으로 보강한다.
         pt_payloads = {"early": early_payloads, "mid": mid_payloads, "late": late_payloads}
         playtime_buckets_out: dict[str, BucketSummary | None] = {}
         for _name in ("early", "mid", "late"):
             _raw_bucket = playtime_data.get(_name) if isinstance(playtime_data, dict) else None
             # invalid 버킷(evidence<5)은 LLM이 valid_buckets 지시를 무시하고 필러 객체를 채워
-            # 반환할 수 있다. 그대로 저장하면 pros·cons 빈 필러 요약이 노출되므로,
-            # 유효하지 않거나 pros·cons가 모두 빈 degenerate면 null(=데이터 부족)로 버린다.
-            if not valid_playtime_buckets.get(_name) or _is_degenerate_bucket(_raw_bucket):
+            # 반환할 수 있다. 그대로 저장하면 pros·cons 빈 필러 요약이 노출되므로 null로 버린다.
+            if not valid_playtime_buckets.get(_name):
                 playtime_buckets_out[_name] = None
                 continue
-            _b = _sanitize_bucket(
-                _parse_feature_bucket(_raw_bucket),
-                final_evidence_index,
-            )
+            if _is_degenerate_bucket(_raw_bucket):
+                _b = None
+            else:
+                _b = _sanitize_bucket(
+                    _parse_feature_bucket(_raw_bucket),
+                    final_evidence_index,
+                )
+            if _b is None:
+                _b = _fallback_playtime_bucket_from_evidence(pt_payloads[_name])
             if _b is not None:
                 # 감성 점수/라벨은 실제 추천 비율(ai_service의 bucket_stats)로 채운다.
                 # map payload sentiment는 추천 수가 아니라 신뢰할 수 없어 여기선 review_count만 산출.
-                _, _, _count = _bucket_stats(pt_payloads[_name])
+                _score, _overall, _count = _bucket_stats(pt_payloads[_name])
+                if _score is not None:
+                    _b.sentiment_score = _score
+                    _b.sentiment_overall = _overall
                 _b.review_count = _count
             playtime_buckets_out[_name] = _b
 

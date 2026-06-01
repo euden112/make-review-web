@@ -29,6 +29,7 @@ from ai_module.map_reduce.reduce_api import (
     _evidence_subset,
     _fallback_one_liner_from_evidence,
     _fallback_natural_items_from_evidence,
+    _fallback_playtime_bucket_from_evidence,
     _has_min_evidence,
     _fallback_user_summary_from_evidence,
     _parse_feature_bucket,
@@ -409,6 +410,66 @@ def test_evidence_subset_uses_public_detail_for_spoiler_risk() -> None:
     assert evidence["detail"] == "후반부 고난도 전투가 반복 실패로 피로해진다는 반응"
     assert evidence["snippet"] == evidence["detail"]
     assert "Malenia" not in json.dumps(evidence, ensure_ascii=False)
+
+
+def test_playtime_bucket_fallback_keeps_valid_late_evidence_visible() -> None:
+    payloads = [
+        {
+            "review_ids": [101, 102, 103, 104, 105],
+            "sentiment": {"positive": 2, "mixed": 2, "negative": 1},
+            "evidence_items": [
+                {
+                    "review_id": 101,
+                    "source": "steam_user",
+                    "aspect": "content",
+                    "polarity": "positive",
+                    "public_detail": "후반부까지 캐릭터 선택과 분기 결과가 계속 흥미롭게 이어졌다는 반응",
+                    "snippet": "후반부까지 캐릭터 선택과 분기 결과가 계속 흥미롭게 이어졌다는 반응",
+                },
+                {
+                    "review_id": 102,
+                    "source": "steam_user",
+                    "aspect": "gameplay",
+                    "polarity": "mixed",
+                    "public_detail": "플레이 시간이 길어질수록 전투 반복은 느껴지지만 빌드 완성의 재미가 남았다는 반응",
+                    "snippet": "플레이 시간이 길어질수록 전투 반복은 느껴지지만 빌드 완성의 재미가 남았다는 반응",
+                },
+                {
+                    "review_id": 103,
+                    "source": "steam_user",
+                    "aspect": "optimization",
+                    "polarity": "negative",
+                    "public_detail": "후반 구간에서 긴 로딩과 프레임 저하가 몰입을 끊었다는 불만",
+                    "snippet": "후반 구간에서 긴 로딩과 프레임 저하가 몰입을 끊었다는 불만",
+                },
+                {
+                    "review_id": 104,
+                    "source": "steam_user",
+                    "aspect": "content",
+                    "polarity": "positive",
+                    "public_detail": "엔딩을 본 뒤에도 남은 사이드 콘텐츠를 더 찾게 됐다는 평가",
+                    "snippet": "엔딩을 본 뒤에도 남은 사이드 콘텐츠를 더 찾게 됐다는 평가",
+                },
+                {
+                    "review_id": 105,
+                    "source": "steam_user",
+                    "aspect": "difficulty",
+                    "polarity": "mixed",
+                    "public_detail": "후반 난이도 상승은 부담스럽지만 공략을 익히면 성취감이 있었다는 반응",
+                    "snippet": "후반 난이도 상승은 부담스럽지만 공략을 익히면 성취감이 있었다는 반응",
+                },
+            ],
+        }
+    ]
+
+    bucket = _fallback_playtime_bucket_from_evidence(payloads)
+
+    assert bucket is not None
+    assert bucket.summary
+    assert bucket.review_count == 5
+    assert bucket.sentiment_score == 40
+    assert bucket.pros or bucket.cons
+    assert "콘텐츠" in bucket.keywords
 
 
 def test_sanitize_public_list_drops_misaligned_anchor_and_fallback_fills() -> None:
