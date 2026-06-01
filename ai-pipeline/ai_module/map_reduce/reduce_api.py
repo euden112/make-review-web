@@ -134,8 +134,8 @@ ASPECT_LABELS = {
     "control": "조작",
     "optimization": "최적화",
     "performance": "최적화",
-    "content": "콘텐츠",
-    "story": "콘텐츠",
+    "content": "콘텐츠/스토리",
+    "story": "콘텐츠/스토리",
     "price_value": "가격",
     "sound": "음향",
     "music": "음향",
@@ -1055,7 +1055,7 @@ def _sentence_subject(item: dict[str, Any], detail: str) -> str:
         return f"{label} 측면에서는"
     if label != "리뷰" and label in source:
         return f"{label} 측면에서는"
-    if label == "콘텐츠":
+    if label == "콘텐츠/스토리":
         return "플레이 경험에서는"
     return "해당 리뷰에서는"
 

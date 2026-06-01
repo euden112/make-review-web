@@ -470,7 +470,7 @@ def test_playtime_bucket_fallback_keeps_valid_late_evidence_visible() -> None:
     assert bucket.review_count == 5
     assert bucket.sentiment_score == 40
     assert bucket.pros or bucket.cons
-    assert "콘텐츠" in bucket.keywords
+    assert "콘텐츠/스토리" in bucket.keywords
 
 
 def test_sanitize_public_list_drops_misaligned_anchor_and_fallback_fills() -> None:

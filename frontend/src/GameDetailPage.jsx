@@ -8,7 +8,7 @@ const CATEGORY_LABELS = {
   graphics: '그래픽',
   controls: '조작감',
   optimization: '최적화',
-  content: '콘텐츠 양',
+  content: '콘텐츠/스토리',
   price_value: '가성비',
   sound: '음향',
   gameplay: '재미',
