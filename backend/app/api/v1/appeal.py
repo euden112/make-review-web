@@ -10,6 +10,7 @@ from sqlalchemy.future import select
 
 from app.core.database import get_db
 from app.models.domain import ExternalReview, GameReviewSummary
+from app.services.recommendation_targets import sanitize_player_targets
 
 router = APIRouter()
 
@@ -128,6 +129,7 @@ async def _build_recommendation_targets(
         )
     )).scalar_one_or_none()
     if isinstance(stored, list) and stored:
+        stored = sanitize_player_targets(stored, limit=limit)
         recommendations = [
             {
                 "type": "recommended",

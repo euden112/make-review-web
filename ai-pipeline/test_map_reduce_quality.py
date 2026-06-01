@@ -39,6 +39,7 @@ from ai_module.map_reduce.reduce_api import (
 )
 from ai_module.map_reduce.pipeline import _has_playtime_bucket_coverage, _select_representative_quotes
 from ai_module.map_reduce.sampler import ReviewRow
+from app.services.recommendation_targets import sanitize_player_targets
 from dry_quality_run import _gate_results
 
 
@@ -1371,6 +1372,37 @@ def test_map_prompt_requires_aspect_scoped_polarity() -> None:
     assert "optimization negative" in prompt
     assert "polarity must describe sentiment toward the selected aspect itself" in retry_prompt
     assert "bugs, FPS, crashes, stutter, or optimization" in retry_prompt
+
+
+def test_recommendation_target_rewrites_unsupported_open_world_label() -> None:
+    targets = sanitize_player_targets(
+        [
+            {
+                "label": "오픈월드 자유도를 즐기는 플레이어",
+                "reason": "하데스 아들이라는 설정을 시스템에 잘 녹여냈고 트리가 다양한 것도 장점으로 꼽혔습니다.",
+            }
+        ]
+    )
+
+    assert targets == [
+        {
+            "label": "빌드 조합과 선택지 다양성을 즐기는 플레이어",
+            "reason": "하데스 아들이라는 설정을 시스템에 잘 녹여냈고 트리가 다양한 것도 장점으로 꼽혔습니다.",
+        }
+    ]
+
+
+def test_recommendation_target_keeps_supported_open_world_label() -> None:
+    targets = sanitize_player_targets(
+        [
+            {
+                "label": "오픈월드 자유도를 즐기는 플레이어",
+                "reason": "넓은 오픈월드에서 탐험과 서브 퀘스트를 자유롭게 즐긴다는 반응이 반복됐습니다.",
+            }
+        ]
+    )
+
+    assert targets[0]["label"] == "오픈월드 자유도를 즐기는 플레이어"
 
 
 def test_map_stage_uses_local_llm_as_primary_by_default(monkeypatch) -> None:

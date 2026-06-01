@@ -1764,7 +1764,11 @@ async def run_feature_reduce_stage(
             "pros": "4-5 concrete evidence-backed Korean strings with situation/detail, not labels",
             "cons": "3-4 concrete evidence-backed Korean strings with failure mode or frustration detail",
             "keywords": "6-8 evidence-backed topics; include specific terms like boss, area, crash, pathfinding when present",
-            "recommended_for": "array of 3-5 objects {label: short Korean player-type phrase (예: '오픈월드 자유도를 즐기는 플레이어'), reason: one concrete Korean sentence grounded in this game's evidence with review_id when available}",
+            "recommended_for": (
+                "array of 3-5 objects {label: short Korean player-type phrase (예: '빠른 전투와 반복 성장을 즐기는 플레이어'), "
+                "reason: one concrete Korean sentence grounded in this game's evidence with review_id when available}. "
+                "Do not use broad genre labels such as 오픈월드/샌드박스/탐험 unless that exact genre is supported by this game's evidence."
+            ),
             "caution_for": "array of 3-5 objects {label: short Korean player-type phrase to be cautious, reason: one concrete Korean sentence grounded in this game's evidence with review_id when available}",
         }
         user_data, usage["user"] = await _run_feature_json(

@@ -34,6 +34,7 @@ from app.core.database import AsyncSessionLocal
 
 from ai_module.map_reduce.pipeline import run_hybrid_summary_pipeline
 from ai_module.map_reduce.reduce_api import FinalSummary
+from app.services.recommendation_targets import sanitize_player_targets
 
 try:
     from ai_module.evaluation.reduce_reliability import compute_reduce_reliability
@@ -153,7 +154,7 @@ def _strip_grounding_anchor_targets(items):
                 "label": _strip_grounding_anchor(it.get("label", "")),
                 "reason": _strip_grounding_anchor(it.get("reason", "")),
             })
-    return out
+    return sanitize_player_targets(out)
 
 
 def _select_platform_representative_reviews(
