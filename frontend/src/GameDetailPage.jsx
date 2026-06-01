@@ -16,9 +16,9 @@ const CATEGORY_LABELS = {
 }
 
 // 카테고리 분석 차트는 모든 게임에 공통으로 존재하는 핵심 축만 고정 표시한다.
-// (난이도·음향·가성비 등 게임마다 언급 여부가 갈리는 축은 차트에서 제외 — 축 일관성 확보.
-//  이 축들은 파이프라인에서 계속 산출되어 장단점/키워드 텍스트에는 반영된다.)
+// 난이도·음향·가성비처럼 게임별 언급 편차가 큰 축은 별도 보조 지표 카드로만 노출한다.
 const CANONICAL_ASPECTS = ['content', 'gameplay', 'graphics', 'controls', 'optimization']
+const AUXILIARY_ASPECT_ORDER = ['difficulty', 'sound', 'price_value']
 
 const SENTIMENT_CONFIG = {
   positive: { label: '긍정적', cls: 'bg-green-50 text-green-600 dark:bg-green-900/20 dark:text-green-400' },
@@ -823,18 +823,30 @@ function GameDetailPage({ isDark, toggleDark }) {
             {/* 카테고리별 분석 — 게임 내 상대 강·약점 프로파일 (다각형 차트) */}
             {summary.aspect_sentiment && Object.keys(summary.aspect_sentiment).length > 0 && (() => {
               const raw = summary.aspect_sentiment || {}
+              const labelOf = (a) => CATEGORY_LABELS[a.key] || a?.label || a?.key
+              const toAspect = (key, value) => {
+                const num = value ? (typeof value.score === 'number' ? value.score : Number(value.score)) : NaN
+                const has = value != null && Number.isFinite(num)
+                return { key, label: value?.label, score: has ? num : null, missing: !has }
+              }
               // 핵심 5축 고정. 게임에 근거 없는 축은 missing(중립)으로 채워 축을 항상 동일하게 유지.
-              const aspects = CANONICAL_ASPECTS.map((key) => {
-                const v = raw[key]
-                const num = v ? (typeof v.score === 'number' ? v.score : Number(v.score)) : NaN
-                const has = v != null && Number.isFinite(num)
-                return { key, label: v?.label, score: has ? num : null, missing: !has }
-              })
+              const aspects = CANONICAL_ASPECTS.map((key) => toAspect(key, raw[key]))
+              const auxiliaryAspects = Object.entries(raw)
+                .filter(([key]) => !CANONICAL_ASPECTS.includes(key))
+                .map(([key, value]) => toAspect(key, value))
+                .filter((a) => !a.missing)
+                .sort((a, b) => {
+                  const ai = AUXILIARY_ASPECT_ORDER.indexOf(a.key)
+                  const bi = AUXILIARY_ASPECT_ORDER.indexOf(b.key)
+                  const ar = ai === -1 ? AUXILIARY_ASPECT_ORDER.length : ai
+                  const br = bi === -1 ? AUXILIARY_ASPECT_ORDER.length : bi
+                  return ar - br || labelOf(a).localeCompare(labelOf(b), 'ko')
+                })
               const present = aspects.filter((a) => !a.missing)
               const sorted = [...present].sort((a, b) => b.score - a.score)
               const strength = sorted[0]
               const weakness = sorted[sorted.length - 1]
-              const labelOf = (a) => CATEGORY_LABELS[a.key] || a?.label || a?.key
+              const scoreColor = (score) => score >= 7 ? '#22c55e' : score >= 5 ? '#f5a623' : '#ef4444'
               return (
                 <div className="bg-white dark:bg-[#1e1e2e] rounded-xl p-7 border border-gray-200 dark:border-[#2a2a3e] shadow-sm">
                   <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0] mb-1">카테고리별 분석</h2>
@@ -863,6 +875,21 @@ function GameDetailPage({ isDark, toggleDark }) {
                           </div>
                         </div>
                       ))}
+                    </div>
+                  )}
+                  {auxiliaryAspects.length > 0 && (
+                    <div className="mt-5 w-full">
+                      <h3 className="text-xs font-bold text-gray-500 dark:text-gray-400 mb-2">보조 지표</h3>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                        {auxiliaryAspects.map((a) => (
+                          <div key={a.key} className="rounded-lg bg-gray-50 dark:bg-[#2a2a3e] border border-gray-200 dark:border-[#3a3a5e] px-4 py-3">
+                            <div className="flex items-center justify-between gap-3">
+                              <span className="text-sm font-bold text-gray-800 dark:text-[#e0e0e0]">{labelOf(a)}</span>
+                              <span className="text-sm font-bold" style={{ color: scoreColor(a.score) }}>{a.score.toFixed(1)}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   )}
                 </div>
