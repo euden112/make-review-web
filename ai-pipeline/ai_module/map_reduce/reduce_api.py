@@ -123,7 +123,10 @@ ASPECT_KEY_MAP = {
     "그래픽": "graphics", "비주얼": "graphics", "graphics": "graphics", "visual": "graphics",
     "조작": "controls", "조작감": "controls", "controls": "controls", "control": "controls",
     "최적화": "optimization", "성능": "optimization", "optimization": "optimization", "performance": "optimization",
-    "콘텐츠": "content", "스토리": "content", "content": "content", "story": "content",
+    "콘텐츠": "content", "콘텐츠 양": "content", "content": "content",
+    "스토리": "story", "서사": "story", "캐릭터": "story", "세계관": "story",
+    "story": "story", "narrative": "story", "plot": "story", "character": "story", "characters": "story",
+    "worldbuilding": "story", "world building": "story",
     "가격": "price_value", "가성비": "price_value", "value": "price_value", "price": "price_value",
 }
 
@@ -134,8 +137,8 @@ ASPECT_LABELS = {
     "control": "조작",
     "optimization": "최적화",
     "performance": "최적화",
-    "content": "콘텐츠/스토리",
-    "story": "콘텐츠/스토리",
+    "content": "콘텐츠/볼륨",
+    "story": "스토리/캐릭터",
     "price_value": "가격",
     "sound": "음향",
     "music": "음향",
@@ -1351,6 +1354,9 @@ def _apply_aspect_score_deltas(
         result[aspect] = {
             "label": base.get("label") or ASPECT_LABELS.get(aspect, "리뷰"),
             "score": final_score,
+            "baseline_score": base_score,
+            "evidence_count": int(base.get("evidence_count") or 0),
+            "evidence_review_ids": list(base.get("evidence_review_ids", []))[:6],
         }
     return result
 

@@ -8,7 +8,8 @@ const CATEGORY_LABELS = {
   graphics: '그래픽',
   controls: '조작감',
   optimization: '최적화',
-  content: '콘텐츠/스토리',
+  content: '콘텐츠/볼륨',
+  story: '스토리/캐릭터',
   price_value: '가성비',
   sound: '음향',
   gameplay: '재미',
@@ -18,7 +19,14 @@ const CATEGORY_LABELS = {
 // 카테고리 분석 차트는 모든 게임에 공통으로 존재하는 핵심 축만 고정 표시한다.
 // 난이도·음향·가성비처럼 게임별 언급 편차가 큰 축은 별도 보조 지표 카드로만 노출한다.
 const CANONICAL_ASPECTS = ['content', 'gameplay', 'graphics', 'controls', 'optimization']
-const AUXILIARY_ASPECT_ORDER = ['difficulty', 'sound', 'price_value']
+const AUXILIARY_ASPECT_ORDER = ['story', 'difficulty', 'sound', 'price_value']
+const AUXILIARY_ASPECTS = new Set(AUXILIARY_ASPECT_ORDER)
+const AUXILIARY_DISPLAY_RULES = {
+  story: { minEvidence: 3, strongDelta: 0.8 },
+  difficulty: { minEvidence: 2, strongDelta: 0.8 },
+  sound: { minEvidence: 2, strongDelta: 0.8 },
+  price_value: { minEvidence: 2, strongDelta: 0.8 },
+}
 
 const SENTIMENT_CONFIG = {
   positive: { label: '긍정적', cls: 'bg-green-50 text-green-600 dark:bg-green-900/20 dark:text-green-400' },
@@ -134,16 +142,17 @@ function AspectRadarChart({ aspects, isDark }) {
   // 뭉쳐 정다각형처럼 보이던 문제를, 게임 내 min-max로 펴서 능력치 프로파일처럼 강점=꼭짓점·
   // 약점=안쪽으로 보이게 한다. FLOOR로 최약체도 0이 되지 않게(빈 축 방지) 하고, spread가 작으면
   // (고른 게임) 과장 없이 균일(FLAT) 표시한다. missing 축은 FLOOR로 찍어 가짜 봉우리를 막는다.
-  const FLOOR = 0.55       // 최약 present 축: 0에 안 닿게 + min-max 과장 완화(작은 차가 floor↔꼭짓점으로 벌어지던 문제)
-  const FLAT = 0.72        // 분포 고르면(spread<0.8) 균일 표시
+  const FLOOR = 0.70       // 최약 present 축: 0에 안 닿게 + min-max 과장 완화(작은 차가 floor↔꼭짓점으로 벌어지던 문제)
+  const FLAT = 0.80        // 분포 고르면(spread<0.8) 균일 표시
+  const TIER_THRESHOLD = 0.6
   const MISSING_R = 0      // 데이터 부족 축은 꼭짓점을 중앙으로 붙여(반지름 0) 완전히 함몰 표시
   const radiusNorm = (a) => {
     if (a.missing || !Number.isFinite(a.score)) return MISSING_R
     if (spread < 0.8) return FLAT
-    return FLOOR + 0.45 * ((a.score - lo) / spread)
+    return FLOOR + 0.30 * ((a.score - lo) / spread)
   }
-  const relColor = (a) => { if (a.missing) return NEUTRAL; const d = a.score - mean; return d >= 0.3 ? '#22c55e' : d <= -0.3 ? '#ef4444' : NEUTRAL }
-  const tierOf = (a) => { if (a.missing) return null; const d = a.score - mean; return d >= 0.3 ? '강점' : d <= -0.3 ? '약점' : '보통' }
+  const relColor = (a) => { if (a.missing) return NEUTRAL; const d = a.score - mean; return d >= TIER_THRESHOLD ? '#22c55e' : d <= -TIER_THRESHOLD ? '#ef4444' : NEUTRAL }
+  const tierOf = (a) => { if (a.missing) return null; const d = a.score - mean; return d >= TIER_THRESHOLD ? '강점' : d <= -TIER_THRESHOLD ? '약점' : '보통' }
 
   const angleFor = (i) => (-90 + (360 / n) * i) * (Math.PI / 180)
   const pt = (i, r) => [cx + r * Math.cos(angleFor(i)), cy + r * Math.sin(angleFor(i))]
@@ -825,28 +834,57 @@ function GameDetailPage({ isDark, toggleDark }) {
               const raw = summary.aspect_sentiment || {}
               const labelOf = (a) => CATEGORY_LABELS[a.key] || a?.label || a?.key
               const toAspect = (key, value) => {
-                const num = value ? (typeof value.score === 'number' ? value.score : Number(value.score)) : NaN
+                const num = value
+                  ? (typeof value.score === 'number' ? value.score : Number(value.score))
+                  : NaN
+                const baselineNum = value
+                  ? (typeof value.baseline_score === 'number'
+                    ? value.baseline_score
+                    : Number(value.baseline_score))
+                  : NaN
                 const has = value != null && Number.isFinite(num)
-                return { key, label: value?.label, score: has ? num : null, missing: !has }
+                return {
+                  key,
+                  label: value?.label,
+                  score: has ? num : null,
+                  baseline_score: Number.isFinite(baselineNum) ? baselineNum : null,
+                  evidence_count: Number(value?.evidence_count ?? 0),
+                  missing: !has,
+                }
+              }
+              const shouldShowAuxiliaryAspect = (a) => {
+                if (a.missing) return false
+                if (!AUXILIARY_ASPECTS.has(a.key)) return false
+                const rule = AUXILIARY_DISPLAY_RULES[a.key]
+                if (!rule) return false
+                if ((a.evidence_count ?? 0) < rule.minEvidence) return false
+                const baseline = Number.isFinite(a.baseline_score) ? a.baseline_score : 5
+                const delta = a.score - baseline
+                return Math.abs(delta) >= rule.strongDelta
+              }
+              const auxiliaryToneMeta = (a) => {
+                const baseline = Number.isFinite(a.baseline_score) ? a.baseline_score : 5
+                const delta = a.score - baseline
+                if (delta > 0) {
+                  return { label: '좋게 언급되는 편', color: '#22c55e' }
+                }
+                return { label: '아쉽게 언급되는 편', color: '#ef4444' }
               }
               // 핵심 5축 고정. 게임에 근거 없는 축은 missing(중립)으로 채워 축을 항상 동일하게 유지.
               const aspects = CANONICAL_ASPECTS.map((key) => toAspect(key, raw[key]))
               const auxiliaryAspects = Object.entries(raw)
-                .filter(([key]) => !CANONICAL_ASPECTS.includes(key))
+                .filter(([key]) => AUXILIARY_ASPECTS.has(key))
                 .map(([key, value]) => toAspect(key, value))
-                .filter((a) => !a.missing)
+                .filter(shouldShowAuxiliaryAspect)
                 .sort((a, b) => {
                   const ai = AUXILIARY_ASPECT_ORDER.indexOf(a.key)
                   const bi = AUXILIARY_ASPECT_ORDER.indexOf(b.key)
-                  const ar = ai === -1 ? AUXILIARY_ASPECT_ORDER.length : ai
-                  const br = bi === -1 ? AUXILIARY_ASPECT_ORDER.length : bi
-                  return ar - br || labelOf(a).localeCompare(labelOf(b), 'ko')
+                  return ai - bi
                 })
               const present = aspects.filter((a) => !a.missing)
               const sorted = [...present].sort((a, b) => b.score - a.score)
               const strength = sorted[0]
               const weakness = sorted[sorted.length - 1]
-              const scoreColor = (score) => score >= 7 ? '#22c55e' : score >= 5 ? '#f5a623' : '#ef4444'
               return (
                 <div className="bg-white dark:bg-[#1e1e2e] rounded-xl p-7 border border-gray-200 dark:border-[#2a2a3e] shadow-sm">
                   <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0] mb-1">카테고리별 분석</h2>
@@ -879,16 +917,24 @@ function GameDetailPage({ isDark, toggleDark }) {
                   )}
                   {auxiliaryAspects.length > 0 && (
                     <div className="mt-5 w-full">
-                      <h3 className="text-xs font-bold text-gray-500 dark:text-gray-400 mb-2">보조 지표</h3>
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                        {auxiliaryAspects.map((a) => (
-                          <div key={a.key} className="rounded-lg bg-gray-50 dark:bg-[#2a2a3e] border border-gray-200 dark:border-[#3a3a5e] px-4 py-3">
-                            <div className="flex items-center justify-between gap-3">
-                              <span className="text-sm font-bold text-gray-800 dark:text-[#e0e0e0]">{labelOf(a)}</span>
-                              <span className="text-sm font-bold" style={{ color: scoreColor(a.score) }}>{a.score.toFixed(1)}</span>
+                      <h3 className="text-xs font-bold text-gray-500 dark:text-gray-400 mb-1">눈에 띄는 반응</h3>
+                      <p className="text-[11px] text-gray-400 dark:text-gray-500 mb-2">
+                        공통 지표 외에 특히 두드러진 리뷰 반응
+                      </p>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
+                        {auxiliaryAspects.map((a) => {
+                          const tone = auxiliaryToneMeta(a)
+                          return (
+                            <div key={a.key} className="rounded-lg bg-gray-50 dark:bg-[#2a2a3e] border border-gray-200 dark:border-[#3a3a5e] px-4 py-3">
+                              <div className="text-sm font-bold text-gray-800 dark:text-[#e0e0e0]">
+                                {labelOf(a)}
+                              </div>
+                              <p className="mt-1 text-[11px] font-medium" style={{ color: tone.color }}>
+                                {tone.label}
+                              </p>
                             </div>
-                          </div>
-                        ))}
+                          )
+                        })}
                       </div>
                     </div>
                   )}

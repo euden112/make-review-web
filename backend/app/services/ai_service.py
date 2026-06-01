@@ -217,7 +217,7 @@ def _select_platform_representative_reviews(
 # gameplay는 "재미"·"멀티플레이"에서 온다(크롤러 카테고리 신설로 연결).
 CATEGORY_TO_ASPECT: dict[str, str] = {
     "그래픽": "graphics", "조작감": "controls", "최적화": "optimization",
-    "콘텐츠 양": "content", "스토리": "content", "가성비": "price_value",
+    "콘텐츠 양": "content", "스토리": "story", "캐릭터": "story", "세계관": "story", "서사": "story", "가성비": "price_value",
     "사운드": "sound", "난이도": "difficulty", "버그": "optimization",
     "재미": "gameplay", "멀티플레이": "gameplay",
 }

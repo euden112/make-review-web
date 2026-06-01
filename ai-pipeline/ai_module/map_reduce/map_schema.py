@@ -10,6 +10,7 @@ ALLOWED_ASPECTS = {
     "controls",
     "optimization",
     "content",
+    "story",
     "price_value",
     "sound",
     "gameplay",
@@ -309,6 +310,35 @@ def dumps_map_payload(payload: dict[str, Any]) -> str:
 
 def _guess_aspect(text: str) -> str:
     lower = text.lower()
+    if any(term in lower for term in (
+        "fps", "stutter", "crash", "bug", "loading", "frame drop", "performance",
+        "server lag", "disconnect", "disconnected", "network error", "desync",
+        "rubber-banding", "rubber banding", "latency", "ping spike",
+    )):
+        return "optimization"
+    if any(term in lower for term in (
+        "fun", "gameplay", "addictive", "engaging", "immersive", "immersion",
+        "rewarding", "satisfying", "satisfaction", "combat loop", "fun combat",
+        "combat feels good", "boss pattern", "hard but fun", "keeps me playing",
+        "progression feels", "mastery", "co-op fun", "coop fun", "teamwork",
+        "playing with friends", "multiplayer fun", "pvp fun", "pve fun",
+    )):
+        return "gameplay"
+    if any(term in lower for term in ("camera", "lock-on", "lock on", "targeting", "responsiveness", "input lag", "ui control")):
+        return "controls"
+    if any(term in lower for term in (
+        "multiplayer", "multi-player", "co-op", "coop", "pvp", "pve",
+        "online mode", "matchmaking", "match making", "lobby", "player population",
+        "player base", "seasonal event", "raid", "guild", "clan",
+    )):
+        return "content"
+    if any(term in lower for term in (
+        "스토리", "이야기", "서사", "캐릭터", "세계관", "설정", "분위기", "대사", "컷신",
+        "story", "narrative", "plot", "writing", "characters", "character",
+        "dialogue", "cutscene", "cutscenes", "lore", "worldbuilding",
+        "world building",
+    )):
+        return "story"
     checks = [
         ("optimization", ("프레임", "렉", "버그", "crash", "fps", "최적화")),
         ("controls", ("조작", "키보드", "패드", "마우스")),
@@ -316,7 +346,7 @@ def _guess_aspect(text: str) -> str:
         ("price_value", ("가격", "가성비", "할인")),
         ("sound", ("사운드", "음악", "음향", "효과음", "bgm", "ost", "soundtrack", "sound design", "audio")),
         ("difficulty", ("난이도", "어렵", "쉽", "보스", "도전", "빡세", "souls", "difficulty", "challenging")),
-        ("content", ("스토리", "이야기", "서사", "세계관", "설정", "분위기", "캐릭터", "story", "narrative", "plot", "writing", "characters", "lore", "worldbuilding", "world building")),
+        ("content", ("콘텐츠", "볼륨", "퀘스트", "엔드게임", "반복", "파밍", "할 거리", "replay", "replayability", "quest", "quests", "endgame", "farming", "things to do")),
         ("gameplay", ("재미", "재밌", "노잼", "지루", "갓겜", "꿀잼", "게임성", "할맛", "fun", "gameplay", "addictive")),
     ]
     for aspect, keywords in checks:
