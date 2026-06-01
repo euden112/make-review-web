@@ -612,6 +612,12 @@ def _bucket_to_dict(bucket: BucketSummary | None) -> dict[str, Any] | None:
     }
 
 
+def _critic_score_anchors(score_anchors: dict[str, float | None] | None) -> dict[str, float | None]:
+    if not score_anchors or score_anchors.get("metacritic_critic_avg") is None:
+        return {}
+    return {"metacritic_critic_avg": score_anchors["metacritic_critic_avg"]}
+
+
 def _parse_feature_bucket(data: Any) -> BucketSummary | None:
     return _parse_bucket(data)
 
@@ -1454,35 +1460,38 @@ def _fallback_one_liner_from_evidence(evidence_items: list[dict[str, Any]]) -> s
 
 
 def _fallback_user_summary_from_evidence(evidence_items: list[dict[str, Any]], *, limit: int = 5) -> str:
-    sentences: list[str] = []
     positive_items = _fallback_natural_items_from_evidence(
         evidence_items,
         polarities=("positive",),
         existing=[],
-        limit=3,
+        limit=limit,
     )
-    if len(positive_items) < 3:
+    if len(positive_items) < limit:
         positive_items = _fallback_natural_items_from_evidence(
             evidence_items,
             polarities=("mixed",),
             existing=positive_items,
-            limit=3,
+            limit=limit,
             sentence_polarity="positive",
         )
     negative_items = _fallback_natural_items_from_evidence(
         evidence_items,
         polarities=("negative",),
         existing=[],
-        limit=2,
+        limit=limit,
     )
-    if len(negative_items) < 2:
+    if len(negative_items) < limit:
         negative_items = _fallback_natural_items_from_evidence(
             evidence_items,
             polarities=("mixed",),
             existing=negative_items,
-            limit=2,
+            limit=limit,
         )
-    for item in positive_items + negative_items:
+
+    sentences: list[str] = []
+    primary_positive = positive_items[: min(3, limit)]
+    primary_negative = negative_items[: min(2, max(0, limit - len(primary_positive)))]
+    for item in primary_positive + primary_negative + positive_items + negative_items:
         if item not in sentences:
             sentences.append(item)
         if len(sentences) >= limit:
@@ -1508,7 +1517,14 @@ def _sanitize_bucket(bucket: BucketSummary | None, evidence_index: dict[int, str
     )
 
 
-def _llm_summary_passes_gate(summary: str) -> bool:
+def _summary_sentence_count(summary: str) -> int:
+    text = " ".join(str(summary or "").split())
+    if not text:
+        return 0
+    return len([s for s in re.split(r"[.!?。！？]+", text) if s.strip()])
+
+
+def _llm_summary_passes_gate(summary: str, *, min_chars: int = 80, min_sentences: int = 2) -> bool:
     """살균을 통과한 LLM 요약을 그대로 공개할 수 있는지 판정.
 
     _sanitize_bucket이 이미 비속어·일반 스포일러 redaction과 vague/anchor 실패 문장
@@ -1517,12 +1533,11 @@ def _llm_summary_passes_gate(summary: str) -> bool:
     실패하면 결정론적 템플릿 요약으로 fallback한다.
     """
     text = " ".join(str(summary or "").split())
-    if len(text) < 80:
+    if len(text) < min_chars:
         return False
     if re.search(r"[一-鿿]", text):  # 중국어 오염 detail이 요약에 새어든 경우
         return False
-    sentences = [s for s in re.split(r"(?<=[.!?。])\s+", text) if s.strip()]
-    return len(sentences) >= 2
+    return _summary_sentence_count(text) >= min_sentences
 
 
 def _has_min_evidence(payloads: list[dict[str, Any]], minimum: int = 5) -> bool:
@@ -1795,6 +1810,7 @@ async def run_feature_reduce_stage(
 
         critic_data: dict[str, Any] | None = None
         if critic_payloads:
+            critic_score_anchors = _critic_score_anchors(score_anchors)
             critic_contract = {
                 "summary": "6-8 Korean sentences about critic evaluation criteria and concrete praise/criticism",
                 "sentiment_overall": "positive|mixed|negative",
@@ -1815,7 +1831,14 @@ async def run_feature_reduce_stage(
                     payloads=critic_payloads,
                     output_contract=critic_contract,
                     target_game_title=target_game_title,
-                    score_anchors=score_anchors,
+                    score_anchors=critic_score_anchors,
+                    extra={
+                        "source_scope": (
+                            "Critic summary must only describe supplied Metacritic critic/evaluation evidence. "
+                            "Do not mention Steam, Steam user reactions, player reception, community sentiment, "
+                            "or user review ratios in critic summary/pros/cons/keywords."
+                        )
+                    },
                     evidence_limit=20,
                 ),
             )
@@ -2013,7 +2036,11 @@ async def run_feature_reduce_stage(
         # 유저 요약: LLM 산문이 게이트(분량·언어·문장수, 살균은 _sanitize_bucket에서 완료)를
         # 통과하면 비평가 요약처럼 그대로 사용한다. 통과하지 못할 때만 결정론적 템플릿으로
         # fallback해 가독성이 떨어지는 "…반응이 있습니다" 나열을 최소화한다.
-        if user_bucket is not None and _llm_summary_passes_gate(user_bucket.summary):
+        if user_bucket is not None and _llm_summary_passes_gate(
+            user_bucket.summary,
+            min_chars=180,
+            min_sentences=4,
+        ):
             pass
         elif user_bucket is not None and fallback_user_summary:
             user_bucket.summary = fallback_user_summary
@@ -2076,6 +2103,24 @@ async def run_feature_reduce_stage(
         # 비평가 요약 점수를 Metacritic critic 평균(이미 0~100) anchor에 정합시킨다.
         # critic 평균 자체가 평론 점수이므로 delta 없이 그대로 사용하고, 라벨은 결정론 도출.
         critic_bucket = _sanitize_bucket(_parse_feature_bucket(critic_data), final_evidence_index)
+        critic_evidence_items = _evidence_subset(critic_payloads, limit=80)
+        fallback_critic_summary = _fallback_user_summary_from_evidence(critic_evidence_items, limit=5)
+        if critic_bucket is not None and not _llm_summary_passes_gate(
+            critic_bucket.summary,
+            min_chars=180,
+            min_sentences=4,
+        ):
+            if fallback_critic_summary:
+                critic_bucket.summary = fallback_critic_summary
+        elif critic_bucket is None and fallback_critic_summary:
+            critic_bucket = BucketSummary(
+                summary=fallback_critic_summary,
+                sentiment_overall=_normalize_sentiment_overall((critic_data or {}).get("sentiment_overall")),
+                sentiment_score=_normalize_sentiment_score((critic_data or {}).get("sentiment_score")),
+                pros=_sanitize_public_list((critic_data or {}).get("pros", []), final_evidence_index),
+                cons=_sanitize_public_list((critic_data or {}).get("cons", []), final_evidence_index),
+                keywords=_sanitize_keyword_list((critic_data or {}).get("keywords", [])),
+            )
         critic_anchor = None
         if score_anchors and score_anchors.get("metacritic_critic_avg") is not None:
             try:

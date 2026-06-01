@@ -28,11 +28,13 @@ from ai_module.map_reduce.reduce_api import (
     _apply_summary_rules,
     _build_feature_prompt,
     _candidate_quality_decision,
+    _critic_score_anchors,
     _evidence_subset,
     _fallback_one_liner_from_evidence,
     _fallback_natural_items_from_evidence,
     _fallback_playtime_bucket_from_evidence,
     _has_min_evidence,
+    _llm_summary_passes_gate,
     _fallback_user_summary_from_evidence,
     _parse_feature_bucket,
     _review_based_sentence,
@@ -185,6 +187,54 @@ def test_reduce_prompt_pins_target_game_identity() -> None:
     assert "target_game_title=Sekiro: Shadows Die Twice" in prompt
     assert "comparative mentions inside reviews" in prompt
     assert "do not make that title the subject of output" in prompt
+
+
+def test_critic_prompt_excludes_steam_score_anchors() -> None:
+    anchors = _critic_score_anchors(
+        {
+            "steam_recommend_ratio": 82.0,
+            "metacritic_critic_avg": 96.0,
+            "metacritic_user_avg": 78.0,
+            "steam_total": 340,
+        }
+    )
+    prompt = _build_feature_prompt(
+        feature="critic",
+        language_code="ko",
+        payloads=[],
+        output_contract={"summary": "string"},
+        score_anchors=anchors,
+        extra={
+            "source_scope": (
+                "Critic summary must only describe supplied Metacritic critic/evaluation evidence. "
+                "Do not mention Steam, Steam user reactions, player reception, community sentiment, "
+                "or user review ratios in critic summary/pros/cons/keywords."
+            )
+        },
+    )
+
+    assert anchors == {"metacritic_critic_avg": 96.0}
+    assert "steam_recommend_ratio" not in prompt
+    assert "steam_total" not in prompt
+    assert "Do not mention Steam" in prompt
+
+
+def test_user_and_critic_summary_gate_rejects_short_two_sentence_output() -> None:
+    short_summary = (
+        "전투 흐름은 빠르고 반격 타이밍이 중요하다는 반응이 반복되며 보스전의 긴장감도 함께 언급됩니다. "
+        "다만 초반 적응 구간에서 반복 실패 때문에 피로감을 느낀다는 의견도 있습니다."
+    )
+    detailed_summary = (
+        "전투 흐름은 빠르고 반격 타이밍이 중요하다는 반응이 반복됩니다. "
+        "초반에는 회피와 방어 타이밍을 익히는 과정이 핵심 진입 장벽으로 언급됩니다. "
+        "보스전에서는 패턴을 읽고 다시 도전하는 구조가 성취감으로 이어진다는 평가가 있습니다. "
+        "반대로 반복 실패가 길어질 때 피로감이 커진다는 불만도 함께 나타납니다. "
+        "이런 장점과 부담이 함께 드러나므로 단순한 호평보다 조건부 만족에 가까운 요약입니다."
+    )
+
+    assert _llm_summary_passes_gate(short_summary)
+    assert not _llm_summary_passes_gate(short_summary, min_chars=180, min_sentences=4)
+    assert _llm_summary_passes_gate(detailed_summary, min_chars=180, min_sentences=4)
 
 
 def test_final_summary_tracks_feature_reduce_usage() -> None:
