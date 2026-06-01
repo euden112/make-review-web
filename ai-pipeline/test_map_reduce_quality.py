@@ -1295,6 +1295,23 @@ def test_playtime_reduce_requires_bucket_coverage() -> None:
     assert not _has_playtime_bucket_coverage(insufficient_rows)
 
 
+def test_map_prompt_requires_aspect_scoped_polarity() -> None:
+    prompt = map_local._build_map_prompt(
+        chunk_text="[review_id=1] The graphics are beautiful, but bugs and FPS drops are terrible.",
+        deterministic_candidate='{"chunk_no":0,"review_ids":[1],"evidence_items":[]}',
+    )
+    retry_prompt = map_local._build_map_retry_prompt(
+        deterministic_candidate='{"chunk_no":0,"review_ids":[1],"evidence_items":[]}',
+    )
+
+    assert "polarity must be scoped to the selected aspect itself" in prompt
+    assert "Do not mark graphics negative solely" in prompt
+    assert "graphics positive/mixed" in prompt
+    assert "optimization negative" in prompt
+    assert "polarity must describe sentiment toward the selected aspect itself" in retry_prompt
+    assert "bugs, FPS, crashes, stutter, or optimization" in retry_prompt
+
+
 def test_map_stage_uses_local_llm_as_primary_by_default(monkeypatch) -> None:
     calls: list[str] = []
 

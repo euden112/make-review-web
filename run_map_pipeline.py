@@ -124,7 +124,7 @@ def _save_reduce_payload_artifact(
     source_stats = payload.get("source_stats") or {}
     from_id = source_stats.get("batch_from_review_id") or "na"
     to_id = source_stats.get("new_max_review_id") or source_stats.get("covered_to_review_id") or "na"
-    prompt_version = "json_v4_polarity_satisfaction"
+    prompt_version = "json_v5_aspect_polarity_isolation"
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     target_dir = payload_dir / "keep"
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -287,7 +287,7 @@ async def _run_map(game_id: int, data: dict, ollama_url: str, model: str, cache)
         language_code=language_code,
         chunks=chunks,
         model_name=model,
-        prompt_version="json_v4_polarity_satisfaction",
+        prompt_version="json_v5_aspect_polarity_isolation",
         cache=cache,
         ollama_base_url=ollama_url,
         max_concurrency=int(os.getenv("MAP_CONCURRENCY", "1")),
@@ -377,7 +377,7 @@ async def _run_map_groq(game_id: int, data: dict, groq_api_key: str, model: str,
         language_code=language_code,
         chunks=chunks,
         model_name=model,
-        prompt_version="json_v4_polarity_satisfaction",
+        prompt_version="json_v5_aspect_polarity_isolation",
         groq_api_key=groq_api_key,
         cache=cache,
     )
