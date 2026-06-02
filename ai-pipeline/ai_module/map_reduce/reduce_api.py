@@ -1596,11 +1596,65 @@ def _polarity_matches_summary_sentiment(polarity: str, sentiment_overall: str | 
     return True
 
 
+def _pick_one_liner_clause(
+    evidence_items: list[dict[str, Any]], polarity: str
+) -> tuple[str, int] | None:
+    """주어진 polarity의 첫 양질 근거에서 짧은 절(clause)과 review_id를 뽑는다."""
+    for item in evidence_items:
+        if str(item.get("polarity")) != polarity:
+            continue
+        try:
+            review_id = int(item.get("review_id"))
+        except (TypeError, ValueError):
+            continue
+        detail = _sanitize_public_text(_public_detail_for_sentence(item))
+        if _is_low_quality_detail(detail):
+            continue
+        if polarity == "positive" and _has_negative_detail(detail):
+            continue
+        clause = _compact_detail_for_sentence(detail)
+        clause = re.sub(r"\s*\.\.\.$", "", clause).strip(" '\"")
+        if len(clause) > 40:
+            clause = clause[:40].rstrip()
+        if len(clause) < 8:
+            continue
+        return clause, review_id
+    return None
+
+
+def _build_mixed_tradeoff_sentence(evidence_items: list[dict[str, Any]]) -> str:
+    """mixed 게임용 양면 one_liner.
+
+    긍정 근거와 부정 근거를 각각 한 절씩 골라 호평+아쉬움을 함께 담는다.
+    한쪽 polarity 근거가 없으면 빈 문자열을 반환해 일반 폴백으로 위임한다.
+    josa는 변수 절에 직접 붙이지 않도록 '…에 대한' 불변 연결을 쓴다.
+    """
+    pos = _pick_one_liner_clause(evidence_items, "positive")
+    neg = _pick_one_liner_clause(evidence_items, "negative")
+    if not pos or not neg:
+        return ""
+    pc, pid = pos
+    nc, nid = neg
+    sentence = (
+        f"'{pc}'에 대한 호평과 '{nc}'에 대한 아쉬움이 함께 나타납니다 "
+        f"(review_id={pid}) (review_id={nid})."
+    )
+    if 35 <= len(sentence) <= 220:
+        return sentence
+    return ""
+
+
 def _fallback_one_liner_from_evidence(
     evidence_items: list[dict[str, Any]],
     *,
     sentiment_overall: str | None = None,
 ) -> str:
+    # mixed는 한쪽으로 치우치지 않게 양면(호평+아쉬움) 문장을 우선한다.
+    if sentiment_overall == "mixed":
+        tradeoff = _build_mixed_tradeoff_sentence(evidence_items)
+        if tradeoff:
+            return tradeoff
+
     def one_liner_rank(item: dict[str, Any]) -> int:
         detail = _sanitize_public_text(_public_detail_for_sentence(item))
         if _is_low_quality_detail(detail):
@@ -2280,7 +2334,20 @@ async def run_feature_reduce_stage(
         else:
             derived_sentiment_overall = _normalize_sentiment_overall(final_data.get("sentiment_overall"))
 
-        llm_one_liner = _sanitize_grounded_text(final_data.get("one_liner", ""), final_evidence_index)
+        # one_liner는 개요 합성 문장이라 "평이 많다/대체로/긍정과 불만이 함께" 같은
+        # 일반화 표현이 자연스럽다. drop_vague=True를 쓰면 이런 문장이 대거 잘려
+        # 일반 긍정 폴백으로 떨어지므로(편향+중복), 버킷 요약과 동일하게 vague 컷을 끈다.
+        llm_one_liner = _sanitize_grounded_text(
+            final_data.get("one_liner", ""), final_evidence_index, drop_vague=False
+        )
+        # mixed인데 one_liner가 한쪽(긍정)만이면 균형이 깨진다. 단점 신호가 없으면
+        # 비워 양면 tradeoff 폴백으로 유도한다.
+        if (
+            derived_sentiment_overall == "mixed"
+            and llm_one_liner
+            and not _has_negative_detail(llm_one_liner)
+        ):
+            llm_one_liner = ""
         if llm_one_liner and _text_matches_summary_sentiment(llm_one_liner, derived_sentiment_overall):
             one_liner = llm_one_liner
         else:
