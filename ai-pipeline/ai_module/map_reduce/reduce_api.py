@@ -1425,6 +1425,11 @@ ASPECT_REL_POS_RATIO = 0.6       # 긍정 우세 기준
 ASPECT_REL_NEG_RATIO = 0.5       # 부정·복합 우세(약점 확인 조건)
 ASPECT_REL_NEG_DOMINANCE = 0.3   # 순부정 우세(neg-pos). 평균 무관 단독 약점.
 
+# baseline aspect 점수·polarity_mix·fallback 풀 산출용 evidence 표본 크기.
+# LLM 프롬프트로 가지 않으므로(프롬프트는 evidence_limit=6/14/20 별도) 토큰 비용 없이
+# 키울 수 있다. aspect당 표본을 늘려 polarity 비율 추정 노이즈를 줄인다.
+BASELINE_EVIDENCE_SAMPLE = 160
+
 
 def _polarity_ratios(mix: Any) -> tuple[float, float, float, int]:
     """polarity_mix → (positive 비율, negative+mixed 비율, 순부정(neg-pos) 비율, 총합).
@@ -2173,7 +2178,11 @@ async def run_feature_reduce_stage(
 
         # Evidence 기반 baseline 사전 산출: aspect 점수와 sentiment anchor.
         # LLM은 이 baseline을 입력으로 받아 인용 근거가 있는 작은 delta만 제안한다.
-        pre_evidence_items = _evidence_subset(user_payloads + critic_payloads, limit=80)
+        # 이 샘플은 프롬프트로 가지 않고(프롬프트 evidence는 별도 evidence_limit=6/14/20)
+        # 결정론 baseline 통계·fallback 풀에만 쓰이므로 토큰 비용 없이 크기를 키울 수 있다.
+        # 80은 aspect당 ~9개로 polarity 비율 추정 노이즈가 커(±0.17 skew) 점수가 흔들렸다.
+        # 160으로 키워 aspect당 ~18개 → 비율 stderr 절반, anchor index(200)와도 정합.
+        pre_evidence_items = _evidence_subset(user_payloads + critic_payloads, limit=BASELINE_EVIDENCE_SAMPLE)
         pre_sentiment_anchor = None
         if score_anchors and score_anchors.get("steam_recommend_ratio") is not None:
             pre_sentiment_anchor = float(score_anchors["steam_recommend_ratio"])
@@ -2251,7 +2260,7 @@ async def run_feature_reduce_stage(
 
         input_tokens = sum(int(item.get("input_tokens", 0) or 0) for item in usage.values())
         output_tokens = sum(int(item.get("output_tokens", 0) or 0) for item in usage.values())
-        final_evidence_items = _evidence_subset(user_payloads + critic_payloads, limit=80)
+        final_evidence_items = _evidence_subset(user_payloads + critic_payloads, limit=BASELINE_EVIDENCE_SAMPLE)
         final_evidence_index = _evidence_text_index(user_payloads + critic_payloads)
         # pros/cons는 LLM이 한국어로 의역·종합한 결과를 우선 사용한다. 결정론 fallback은 원문
         # 스니펫(원어)을 짜깁기해 영어 리뷰가 영어로 새거나 "재밌었음는" 같은 비문이 나왔다.
