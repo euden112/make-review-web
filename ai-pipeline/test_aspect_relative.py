@@ -123,6 +123,20 @@ def test_net_negative_weakness_always_has_reason():
     assert x["relative_reason"], f"약점인데 reason 비어있음: {x}"
 
 
+def test_high_volume_average_score_not_strength():
+    """content처럼 evidence를 독점해도 점수가 게임 평균 수준이면 강점이 아니다.
+    언급량(mention_share)은 강점 트리거가 아님(content 구조적 편향 차단)."""
+    scores = {
+        "content": _aspect(7.6, 60, 45, 8, 7),   # 최다 언급(share~0.7)이나 점수 평균 근처
+        "gameplay": _aspect(7.8, 12, 9, 2, 1),
+        "graphics": _aspect(7.5, 10, 7, 2, 1),
+    }
+    out = _enrich_aspect_relative(scores)
+    # mean=(7.6+7.8+7.5)/3=7.633, content rel=-0.03 → 강점 아님
+    assert out["content"]["relative_label"] != "strength", out["content"]
+    assert out["content"]["mention_share"] > 0.5  # 메타 필드로는 여전히 큼
+
+
 def test_three_high_aspects_not_all_strength():
     """aspect 3개 모두 고득점이고 언급 균등하면 N-상대 top_share가 막아
     전부 강점으로 도배되지 않는다."""

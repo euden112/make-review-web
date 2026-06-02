@@ -1450,8 +1450,9 @@ def _enrich_aspect_relative(aspect_scores: dict[str, Any]) -> dict[str, Any]:
     mention_count, mention_share, polarity_mix(이미 존재 시 유지).
 
     delta(score-baseline_score)는 사용하지 않는다. Elden Ring difficulty처럼
-    baseline 대비 변화량이 0이어도 점수가 높고 자주 언급되면 강점/대표 특징으로
-    노출되도록 score·평균 대비 위치·언급 비중·polarity로 판정한다.
+    baseline 대비 변화량이 0이어도 점수가 게임 내 평균보다 높으면(rel) 강점/대표
+    특징으로 노출된다. 언급 비중(mention_share)은 content가 구조적으로 독점하므로
+    라벨 트리거가 아니라 표시용 메타·보조 사유로만 쓴다.
     """
     scored = [
         (a, d) for a, d in aspect_scores.items()
@@ -1481,16 +1482,17 @@ def _enrich_aspect_relative(aspect_scores: dict[str, Any]) -> dict[str, Any]:
         #     약점으로 도배된다(점수 변별력 ≠ 약점). 따라서 weakness는 평균 대비
         #     하위(rel<=-margin)를 필수로 하고, 절대 저점/부정은 확인 조건으로만 쓴다.
         #   - 예외: aspect 자체가 순부정 우세(neg-pos >= 0.3)면 평균과 무관하게 약점.
-        #   - strength도 평균 대비 상위(rel>=margin) 또는 자주 언급(top_share)을 요구해
-        #     고평가 게임에서 모든 축이 강점으로 도배되는 대칭 문제를 막는다.
+        #   - strength는 평균 대비 상위(rel>=margin)만으로 판정한다. mention_share를
+        #     강점 트리거로 쓰면 content가 구조적으로 evidence를 독점(실측 평균 share
+        #     0.28, 75% 게임서 최다)해 "content=강점"이 양산된다. 언급량은 aspect의
+        #     폭(breadth)이지 우수성이 아니므로 라벨 근거에서 제외하고, 점수 자체에
+        #     이미 polarity가 반영된 게임 내 상대 위치(rel)만으로 공정 비교한다.
+        #     mention_share/top_share는 표시용 메타·보조 사유로만 남긴다.
         label = "neutral"
         reasons: list[str] = []
-        if enough and score >= ASPECT_REL_STRENGTH_SCORE and (
-            rel >= ASPECT_REL_MEAN_MARGIN or top_share
-        ):
+        if enough and score >= ASPECT_REL_STRENGTH_SCORE and rel >= ASPECT_REL_MEAN_MARGIN:
             label = "strength"
-            if rel >= ASPECT_REL_MEAN_MARGIN:
-                reasons.append("게임 내 평균 대비 높음")
+            reasons.append("게임 내 평균 대비 높음")
             if top_share:
                 reasons.append("리뷰에서 자주 언급됨")
             if pos_ratio >= ASPECT_REL_POS_RATIO:
