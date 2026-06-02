@@ -1422,20 +1422,25 @@ ASPECT_REL_WEAKNESS_SCORE = 6.0  # 약점 후보 점수 상한
 ASPECT_REL_MEAN_MARGIN = 0.5     # 게임 내 평균 대비 유의미한 격차
 ASPECT_REL_TOP_SHARE = 0.20      # mention_share 상위권(자주 언급) 기준
 ASPECT_REL_POS_RATIO = 0.6       # 긍정 우세 기준
-ASPECT_REL_NEG_RATIO = 0.5       # 부정·복합 우세 기준
+ASPECT_REL_NEG_RATIO = 0.5       # 부정·복합 우세(약점 확인 조건)
+ASPECT_REL_NEG_DOMINANCE = 0.3   # 순부정 우세(neg-pos). 평균 무관 단독 약점.
 
 
-def _polarity_ratios(mix: Any) -> tuple[float, float, int]:
-    """polarity_mix → (positive 비율, negative+mixed 비율, 총합)."""
+def _polarity_ratios(mix: Any) -> tuple[float, float, float, int]:
+    """polarity_mix → (positive 비율, negative+mixed 비율, 순부정(neg-pos) 비율, 총합).
+
+    순부정은 neg_ratio - pos_ratio. mixed가 많아 pos==neg인 경우를 부정으로
+    오판하지 않도록, 단독 약점 게이트엔 neg+mixed가 아니라 순부정을 쓴다.
+    """
     if not isinstance(mix, dict):
-        return 0.0, 0.0, 0
+        return 0.0, 0.0, 0.0, 0
     pos = int(mix.get("positive", 0) or 0)
     mxd = int(mix.get("mixed", 0) or 0)
     neg = int(mix.get("negative", 0) or 0)
     tot = pos + mxd + neg
     if tot <= 0:
-        return 0.0, 0.0, 0
-    return pos / tot, (neg + mxd) / tot, tot
+        return 0.0, 0.0, 0.0, 0
+    return pos / tot, (neg + mxd) / tot, (neg - pos) / tot, tot
 
 
 def _enrich_aspect_relative(aspect_scores: dict[str, Any]) -> dict[str, Any]:
@@ -1461,15 +1466,23 @@ def _enrich_aspect_relative(aspect_scores: dict[str, Any]) -> dict[str, Any]:
         score = float(d["score"])
         ec = int(d.get("evidence_count") or 0)
         share = (ec / total_mentions) if total_mentions > 0 else 0.0
-        pos_ratio, neg_mixed_ratio, _ = _polarity_ratios(d.get("polarity_mix"))
+        pos_ratio, neg_mixed_ratio, neg_dominance, _ = _polarity_ratios(d.get("polarity_mix"))
         rel = score - mean_score
         enough = ec >= ASPECT_REL_MIN_EVIDENCE
         top_share = share >= ASPECT_REL_TOP_SHARE
 
+        # 강·약점은 "게임 내 상대" 신호다. 절대 점수 단독으로 칠하지 않는다.
+        #   - 저평가 게임은 baseline_neutral이 낮아 aspect 점수가 전반적으로 낮다.
+        #     score<=6.0 같은 절대 floor를 단독 weakness 트리거로 쓰면 모든 aspect가
+        #     약점으로 도배된다(점수 변별력 ≠ 약점). 따라서 weakness는 평균 대비
+        #     하위(rel<=-margin)를 필수로 하고, 절대 저점/부정은 확인 조건으로만 쓴다.
+        #   - 예외: aspect 자체가 부정·복합 압도(>=0.65)면 평균과 무관하게 약점.
+        #   - strength도 평균 대비 상위(rel>=margin) 또는 자주 언급(top_share)을 요구해
+        #     고평가 게임에서 모든 축이 강점으로 도배되는 대칭 문제를 막는다.
         label = "neutral"
         reasons: list[str] = []
         if enough and score >= ASPECT_REL_STRENGTH_SCORE and (
-            rel >= ASPECT_REL_MEAN_MARGIN or top_share or pos_ratio >= ASPECT_REL_POS_RATIO
+            rel >= ASPECT_REL_MEAN_MARGIN or top_share
         ):
             label = "strength"
             if rel >= ASPECT_REL_MEAN_MARGIN:
@@ -1479,15 +1492,15 @@ def _enrich_aspect_relative(aspect_scores: dict[str, Any]) -> dict[str, Any]:
             if pos_ratio >= ASPECT_REL_POS_RATIO:
                 reasons.append("긍정 반응 우세")
         elif enough and (
-            score <= ASPECT_REL_WEAKNESS_SCORE
-            or rel <= -ASPECT_REL_MEAN_MARGIN
-            or neg_mixed_ratio >= ASPECT_REL_NEG_RATIO
+            (rel <= -ASPECT_REL_MEAN_MARGIN
+             and (score <= ASPECT_REL_WEAKNESS_SCORE or neg_mixed_ratio >= ASPECT_REL_NEG_RATIO))
+            or neg_dominance >= ASPECT_REL_NEG_DOMINANCE
         ):
             label = "weakness"
-            if score <= ASPECT_REL_WEAKNESS_SCORE:
-                reasons.append("점수 낮음")
             if rel <= -ASPECT_REL_MEAN_MARGIN:
                 reasons.append("게임 내 평균 대비 낮음")
+            if score <= ASPECT_REL_WEAKNESS_SCORE:
+                reasons.append("점수 낮음")
             if neg_mixed_ratio >= ASPECT_REL_NEG_RATIO:
                 reasons.append("부정·복합 반응 많음")
 

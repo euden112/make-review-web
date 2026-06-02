@@ -74,6 +74,31 @@ def test_low_score_aspect_is_weakness_not_exaggerated():
     assert out["graphics"]["relative_label"] != "weakness"
 
 
+def test_low_baseline_flat_game_not_all_weakness():
+    """저평가 게임(점수 전반 5점대, 비슷)이라고 모든 aspect가 약점으로
+    도배되면 안 된다. 평균 대비 격차 없으면 neutral."""
+    scores = {
+        "content": _aspect(5.3, 12, 4, 4, 4),
+        "gameplay": _aspect(5.4, 14, 5, 4, 5),
+        "graphics": _aspect(5.1, 10, 3, 4, 3),
+        "optimization": _aspect(5.2, 11, 3, 4, 4),
+    }
+    out = _enrich_aspect_relative(scores)
+    weak = [k for k, v in out.items() if v["relative_label"] == "weakness"]
+    assert weak == [], f"평탄한 저점수 게임이 약점 도배됨: {weak}"
+
+
+def test_strongly_negative_aspect_is_weakness_even_if_flat():
+    """평균과 비슷해도 그 aspect 자체가 부정·복합 압도(>=65%)면 약점."""
+    scores = {
+        "optimization": _aspect(5.0, 20, 2, 4, 14),  # neg+mixed=18/20=0.9
+        "gameplay": _aspect(5.2, 18, 6, 5, 7),
+        "graphics": _aspect(5.1, 12, 4, 4, 4),
+    }
+    out = _enrich_aspect_relative(scores)
+    assert out["optimization"]["relative_label"] == "weakness", out["optimization"]
+
+
 def test_insufficient_evidence_stays_neutral():
     """근거 부족(evidence_count < 5)이면 점수가 높아도 neutral."""
     scores = {
