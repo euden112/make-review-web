@@ -58,6 +58,36 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _serialize_game_metadata(
+    game: Game,
+    steam_map: GamePlatformMap | None = None,
+    meta_map: GamePlatformMap | None = None,
+) -> dict:
+    cover_image = None
+    hero_image = None
+    tags: list[str] = []
+    rating: float | None = None
+
+    if steam_map and steam_map.platform_meta_json:
+        cover_image = steam_map.platform_meta_json.get("cover_image")
+        hero_image = steam_map.platform_meta_json.get("hero_image")
+        tags = steam_map.platform_meta_json.get("tags") or []
+
+    if meta_map and meta_map.platform_meta_json:
+        score = meta_map.platform_meta_json.get("score")
+        if score is not None:
+            rating = round(float(score) / 20, 1)
+
+    return {
+        "id": game.id,
+        "canonical_title": game.canonical_title,
+        "cover_image": cover_image,
+        "hero_image": hero_image,
+        "tags": tags,
+        "rating": rating,
+    }
+
+
 @router.get("/")
 async def get_games(db: AsyncSession = Depends(get_db)):
     steam_platform = (await db.execute(
@@ -95,36 +125,10 @@ async def get_games(db: AsyncSession = Depends(get_db)):
             )).scalars().all()
             meta_maps = {m.game_id: m for m in rows}
 
-    result = []
-    for g in games:
-        cover_image = None
-        hero_image = None
-        tags: list[str] = []
-        # Metacritic 100점 → 5점 환산 (소수점 1자리)
-        rating: float | None = None
-
-        steam_map = steam_maps.get(g.id)
-        if steam_map and steam_map.platform_meta_json:
-            cover_image = steam_map.platform_meta_json.get("cover_image")
-            hero_image = steam_map.platform_meta_json.get("hero_image")
-            tags = steam_map.platform_meta_json.get("tags") or []
-
-        meta_map = meta_maps.get(g.id)
-        if meta_map and meta_map.platform_meta_json:
-            score = meta_map.platform_meta_json.get("score")
-            if score is not None:
-                rating = round(float(score) / 20, 1)
-
-        result.append({
-            "id": g.id,
-            "canonical_title": g.canonical_title,
-            "cover_image": cover_image,
-            "hero_image": hero_image,
-            "tags": tags,
-            "rating": rating,
-        })
-
-    return result
+    return [
+        _serialize_game_metadata(g, steam_maps.get(g.id), meta_maps.get(g.id))
+        for g in games
+    ]
 
 
 @router.get("/{game_id}")
@@ -164,29 +168,7 @@ async def get_game(game_id: int, db: AsyncSession = Depends(get_db)):
             )
         )).scalar_one_or_none()
 
-    cover_image = None
-    hero_image = None
-    tags: list[str] = []
-    rating: float | None = None
-
-    if steam_map and steam_map.platform_meta_json:
-        cover_image = steam_map.platform_meta_json.get("cover_image")
-        hero_image = steam_map.platform_meta_json.get("hero_image")
-        tags = steam_map.platform_meta_json.get("tags") or []
-
-    if meta_map and meta_map.platform_meta_json:
-        score = meta_map.platform_meta_json.get("score")
-        if score is not None:
-            rating = round(float(score) / 20, 1)
-
-    return {
-        "id": game.id,
-        "canonical_title": game.canonical_title,
-        "cover_image": cover_image,
-        "hero_image": hero_image,
-        "tags": tags,
-        "rating": rating,
-    }
+    return _serialize_game_metadata(game, steam_map, meta_map)
 
 
 @router.post("/{game_id}/summarize", dependencies=[Depends(require_api_key)])
