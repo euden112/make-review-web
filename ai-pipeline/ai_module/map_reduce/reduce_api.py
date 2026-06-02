@@ -672,6 +672,17 @@ async def _run_feature_json(
             except _groq_module.RateLimitError as e:
                 last_exc = e
                 ra = _parse_retry_after_seconds(e)
+                msg = str(e)
+                # 일일(TPD)·장기 한도는 분 단위 대기로 안 풀린다(롤링이라 매 요청 즉시
+                # 재소진). 동일 org의 여러 키도 TPD를 공유하므로 로테이션도 무용.
+                # 불필요한 대기/지연 없이 즉시 실패시켜 error fallback으로 넘긴다.
+                is_daily = ("per day" in msg) or ("TPD" in msg) or ("tokens per day" in msg)
+                if is_daily or (ra is not None and ra > _RATE_LIMIT_WAIT_CAP):
+                    logger.warning(
+                        "feature=%s 일일/장기 rate limit(retry_after=%ss, daily=%s) — 즉시 실패",
+                        feature, ra, is_daily,
+                    )
+                    raise
                 if ra is not None:
                     round_retry_after.append(ra)
                 logger.warning(
