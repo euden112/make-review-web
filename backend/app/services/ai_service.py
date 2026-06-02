@@ -726,6 +726,21 @@ async def run_ai_pipeline_task(
             cursor_version = cursor.last_summary_version if cursor else 0
             new_version = max(cursor_version, latest_summary_version) + 1
 
+            # reduce 실패(rate limit 등) 시 정상 current 요약을 파괴하지 않는다.
+            # 기존 요약 유지 + job 실패 기록 후 조기 반환(덮어쓰기 생략).
+            if getattr(ai_result, "error_code", None):
+                job.status = "failed"
+                job.error_message = (
+                    f"reduce error: {ai_result.error_code} "
+                    f"(retryable={getattr(ai_result, 'is_retryable', None)})"
+                )
+                await db.commit()
+                logger.warning(
+                    "reduce failed (game %s, code=%s) — 기존 요약 보존, 덮어쓰기 생략",
+                    game_id, ai_result.error_code,
+                )
+                return {"status": "reduce_failed", "game_id": game_id, "error_code": ai_result.error_code}
+
             if existing_summary:
                 await db.delete(existing_summary)
                 await db.flush()
@@ -1094,6 +1109,21 @@ async def run_reduce_from_precomputed_map(
                 if ai_result.sentiment_score is not None and steam_recommend_ratio is not None
                 else None
             )
+
+            # reduce 실패(rate limit 등) 시 정상 current 요약을 파괴하지 않는다.
+            # 기존 요약 유지 + job 실패 기록 후 조기 반환(덮어쓰기 생략).
+            if getattr(ai_result, "error_code", None):
+                job.status = "failed"
+                job.error_message = (
+                    f"reduce error: {ai_result.error_code} "
+                    f"(retryable={getattr(ai_result, 'is_retryable', None)})"
+                )
+                await db.commit()
+                logger.warning(
+                    "reduce failed (game %s, code=%s) — 기존 요약 보존, 덮어쓰기 생략",
+                    game_id, ai_result.error_code,
+                )
+                return {"status": "reduce_failed", "game_id": game_id, "error_code": ai_result.error_code}
 
             cursor = (await db.execute(
                 select(GameSummaryCursor).where(and_(
