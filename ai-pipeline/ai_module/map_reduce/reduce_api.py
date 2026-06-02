@@ -1352,6 +1352,11 @@ def _compute_baseline_aspect_scores(
             "score": score,
             "evidence_count": total,
             "evidence_review_ids": sorted(cited_review_ids.get(aspect, set())),
+            "polarity_mix": {
+                "positive": int(bucket["positive"]),
+                "mixed": int(bucket["mixed"]),
+                "negative": int(bucket["negative"]),
+            },
         }
     return result
 
@@ -1402,8 +1407,95 @@ def _apply_aspect_score_deltas(
             "baseline_score": base_score,
             "evidence_count": int(base.get("evidence_count") or 0),
             "evidence_review_ids": list(base.get("evidence_review_ids", []))[:6],
+            "polarity_mix": dict(base.get("polarity_mix") or {}),
         }
     return result
+
+
+# ── Aspect 상대 강·약점 판정 ──────────────────────────────────────────────
+# delta(score - baseline_score)는 LLM의 baseline 보정값이라 강·약점 지표가 아니다.
+# 강·약점은 score 자체, 게임 내 aspect 평균 대비 위치, evidence_count,
+# mention_share(raw Map 언급 비중), polarity_mix를 조합해 별도 산출한다.
+ASPECT_REL_MIN_EVIDENCE = 5      # 판정에 필요한 최소 근거 수
+ASPECT_REL_STRENGTH_SCORE = 7.5  # 강점 후보 점수 하한
+ASPECT_REL_WEAKNESS_SCORE = 6.0  # 약점 후보 점수 상한
+ASPECT_REL_MEAN_MARGIN = 0.5     # 게임 내 평균 대비 유의미한 격차
+ASPECT_REL_TOP_SHARE = 0.20      # mention_share 상위권(자주 언급) 기준
+ASPECT_REL_POS_RATIO = 0.6       # 긍정 우세 기준
+ASPECT_REL_NEG_RATIO = 0.5       # 부정·복합 우세 기준
+
+
+def _polarity_ratios(mix: Any) -> tuple[float, float, int]:
+    """polarity_mix → (positive 비율, negative+mixed 비율, 총합)."""
+    if not isinstance(mix, dict):
+        return 0.0, 0.0, 0
+    pos = int(mix.get("positive", 0) or 0)
+    mxd = int(mix.get("mixed", 0) or 0)
+    neg = int(mix.get("negative", 0) or 0)
+    tot = pos + mxd + neg
+    if tot <= 0:
+        return 0.0, 0.0, 0
+    return pos / tot, (neg + mxd) / tot, tot
+
+
+def _enrich_aspect_relative(aspect_scores: dict[str, Any]) -> dict[str, Any]:
+    """각 aspect에 delta와 분리된 강·약점 신호를 부여한다.
+
+    추가 필드: relative_label(strength|weakness|neutral), relative_reason(ko),
+    mention_count, mention_share, polarity_mix(이미 존재 시 유지).
+
+    delta(score-baseline_score)는 사용하지 않는다. Elden Ring difficulty처럼
+    baseline 대비 변화량이 0이어도 점수가 높고 자주 언급되면 강점/대표 특징으로
+    노출되도록 score·평균 대비 위치·언급 비중·polarity로 판정한다.
+    """
+    scored = [
+        (a, d) for a, d in aspect_scores.items()
+        if isinstance(d, dict) and isinstance(d.get("score"), (int, float))
+    ]
+    if not scored:
+        return aspect_scores
+    mean_score = sum(float(d["score"]) for _, d in scored) / len(scored)
+    total_mentions = sum(int(d.get("evidence_count") or 0) for _, d in scored)
+
+    for aspect, d in scored:
+        score = float(d["score"])
+        ec = int(d.get("evidence_count") or 0)
+        share = (ec / total_mentions) if total_mentions > 0 else 0.0
+        pos_ratio, neg_mixed_ratio, _ = _polarity_ratios(d.get("polarity_mix"))
+        rel = score - mean_score
+        enough = ec >= ASPECT_REL_MIN_EVIDENCE
+        top_share = share >= ASPECT_REL_TOP_SHARE
+
+        label = "neutral"
+        reasons: list[str] = []
+        if enough and score >= ASPECT_REL_STRENGTH_SCORE and (
+            rel >= ASPECT_REL_MEAN_MARGIN or top_share or pos_ratio >= ASPECT_REL_POS_RATIO
+        ):
+            label = "strength"
+            if rel >= ASPECT_REL_MEAN_MARGIN:
+                reasons.append("게임 내 평균 대비 높음")
+            if top_share:
+                reasons.append("리뷰에서 자주 언급됨")
+            if pos_ratio >= ASPECT_REL_POS_RATIO:
+                reasons.append("긍정 반응 우세")
+        elif enough and (
+            score <= ASPECT_REL_WEAKNESS_SCORE
+            or rel <= -ASPECT_REL_MEAN_MARGIN
+            or neg_mixed_ratio >= ASPECT_REL_NEG_RATIO
+        ):
+            label = "weakness"
+            if score <= ASPECT_REL_WEAKNESS_SCORE:
+                reasons.append("점수 낮음")
+            if rel <= -ASPECT_REL_MEAN_MARGIN:
+                reasons.append("게임 내 평균 대비 낮음")
+            if neg_mixed_ratio >= ASPECT_REL_NEG_RATIO:
+                reasons.append("부정·복합 반응 많음")
+
+        d["mention_count"] = ec
+        d["mention_share"] = round(share, 3)
+        d["relative_label"] = label
+        d["relative_reason"] = ", ".join(reasons) if reasons else None
+    return aspect_scores
 
 
 def _apply_sentiment_score_delta(
@@ -2146,6 +2238,8 @@ async def run_feature_reduce_stage(
             final_data.get("aspect_delta_evidence", {}),
             valid_review_ids,
         )
+        # delta와 분리된 강·약점 신호(relative_label/mention_share/polarity_mix) 부여
+        aspect_scores = _enrich_aspect_relative(aspect_scores)
 
         # Sentiment 점수: anchor + LLM delta (인용 검증 후 결합)
         steam_total_count = 0

@@ -22,11 +22,14 @@ const CATEGORY_LABELS = {
 const CANONICAL_ASPECTS = ['content', 'gameplay', 'graphics', 'controls', 'optimization']
 const AUXILIARY_ASPECT_ORDER = ['story', 'difficulty', 'sound', 'price_value']
 const AUXILIARY_ASPECTS = new Set(AUXILIARY_ASPECT_ORDER)
+// 보조 지표 노출은 delta(score-baseline)가 아니라 relative_label/mention_share로 판정한다.
+// minEvidence는 근거 부족 노이즈 차단용 하한만 유지.
+const AUX_TOP_SHARE = 0.20
 const AUXILIARY_DISPLAY_RULES = {
-  story: { minEvidence: 3, strongDelta: 0.8 },
-  difficulty: { minEvidence: 2, strongDelta: 0.8 },
-  sound: { minEvidence: 2, strongDelta: 0.8 },
-  price_value: { minEvidence: 2, strongDelta: 0.8 },
+  story: { minEvidence: 3 },
+  difficulty: { minEvidence: 2 },
+  sound: { minEvidence: 2 },
+  price_value: { minEvidence: 2 },
 }
 
 const SENTIMENT_CONFIG = {
@@ -837,6 +840,10 @@ function GameDetailPage({ isDark, toggleDark }) {
                   score: has ? num : null,
                   baseline_score: Number.isFinite(baselineNum) ? baselineNum : null,
                   evidence_count: Number(value?.evidence_count ?? 0),
+                  relative_label: value?.relative_label || 'neutral',
+                  relative_reason: value?.relative_reason || null,
+                  mention_share: Number(value?.mention_share ?? 0),
+                  mention_count: Number(value?.mention_count ?? value?.evidence_count ?? 0),
                   missing: !has,
                 }
               }
@@ -846,17 +853,18 @@ function GameDetailPage({ isDark, toggleDark }) {
                 const rule = AUXILIARY_DISPLAY_RULES[a.key]
                 if (!rule) return false
                 if ((a.evidence_count ?? 0) < rule.minEvidence) return false
-                const baseline = Number.isFinite(a.baseline_score) ? a.baseline_score : 5
-                const delta = a.score - baseline
-                return Math.abs(delta) >= rule.strongDelta
+                // delta 게이트 제거: 강·약점 판정 또는 자주 언급(mention_share 상위권)이면 노출.
+                if (a.relative_label === 'strength' || a.relative_label === 'weakness') return true
+                return (a.mention_share ?? 0) >= AUX_TOP_SHARE
               }
               const auxiliaryToneMeta = (a) => {
-                const baseline = Number.isFinite(a.baseline_score) ? a.baseline_score : 5
-                const delta = a.score - baseline
-                if (delta > 0) {
-                  return { label: '좋게 언급되는 편', color: '#22c55e' }
+                if (a.relative_label === 'strength') {
+                  return { label: a.relative_reason || '강점으로 자주 꼽힘', color: '#22c55e' }
                 }
-                return { label: '아쉽게 언급되는 편', color: '#ef4444' }
+                if (a.relative_label === 'weakness') {
+                  return { label: a.relative_reason || '주의 지점으로 언급', color: '#ef4444' }
+                }
+                return { label: a.relative_reason || '리뷰에서 자주 언급됨', color: '#f5a623' }
               }
               // 핵심 5축 고정. 게임에 근거 없는 축은 missing(중립)으로 채워 축을 항상 동일하게 유지.
               const aspects = CANONICAL_ASPECTS.map((key) => toAspect(key, raw[key]))
