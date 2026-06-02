@@ -1,6 +1,6 @@
 # Crawling
 
-Steam(한국어 유저 리뷰) 및 Metacritic(영어 전문가 비평 리뷰)을 수집해 백엔드 API로 전송하는 크롤러
+Steam(한국어·영어 유저 리뷰) 및 Metacritic(영어 전문가 비평 리뷰)을 수집해 백엔드 API로 전송하는 크롤러입니다. Steam 크롤러는 최신순과 도움순을 함께 수집하고, Metacritic은 전문가(critic) 리뷰만 수집합니다.
 
 ---
 
@@ -39,7 +39,7 @@ python crawling/setup_game_list.py --update --auto-slug
 두 크롤러는 독립적으로 실행 가능합니다 (순서 무관).
 
 ```bash
-# Steam 한국어 리뷰 수집 (game_list.json의 steam_app_id 사용)
+# Steam 한국어·영어 리뷰 수집 (game_list.json의 steam_app_id 사용)
 python crawling/steam/steam_crawler.py
 
 # Metacritic 영어 전문가 비평 수집 (game_list.json의 metacritic_slug 사용)
@@ -58,6 +58,8 @@ python crawling/metacritic/metacritic_crawler.py
 크롤링은 **로컬 머신**에서 실행하고, 생성된 JSON 파일을 클라우드 서버로 옮겨 전송합니다.
 클라우드 서버는 외부 IP를 지원하지 않으므로, 로컬에서 직접 API를 호출할 수 없습니다.
 
+전송 API는 `X-API-Key` 인증을 사용합니다. `crawling/send_to_api.py`는 `--api-key` 옵션 또는 `API_SECRET_KEY` 환경 변수를 읽어 헤더를 붙입니다.
+
 **파일 전송 방법 (웹 VSCode 이용):**
 
 1. 로컬에서 크롤러 실행 후 생성된 JSON 파일 확인
@@ -68,9 +70,12 @@ python crawling/metacritic/metacritic_crawler.py
 
 ```bash
 # 클라우드 터미널에서 실행
+export API_SECRET_KEY="백엔드 API 키"
 python crawling/send_to_api.py steam
 python crawling/send_to_api.py metacritic
 ```
+
+Windows PowerShell에서는 `export` 대신 `$env:API_SECRET_KEY="백엔드 API 키"`를 사용합니다.
 
 전송 성공한 파일은 자동으로 삭제됩니다. 실패한 파일은 남아있어 재실행 시 재전송됩니다.
 `--keep` 옵션을 추가하면 전송 후에도 파일을 삭제하지 않습니다.

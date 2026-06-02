@@ -34,6 +34,7 @@ from ai_module.map_reduce.reduce_api import (
     _fallback_natural_items_from_evidence,
     _fallback_playtime_bucket_from_evidence,
     _has_min_evidence,
+    _is_degenerate_bucket,
     _llm_summary_passes_gate,
     _fallback_user_summary_from_evidence,
     _parse_feature_bucket,
@@ -154,9 +155,9 @@ def test_map_payload_redacts_public_detail_when_missing() -> None:
     assert "malenia" in [term.lower() for term in item["spoiler_terms"]]
 
 
-def test_story_terms_are_content_before_generic_fun_aspect() -> None:
-    assert _guess_aspect("스토리가 재밌고 캐릭터 서사가 좋다") == "content"
-    assert _guess_aspect("The narrative and characters are fun") == "content"
+def test_story_terms_are_story_before_generic_fun_aspect() -> None:
+    assert _guess_aspect("스토리가 재밌고 캐릭터 서사가 좋다") == "story"
+    assert _guess_aspect("The narrative and characters are fun") == "story"
 
 
 def test_reduce_prompt_pins_target_game_identity() -> None:
@@ -500,6 +501,33 @@ def test_evidence_subset_uses_public_detail_for_spoiler_risk() -> None:
     assert "Malenia" not in json.dumps(evidence, ensure_ascii=False)
 
 
+def test_evidence_subset_balances_aspects_before_limit_cut() -> None:
+    evidence_items = []
+    review_id = 1
+    for aspect, count in (("content", 30), ("story", 12), ("gameplay", 12), ("graphics", 6)):
+        for _ in range(count):
+            detail = f"{aspect} 측면이 굉장히 재밌고 좋다는 구체적인 반응"
+            evidence_items.append(
+                {
+                    "review_id": review_id,
+                    "source": "steam_user",
+                    "aspect": aspect,
+                    "polarity": "positive",
+                    "detail": detail,
+                    "public_detail": detail,
+                    "snippet": detail,
+                }
+            )
+            review_id += 1
+
+    subset = _evidence_subset([{"evidence_items": evidence_items}], limit=12)
+    aspects = {item["aspect"] for item in subset}
+
+    assert len(subset) == 12
+    assert {"content", "story", "gameplay", "graphics"}.issubset(aspects)
+    assert sum(1 for item in subset if item["aspect"] == "content") < 8
+
+
 def test_playtime_bucket_fallback_keeps_valid_late_evidence_visible() -> None:
     payloads = [
         {
@@ -557,7 +585,18 @@ def test_playtime_bucket_fallback_keeps_valid_late_evidence_visible() -> None:
     assert bucket.review_count == 5
     assert bucket.sentiment_score == 40
     assert bucket.pros or bucket.cons
-    assert "콘텐츠/스토리" in bucket.keywords
+    assert "콘텐츠/볼륨" in bucket.keywords
+
+
+def test_short_one_sided_playtime_bucket_is_degenerate() -> None:
+    assert _is_degenerate_bucket(
+        {
+            "summary": "후반부에는 반복 탐험이 아쉽다는 반응이 있습니다.",
+            "pros": [],
+            "cons": ["반복 탐험이 지루하다는 불만이 있습니다."],
+            "keywords": ["후반", "반복"],
+        }
+    )
 
 
 def test_sanitize_public_list_drops_misaligned_anchor_and_fallback_fills() -> None:
@@ -988,6 +1027,27 @@ def test_fallback_one_liner_skips_positive_item_with_negative_detail() -> None:
 
     assert "review_id=29" not in one_liner
     assert "오래 기억할 만큼 강한 만족감" in one_liner
+
+
+def test_fallback_one_liner_respects_positive_summary_tone() -> None:
+    one_liner = _fallback_one_liner_from_evidence(
+        [
+            {
+                "review_id": 2032,
+                "polarity": "negative",
+                "public_detail": "계속 참고 플레이하려 해도 다시 켜기 싫을 만큼 흥미가 떨어졌습니다",
+            },
+            {
+                "review_id": 2064,
+                "polarity": "positive",
+                "public_detail": "너무 재미있어요 해보세요",
+            },
+        ],
+        sentiment_overall="positive",
+    )
+
+    assert "review_id=2032" not in one_liner
+    assert "review_id=2064" in one_liner
 
 
 def test_fallback_one_liner_skips_wait_for_next_game_clause() -> None:

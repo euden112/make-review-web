@@ -118,8 +118,8 @@ function PlaytimeBarChart({ buckets, isDark }) {
   )
 }
 
-// 카테고리별 점수를 다각형(레이더) 차트로 — 어느 축이 돌출/함몰됐는지 한눈에.
-// 절대 점수가 아니라 "이 게임 안에서" 강·약점 프로파일을 읽도록 한다.
+// 카테고리별 점수를 다각형(레이더) 차트로 보여 준다.
+// 면적은 절대 점수에 묶고, 색/라벨만 게임 안에서의 상대 강약을 표현한다.
 function AspectRadarChart({ aspects, isDark }) {
   const n = aspects.length
   if (n < 3) return null
@@ -129,28 +129,21 @@ function AspectRadarChart({ aspects, isDark }) {
   const stroke = isDark ? '#3a3a5e' : '#e5e7eb'
   const labelColor = isDark ? '#e0e0e0' : '#374151'
   const accent = '#6366f1'
-  // 절대 점수가 아니라 "이 게임 평균 대비" 상대 강약으로 색을 정한다.
+  // 게임 평균 대비 상대 강약으로 색을 정한다.
   // 평균 위 = 강점(녹), 평균 아래 = 약점(적), 평균 근처 = 보통(회색).
-  // 근거 없는(missing) 축은 평균값으로 채워 형상이 왜곡되지 않게 하고 회색으로 표시한다.
+  // 근거 없는(missing) 축은 중앙으로 함몰시키고 회색으로 표시한다.
   const present = aspects.filter((a) => !a.missing && Number.isFinite(a.score))
   const mean = present.length ? present.reduce((s, a) => s + a.score, 0) / present.length : 5
-  const vals = present.map((a) => a.score)
-  const lo = vals.length ? Math.min(...vals) : 0
-  const hi = vals.length ? Math.max(...vals) : 10
-  const spread = hi - lo
   const NEUTRAL = '#9ca3af'
-  // 반지름 = 절대 점수가 아니라 "이 게임 안에서의 상대 위치". 점수가 baseline 근처(절대 6~8)로
-  // 뭉쳐 정다각형처럼 보이던 문제를, 게임 내 min-max로 펴서 능력치 프로파일처럼 강점=꼭짓점·
-  // 약점=안쪽으로 보이게 한다. FLOOR로 최약체도 0이 되지 않게(빈 축 방지) 하고, spread가 작으면
-  // (고른 게임) 과장 없이 균일(FLAT) 표시한다. missing 축은 FLOOR로 찍어 가짜 봉우리를 막는다.
-  const FLOOR = 0.70       // 최약 present 축: 0에 안 닿게 + min-max 과장 완화(작은 차가 floor↔꼭짓점으로 벌어지던 문제)
-  const FLAT = 0.80        // 분포 고르면(spread<0.8) 균일 표시
+  // 반지름은 0~10 aspect 점수의 절대 크기다. 이전 min-max 방식은 낮은 평점 게임도
+  // 내부 상대 1등 축이 꼭짓점까지 차서 전체 평가가 좋게 보이는 문제가 있었다.
+  const MIN_R = 0.18       // 낮은 점수도 점/라벨 위치를 읽을 수 있게 최소 반지름 유지
+  const MAX_R = 0.96       // 외곽선과 겹치지 않도록 약간의 여백 유지
   const TIER_THRESHOLD = 0.6
   const MISSING_R = 0      // 데이터 부족 축은 꼭짓점을 중앙으로 붙여(반지름 0) 완전히 함몰 표시
   const radiusNorm = (a) => {
     if (a.missing || !Number.isFinite(a.score)) return MISSING_R
-    if (spread < 0.8) return FLAT
-    return FLOOR + 0.30 * ((a.score - lo) / spread)
+    return Math.max(MIN_R, Math.min(MAX_R, a.score / 10))
   }
   const relColor = (a) => { if (a.missing) return NEUTRAL; const d = a.score - mean; return d >= TIER_THRESHOLD ? '#22c55e' : d <= -TIER_THRESHOLD ? '#ef4444' : NEUTRAL }
   const tierOf = (a) => { if (a.missing) return null; const d = a.score - mean; return d >= TIER_THRESHOLD ? '강점' : d <= -TIER_THRESHOLD ? '약점' : '보통' }

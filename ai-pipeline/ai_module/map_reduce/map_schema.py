@@ -317,6 +317,13 @@ def _guess_aspect(text: str) -> str:
     )):
         return "optimization"
     if any(term in lower for term in (
+        "스토리", "이야기", "서사", "캐릭터", "세계관", "설정", "분위기", "대사", "컷신",
+        "story", "narrative", "plot", "writing", "characters", "character",
+        "dialogue", "cutscene", "cutscenes", "lore", "worldbuilding",
+        "world building",
+    )):
+        return "story"
+    if any(term in lower for term in (
         "fun", "gameplay", "addictive", "engaging", "immersive", "immersion",
         "rewarding", "satisfying", "satisfaction", "combat loop", "fun combat",
         "combat feels good", "boss pattern", "hard but fun", "keeps me playing",
@@ -332,13 +339,6 @@ def _guess_aspect(text: str) -> str:
         "player base", "seasonal event", "raid", "guild", "clan",
     )):
         return "content"
-    if any(term in lower for term in (
-        "스토리", "이야기", "서사", "캐릭터", "세계관", "설정", "분위기", "대사", "컷신",
-        "story", "narrative", "plot", "writing", "characters", "character",
-        "dialogue", "cutscene", "cutscenes", "lore", "worldbuilding",
-        "world building",
-    )):
-        return "story"
     checks = [
         ("optimization", ("프레임", "렉", "버그", "crash", "fps", "최적화")),
         ("controls", ("조작", "키보드", "패드", "마우스")),

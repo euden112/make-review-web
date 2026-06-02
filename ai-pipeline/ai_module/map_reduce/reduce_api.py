@@ -469,23 +469,68 @@ def _evidence_subset(payloads: list[dict[str, Any]], *, limit: int = 80) -> list
                         "spoiler_risk": spoiler_risk,
                     }
                 )
-    # polarity별로 그룹화 후 라운드로빈 인터리브한다. 이전엔 부정 먼저 정렬 후 limit
-    # 컷이라, limit이 작은 playtime 버킷(8)에서 상위가 전부 부정으로 채워져 95% 긍정
-    # 게임인데도 요약/cons가 불만 일색이 되는 편향이 있었다. 긍정을 먼저 두어 긍정 우세
-    # 게임의 톤을 반영하되, 부정·mixed도 매 라운드 섞여 cons 재료도 보존한다.
-    buckets_by_pol: dict[str, list[dict[str, Any]]] = {"positive": [], "negative": [], "mixed": []}
-    for item in rows:
-        pol = str(item.get("polarity"))
-        buckets_by_pol.setdefault(pol if pol in buckets_by_pol else "mixed", []).append(item)
-    for pol in buckets_by_pol:
-        buckets_by_pol[pol].sort(key=lambda item: (str(item.get("aspect", "")), int(item.get("review_id") or 0)))
-    interleaved: list[dict[str, Any]] = []
-    order = ["positive", "negative", "mixed"]
-    while any(buckets_by_pol[p] for p in order):
-        for p in order:
-            if buckets_by_pol[p]:
-                interleaved.append(buckets_by_pol[p].pop(0))
-    return interleaved[:limit]
+    if limit <= 0 or not rows:
+        return []
+
+    def _norm_pol(item: dict[str, Any]) -> str:
+        pol = str(item.get("polarity") or "").strip().lower()
+        return pol if pol in {"positive", "mixed", "negative"} else "mixed"
+
+    def _norm_source(item: dict[str, Any]) -> str:
+        return str(item.get("source") or "unknown").strip().lower() or "unknown"
+
+    def _norm_aspect(item: dict[str, Any]) -> str:
+        return str(item.get("aspect") or "content").strip().lower() or "content"
+
+    def _balanced_take(candidates: list[dict[str, Any]], quota: int) -> list[dict[str, Any]]:
+        buckets: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        for candidate in candidates:
+            key = (_norm_source(candidate), _norm_aspect(candidate))
+            buckets.setdefault(key, []).append(candidate)
+        for bucket in buckets.values():
+            bucket.sort(key=lambda item: int(item.get("review_id") or 0))
+
+        selected: list[dict[str, Any]] = []
+        while len(selected) < quota and any(buckets.values()):
+            for key in sorted(list(buckets)):
+                bucket = buckets.get(key) or []
+                if not bucket:
+                    continue
+                selected.append(bucket.pop(0))
+                if len(selected) >= quota:
+                    break
+        return selected
+
+    total = len(rows)
+    polarity_order = ["positive", "mixed", "negative"]
+    by_polarity = {pol: [item for item in rows if _norm_pol(item) == pol] for pol in polarity_order}
+    quotas: dict[str, int] = {}
+    remaining = min(limit, total)
+    for pol in polarity_order:
+        if not by_polarity[pol]:
+            quotas[pol] = 0
+            continue
+        quota = max(1, round(limit * len(by_polarity[pol]) / total))
+        quota = min(quota, len(by_polarity[pol]), remaining)
+        quotas[pol] = quota
+        remaining -= quota
+
+    selected: list[dict[str, Any]] = []
+    selected_keys: set[tuple[Any, str, str]] = set()
+    for pol in polarity_order:
+        for item in _balanced_take(by_polarity[pol], quotas[pol]):
+            key = (item.get("review_id"), _norm_aspect(item), str(item.get("detail", "")).lower())
+            selected.append(item)
+            selected_keys.add(key)
+
+    if len(selected) < limit:
+        leftovers = [
+            item for item in rows
+            if (item.get("review_id"), _norm_aspect(item), str(item.get("detail", "")).lower()) not in selected_keys
+        ]
+        selected.extend(_balanced_take(leftovers, limit - len(selected)))
+
+    return selected[:limit]
 
 
 def _signal_subset(payloads: list[dict[str, Any]], key: str) -> list[dict[str, Any]]:
@@ -1426,7 +1471,31 @@ def _fallback_aspect_scores_from_evidence(
     }
 
 
-def _fallback_one_liner_from_evidence(evidence_items: list[dict[str, Any]]) -> str:
+def _text_matches_summary_sentiment(text: str, sentiment_overall: str | None) -> bool:
+    if sentiment_overall not in {"positive", "mixed", "negative"}:
+        return True
+    has_negative = _has_negative_detail(text)
+    has_positive = any(term in text for term in POSITIVE_DETAIL_TERMS)
+    if sentiment_overall == "positive":
+        return not (has_negative and not has_positive)
+    if sentiment_overall == "negative":
+        return not (has_positive and not has_negative)
+    return True
+
+
+def _polarity_matches_summary_sentiment(polarity: str, sentiment_overall: str | None) -> bool:
+    if sentiment_overall == "positive":
+        return polarity == "positive"
+    if sentiment_overall == "negative":
+        return polarity == "negative"
+    return True
+
+
+def _fallback_one_liner_from_evidence(
+    evidence_items: list[dict[str, Any]],
+    *,
+    sentiment_overall: str | None = None,
+) -> str:
     def one_liner_rank(item: dict[str, Any]) -> int:
         detail = _sanitize_public_text(_public_detail_for_sentence(item))
         if _is_low_quality_detail(detail):
@@ -1452,6 +1521,8 @@ def _fallback_one_liner_from_evidence(evidence_items: list[dict[str, Any]]) -> s
         has_negative_detail = _has_negative_detail(detail)
         has_positive_detail = any(term in detail for term in POSITIVE_DETAIL_TERMS)
         polarity = "positive" if raw_polarity == "positive" or (raw_polarity == "mixed" and has_positive_detail) else "negative"
+        if not _polarity_matches_summary_sentiment(polarity, sentiment_overall):
+            continue
         if polarity == "positive" and has_negative_detail:
             detail = _positive_clause(detail)
             if not detail:
@@ -1551,17 +1622,24 @@ def _has_min_evidence(payloads: list[dict[str, Any]], minimum: int = 5) -> bool:
 
 
 def _is_degenerate_bucket(obj: Any) -> bool:
-    """LLM이 버킷을 빈 pros·cons로 'phone in'한 경우 탐지.
+    """LLM이 버킷을 빈약하게 'phone in'한 경우 탐지.
 
     early+mid+late를 단일 호출·단일 JSON으로 생성하면 마지막 버킷(주로 late)이
     근거가 충분(_has_min_evidence 통과)해도 빈 배열 + 필러 요약으로 degrade된다.
-    pros·cons가 둘 다 비면 degenerate로 보고 단독 재호출 대상으로 삼는다.
+    pros·cons가 둘 다 비거나, 짧은 요약에 한쪽 근거만 있는 경우 fallback 대상으로 삼는다.
     """
     if not isinstance(obj, dict):
         return False
     pros = obj.get("pros") or []
     cons = obj.get("cons") or []
-    return len(pros) == 0 and len(cons) == 0
+    summary = " ".join(str(obj.get("summary") or "").split())
+    if len(pros) == 0 and len(cons) == 0:
+        return True
+    if len(summary) < 80 and len(pros) + len(cons) < 2:
+        return True
+    if len(summary) < 120 and (len(pros) == 0 or len(cons) == 0) and len(pros) + len(cons) <= 2:
+        return True
+    return False
 
 
 def _parse_player_targets(raw: Any, *, limit: int = 5) -> list[dict[str, str]]:
@@ -2034,9 +2112,6 @@ async def run_feature_reduce_stage(
                 limit=4,
                 sentence_polarity="negative",
             )
-        one_liner = _fallback_one_liner_from_evidence(final_evidence_items)
-        if not one_liner:
-            one_liner = _sanitize_grounded_text(final_data.get("one_liner", ""), final_evidence_index)
         user_bucket = _sanitize_bucket(_parse_feature_bucket(user_data), final_evidence_index)
         fallback_user_summary = _fallback_user_summary_from_evidence(final_evidence_items)
         # 유저 요약: LLM 산문이 게이트(분량·언어·문장수, 살균은 _sanitize_bucket에서 완료)를
@@ -2097,6 +2172,17 @@ async def run_feature_reduce_stage(
                 derived_sentiment_overall = "mixed"
         else:
             derived_sentiment_overall = _normalize_sentiment_overall(final_data.get("sentiment_overall"))
+
+        llm_one_liner = _sanitize_grounded_text(final_data.get("one_liner", ""), final_evidence_index)
+        if llm_one_liner and _text_matches_summary_sentiment(llm_one_liner, derived_sentiment_overall):
+            one_liner = llm_one_liner
+        else:
+            one_liner = _fallback_one_liner_from_evidence(
+                final_evidence_items,
+                sentiment_overall=derived_sentiment_overall,
+            )
+        if not one_liner:
+            one_liner = _fallback_one_liner_from_evidence(final_evidence_items)
 
         # 유저 요약 점수를 Steam 추천률 anchor 기반 최종 점수와 정합시킨다.
         # 추천률은 본질적으로 유저 신호이므로 user 버킷에 그대로 적용한다. 버킷 reduce LLM이
