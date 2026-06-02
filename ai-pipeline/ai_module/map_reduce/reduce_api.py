@@ -1420,7 +1420,7 @@ ASPECT_REL_MIN_EVIDENCE = 5      # 판정에 필요한 최소 근거 수
 ASPECT_REL_STRENGTH_SCORE = 7.5  # 강점 후보 점수 하한
 ASPECT_REL_WEAKNESS_SCORE = 6.0  # 약점 후보 점수 상한
 ASPECT_REL_MEAN_MARGIN = 0.5     # 게임 내 평균 대비 유의미한 격차
-ASPECT_REL_TOP_SHARE = 0.20      # mention_share 상위권(자주 언급) 기준
+ASPECT_REL_TOP_SHARE = 0.20      # mention_share 상위권 하한(아래는 N-상대 기준과 함께 적용)
 ASPECT_REL_POS_RATIO = 0.6       # 긍정 우세 기준
 ASPECT_REL_NEG_RATIO = 0.5       # 부정·복합 우세(약점 확인 조건)
 ASPECT_REL_NEG_DOMINANCE = 0.3   # 순부정 우세(neg-pos). 평균 무관 단독 약점.
@@ -1469,14 +1469,18 @@ def _enrich_aspect_relative(aspect_scores: dict[str, Any]) -> dict[str, Any]:
         pos_ratio, neg_mixed_ratio, neg_dominance, _ = _polarity_ratios(d.get("polarity_mix"))
         rel = score - mean_score
         enough = ec >= ASPECT_REL_MIN_EVIDENCE
-        top_share = share >= ASPECT_REL_TOP_SHARE
+        # top_share = "균등 분배보다 유의미하게 많이 언급". 고정 0.20을 하한으로 두되
+        # N-상대(균등 share의 1.5배)와 함께 적용한다. 그러지 않으면 aspect가 3개뿐인
+        # 게임은 균등 share(0.33)만으로 전부 top_share가 돼 강점이 도배된다.
+        equal_share = 1.0 / len(scored)
+        top_share = share >= max(ASPECT_REL_TOP_SHARE, 1.5 * equal_share)
 
         # 강·약점은 "게임 내 상대" 신호다. 절대 점수 단독으로 칠하지 않는다.
         #   - 저평가 게임은 baseline_neutral이 낮아 aspect 점수가 전반적으로 낮다.
         #     score<=6.0 같은 절대 floor를 단독 weakness 트리거로 쓰면 모든 aspect가
         #     약점으로 도배된다(점수 변별력 ≠ 약점). 따라서 weakness는 평균 대비
         #     하위(rel<=-margin)를 필수로 하고, 절대 저점/부정은 확인 조건으로만 쓴다.
-        #   - 예외: aspect 자체가 부정·복합 압도(>=0.65)면 평균과 무관하게 약점.
+        #   - 예외: aspect 자체가 순부정 우세(neg-pos >= 0.3)면 평균과 무관하게 약점.
         #   - strength도 평균 대비 상위(rel>=margin) 또는 자주 언급(top_share)을 요구해
         #     고평가 게임에서 모든 축이 강점으로 도배되는 대칭 문제를 막는다.
         label = "neutral"
@@ -1501,7 +1505,9 @@ def _enrich_aspect_relative(aspect_scores: dict[str, Any]) -> dict[str, Any]:
                 reasons.append("게임 내 평균 대비 낮음")
             if score <= ASPECT_REL_WEAKNESS_SCORE:
                 reasons.append("점수 낮음")
-            if neg_mixed_ratio >= ASPECT_REL_NEG_RATIO:
+            if neg_dominance >= ASPECT_REL_NEG_DOMINANCE:
+                reasons.append("부정 반응 우세")
+            elif neg_mixed_ratio >= ASPECT_REL_NEG_RATIO:
                 reasons.append("부정·복합 반응 많음")
 
         d["mention_count"] = ec

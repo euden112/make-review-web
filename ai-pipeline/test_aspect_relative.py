@@ -109,6 +109,33 @@ def test_insufficient_evidence_stays_neutral():
     assert out["sound"]["relative_label"] == "neutral", out["sound"]
 
 
+def test_net_negative_weakness_always_has_reason():
+    """평균과 비슷하고 점수도 6 초과지만 순부정 우세(neg-pos>=0.3)로
+    약점이 된 경우, relative_reason이 비면 안 된다(근거 없는 약점 금지)."""
+    scores = {
+        "x": _aspect(6.8, 20, 4, 2, 14),   # neg_dominance=(14-4)/20=0.5
+        "y": _aspect(6.6, 12, 5, 3, 4),
+        "z": _aspect(7.0, 10, 7, 2, 1),
+    }
+    out = _enrich_aspect_relative(scores)
+    x = out["x"]
+    assert x["relative_label"] == "weakness", x
+    assert x["relative_reason"], f"약점인데 reason 비어있음: {x}"
+
+
+def test_three_high_aspects_not_all_strength():
+    """aspect 3개 모두 고득점이고 언급 균등하면 N-상대 top_share가 막아
+    전부 강점으로 도배되지 않는다."""
+    scores = {
+        "a": _aspect(7.8, 10, 8, 1, 1),
+        "b": _aspect(7.9, 10, 8, 1, 1),
+        "c": _aspect(8.0, 10, 8, 1, 1),
+    }
+    out = _enrich_aspect_relative(scores)
+    strengths = [k for k, v in out.items() if v["relative_label"] == "strength"]
+    assert len(strengths) < 3, f"3축 고득점이 전부 강점 도배됨: {strengths}"
+
+
 def test_mention_share_sums_to_one():
     scores = {
         "a": _aspect(7.0, 10, 8, 1, 1),
