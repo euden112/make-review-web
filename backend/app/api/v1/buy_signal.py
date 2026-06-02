@@ -12,7 +12,7 @@
 
 import json
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import and_
@@ -52,6 +52,96 @@ async def _read_snapshot(key: str) -> dict | None:
         return json.loads(raw) if raw else None
     except Exception:
         return None
+
+
+async def _read_json_many(keys: list[str]) -> dict[str, dict | None]:
+    if not keys:
+        return {}
+    try:
+        values = await redis_db.mget(keys)
+    except Exception:
+        return {key: None for key in keys}
+
+    result: dict[str, dict | None] = {}
+    for key, raw in zip(keys, values):
+        try:
+            result[key] = json.loads(raw) if raw else None
+        except Exception:
+            result[key] = None
+    return result
+
+
+def _parse_ids(ids: str) -> list[int]:
+    parsed: list[int] = []
+    seen: set[int] = set()
+    for part in ids.split(","):
+        value = part.strip()
+        if not value.isdigit():
+            continue
+        game_id = int(value)
+        if game_id not in seen:
+            parsed.append(game_id)
+            seen.add(game_id)
+    return parsed
+
+
+@router.get("/buy-signals/bulk")
+async def get_buy_signals_bulk(
+    ids: str = Query("", description="쉼표로 구분한 game_id 목록"),
+    db: AsyncSession = Depends(get_db),
+):
+    game_ids = _parse_ids(ids)
+    if not game_ids:
+        return {}
+    if len(game_ids) > 200:
+        raise HTTPException(status_code=400, detail="한 번에 최대 200개까지 조회할 수 있습니다.")
+
+    result_keys = {game_id: f"buy_signal:result:{game_id}" for game_id in game_ids}
+    cached_results = await _read_json_many(list(result_keys.values()))
+    signals: dict[int, dict] = {}
+    missing_ids: list[int] = []
+
+    for game_id in game_ids:
+        cached = cached_results.get(result_keys[game_id])
+        if cached is not None:
+            signals[game_id] = cached
+        else:
+            missing_ids.append(game_id)
+
+    if missing_ids:
+        platform_row = (await db.execute(
+            select(Platform).where(Platform.code == "steam")
+        )).scalar_one_or_none()
+        appids: dict[int, str] = {}
+        if platform_row:
+            rows = (await db.execute(
+                select(GamePlatformMap).where(
+                    and_(
+                        GamePlatformMap.platform_id == platform_row.id,
+                        GamePlatformMap.game_id.in_(missing_ids),
+                    )
+                )
+            )).scalars().all()
+            appids = {row.game_id: row.external_game_id for row in rows}
+
+        price_keys = {game_id: _PRICE_KEY.format(game_id) for game_id in missing_ids}
+        sentiment_keys = {game_id: _SENTIMENT_KEY.format(game_id) for game_id in missing_ids}
+        prices = await _read_json_many(list(price_keys.values()))
+        sentiments = await _read_json_many(list(sentiment_keys.values()))
+
+        for game_id in missing_ids:
+            appid = appids.get(game_id)
+            if not appid:
+                continue
+            price = prices.get(price_keys[game_id])
+            sentiment = sentiments.get(sentiment_keys[game_id])
+            store_url = (price or {}).get("store_url") \
+                or f"https://store.steampowered.com/app/{appid}"
+            signal = build_signal(price, sentiment, store_url)
+            signals[game_id] = signal
+            await set_json_cache(result_keys[game_id], signal, _CACHE_TTL)
+
+    return {str(game_id): signals[game_id] for game_id in game_ids if game_id in signals}
 
 
 @router.get("/{game_id}/buy-signal")

@@ -326,15 +326,15 @@ function GameListPage({ isDark, toggleDark }) {
       .then(data => {
         setGames(data)
         setLoading(false)
-        // buy-signal 비동기 개별 조회 (non-blocking)
-        data.forEach(game => {
-          fetch(`${API_BASE}/api/v1/games/${game.id}/buy-signal`)
+        const ids = data.map(game => game.id).filter(Boolean).join(',')
+        if (ids) {
+          fetch(`${API_BASE}/api/v1/games/buy-signals/bulk?ids=${encodeURIComponent(ids)}`)
             .then(r => r.ok ? r.json() : null)
-            .then(signal => {
-              if (signal) setBuySignals(prev => ({ ...prev, [game.id]: signal }))
+            .then(signals => {
+              if (signals) setBuySignals(signals)
             })
             .catch(() => null)
-        })
+        }
       })
       .catch(() => setLoading(false))
   }, [])
