@@ -606,6 +606,32 @@ def _build_feature_prompt(
     return "\n\n".join(sections)
 
 
+# 429 시 retry-after를 존중하기 위한 백오프 파라미터.
+# 모든 키가 동시에 throttle되면 즉시 로테이션만으로는 못 피하므로(키를 다 돌아도
+# 같은 한도) retry-after만큼 기다린 뒤 키 사이클을 다시 돈다. 배치 끝 게임이
+# error fallback으로 굳던 원인 해소.
+_RATE_LIMIT_MAX_ROUNDS = 3      # 키 풀 전체 사이클 반복 횟수
+_RATE_LIMIT_WAIT_CAP = 120.0    # 라운드 간 단일 대기 상한(초)
+
+
+def _parse_retry_after_seconds(exc: Exception) -> float | None:
+    """Groq RateLimitError에서 retry-after 초를 추출. 헤더 우선, 메시지 폴백."""
+    resp = getattr(exc, "response", None)
+    if resp is not None:
+        try:
+            ra = resp.headers.get("retry-after")
+            if ra:
+                return float(ra)
+        except (AttributeError, TypeError, ValueError):
+            pass
+    # 메시지 예: "Please try again in 2m41.7408s"
+    m = re.search(r"try again in\s+(?:(\d+)m)?([\d.]+)s", str(exc))
+    if m:
+        minutes = int(m.group(1)) if m.group(1) else 0
+        return minutes * 60 + float(m.group(2))
+    return None
+
+
 async def _run_feature_json(
     *,
     rotator: GroqKeyRotator,
@@ -620,30 +646,49 @@ async def _run_feature_json(
         "When language=ko, write detailed Korean sentences using concrete review evidence, not vague category summaries."
     )
     last_exc: Exception | None = None
-    for attempt in range(rotator.key_count):
-        client = rotator.make_client()
-        try:
-            response = await asyncio.wait_for(
-                _generate_reduce_response(client, model_name, system_prompt, prompt),
-                timeout=timeout_sec,
+    total_attempt = 0
+    for round_idx in range(_RATE_LIMIT_MAX_ROUNDS):
+        round_retry_after: list[float] = []
+        for _ in range(rotator.key_count):
+            client = rotator.make_client()
+            try:
+                response = await asyncio.wait_for(
+                    _generate_reduce_response(client, model_name, system_prompt, prompt),
+                    timeout=timeout_sec,
+                )
+                raw_text = (response.choices[0].message.content or "").strip()
+                parsed = _safe_parse_json(raw_text)
+                usage = {
+                    "requests": 1,
+                    "input_tokens": int(response.usage.prompt_tokens or 0),
+                    "output_tokens": int(response.usage.completion_tokens or 0),
+                    "retry": total_attempt,
+                }
+                logger.info(
+                    "feature reduce completed: feature=%s input_tokens=%d output_tokens=%d chars=%d retry=%d",
+                    feature, usage["input_tokens"], usage["output_tokens"], len(raw_text), total_attempt,
+                )
+                return parsed, usage
+            except _groq_module.RateLimitError as e:
+                last_exc = e
+                ra = _parse_retry_after_seconds(e)
+                if ra is not None:
+                    round_retry_after.append(ra)
+                logger.warning(
+                    "Groq 429 on feature=%s round %d key %d/%d retry_after=%ss, rotating...",
+                    feature, round_idx + 1, total_attempt % rotator.key_count + 1, rotator.key_count, ra,
+                )
+                total_attempt += 1
+                rotator.rotate()
+        # 이 라운드에서 모든 키가 429. 마지막 라운드가 아니면 retry-after만큼 대기 후 재시도.
+        if round_idx < _RATE_LIMIT_MAX_ROUNDS - 1:
+            wait = min(round_retry_after) if round_retry_after else 5.0
+            wait = min(wait, _RATE_LIMIT_WAIT_CAP) + 1.0  # 경계 여유 +1s
+            logger.warning(
+                "feature=%s 전 키 rate-limited, %.1fs 대기 후 재시도(round %d)",
+                feature, wait, round_idx + 2,
             )
-            raw_text = (response.choices[0].message.content or "").strip()
-            parsed = _safe_parse_json(raw_text)
-            usage = {
-                "requests": 1,
-                "input_tokens": int(response.usage.prompt_tokens or 0),
-                "output_tokens": int(response.usage.completion_tokens or 0),
-                "retry": attempt,
-            }
-            logger.info(
-                "feature reduce completed: feature=%s input_tokens=%d output_tokens=%d chars=%d key_index=%d",
-                feature, usage["input_tokens"], usage["output_tokens"], len(raw_text), attempt,
-            )
-            return parsed, usage
-        except _groq_module.RateLimitError as e:
-            last_exc = e
-            logger.warning("Groq 429 on feature=%s key %d/%d, rotating...", feature, attempt + 1, rotator.key_count)
-            rotator.rotate()
+            await asyncio.sleep(wait)
     raise last_exc
 
 
