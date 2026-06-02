@@ -606,10 +606,12 @@ def _build_feature_prompt(
     return "\n\n".join(sections)
 
 
-# 429 시 retry-after를 존중하기 위한 백오프 파라미터.
-# 모든 키가 동시에 throttle되면 즉시 로테이션만으로는 못 피하므로(키를 다 돌아도
-# 같은 한도) retry-after만큼 기다린 뒤 키 사이클을 다시 돈다. 배치 끝 게임이
-# error fallback으로 굳던 원인 해소.
+# 429 처리 정책:
+#  - 키는 서로 다른 org일 수 있고 그 경우 일일(TPD) 예산이 독립이다. 따라서 한 키가
+#    TPD 소진(429)이어도 즉시 포기하지 말고 다음 키(다른 org)를 시도한다.
+#  - 짧은 TPM 윈도로 전 키가 동시에 throttle되면 즉시 로테이션만으론 못 피하므로
+#    retry-after만큼 기다린 뒤 키 사이클을 다시 돈다.
+#  - 전 키가 '일일(TPD)' 소진이면 분 단위 대기로 안 풀리니 즉시 실패(헛대기 방지).
 _RATE_LIMIT_MAX_ROUNDS = 3      # 키 풀 전체 사이클 반복 횟수
 _RATE_LIMIT_WAIT_CAP = 120.0    # 라운드 간 단일 대기 상한(초)
 
@@ -649,6 +651,7 @@ async def _run_feature_json(
     total_attempt = 0
     for round_idx in range(_RATE_LIMIT_MAX_ROUNDS):
         round_retry_after: list[float] = []
+        round_daily_exhausted = 0
         for _ in range(rotator.key_count):
             client = rotator.make_client()
             try:
@@ -673,16 +676,18 @@ async def _run_feature_json(
                 last_exc = e
                 ra = _parse_retry_after_seconds(e)
                 msg = str(e)
-                # 일일(TPD)·장기 한도는 분 단위 대기로 안 풀린다(롤링이라 매 요청 즉시
-                # 재소진). 동일 org의 여러 키도 TPD를 공유하므로 로테이션도 무용.
-                # 불필요한 대기/지연 없이 즉시 실패시켜 error fallback으로 넘긴다.
+                # 일일(TPD)은 org마다 독립일 수 있으므로 먼저 모든 키를 시도한다.
+                # 전 키가 daily로 막힌 경우만 즉시 실패시켜 불필요한 대기를 피한다.
                 is_daily = ("per day" in msg) or ("TPD" in msg) or ("tokens per day" in msg)
-                if is_daily or (ra is not None and ra > _RATE_LIMIT_WAIT_CAP):
+                if is_daily:
+                    round_daily_exhausted += 1
                     logger.warning(
-                        "feature=%s 일일/장기 rate limit(retry_after=%ss, daily=%s) — 즉시 실패",
-                        feature, ra, is_daily,
+                        "feature=%s 일일 rate limit(retry_after=%ss) key %d/%d, rotating...",
+                        feature, ra, total_attempt % rotator.key_count + 1, rotator.key_count,
                     )
-                    raise
+                    total_attempt += 1
+                    rotator.rotate()
+                    continue
                 if ra is not None:
                     round_retry_after.append(ra)
                 logger.warning(
@@ -691,6 +696,12 @@ async def _run_feature_json(
                 )
                 total_attempt += 1
                 rotator.rotate()
+        if round_daily_exhausted == rotator.key_count:
+            logger.warning(
+                "feature=%s 전 키 일일 rate limit 소진 — 즉시 실패",
+                feature,
+            )
+            raise last_exc
         # 이 라운드에서 모든 키가 429. 마지막 라운드가 아니면 retry-after만큼 대기 후 재시도.
         if round_idx < _RATE_LIMIT_MAX_ROUNDS - 1:
             wait = min(round_retry_after) if round_retry_after else 5.0

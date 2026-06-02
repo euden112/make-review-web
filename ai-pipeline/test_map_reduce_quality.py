@@ -12,7 +12,7 @@ BACKEND_ROOT = os.path.abspath(os.path.join(ROOT, "..", "backend"))
 if BACKEND_ROOT not in sys.path:
     sys.path.insert(0, BACKEND_ROOT)
 
-from ai_module.map_reduce import map_local
+from ai_module.map_reduce import map_local, reduce_api
 from ai_module.map_reduce.chunker import Chunk
 from ai_module.map_reduce.map_schema import (
     _guess_aspect,
@@ -38,6 +38,7 @@ from ai_module.map_reduce.reduce_api import (
     _llm_summary_passes_gate,
     _fallback_user_summary_from_evidence,
     _parse_feature_bucket,
+    _run_feature_json,
     _review_based_sentence,
     _sanitize_public_list,
     _sanitize_grounded_text,
@@ -46,6 +47,48 @@ from ai_module.map_reduce.pipeline import _has_playtime_bucket_coverage, _select
 from ai_module.map_reduce.sampler import ReviewRow
 from app.services.recommendation_targets import sanitize_player_targets
 from dry_quality_run import _gate_results
+
+
+class _FakeRateLimitError(Exception):
+    pass
+
+
+class _FakeRotator:
+    def __init__(self, keys: list[str]) -> None:
+        self._keys = keys
+        self._index = 0
+
+    @property
+    def key_count(self) -> int:
+        return len(self._keys)
+
+    @property
+    def current_key(self) -> str:
+        return self._keys[self._index]
+
+    def rotate(self) -> None:
+        self._index = (self._index + 1) % len(self._keys)
+
+    def make_client(self) -> str:
+        return self.current_key
+
+
+class _FakeUsage:
+    prompt_tokens = 11
+    completion_tokens = 7
+
+
+class _FakeMessage:
+    content = '{"ok": true}'
+
+
+class _FakeChoice:
+    message = _FakeMessage()
+
+
+class _FakeGroqResponse:
+    choices = [_FakeChoice()]
+    usage = _FakeUsage()
 
 
 class InMemoryAsyncCache:
@@ -1694,3 +1737,62 @@ def test_map_stage_falls_back_to_deterministic_candidate_on_local_llm_failure(mo
     assert payload["evidence_items"][0]["review_id"] == 1
     assert results[0].failure_stats["call_failed"] == 1
     assert results[0].failure_stats["map_deterministic_fallback_chunks"] == 1
+
+
+def test_reduce_daily_limit_rotates_to_next_key(monkeypatch) -> None:
+    calls: list[str] = []
+
+    async def fake_generate(client, model_name, system_prompt, prompt):
+        calls.append(client)
+        if client == "key1":
+            raise _FakeRateLimitError("Rate limit reached for tokens per day (TPD)")
+        return _FakeGroqResponse()
+
+    monkeypatch.setattr(reduce_api._groq_module, "RateLimitError", _FakeRateLimitError)
+    monkeypatch.setattr(reduce_api, "_generate_reduce_response", fake_generate)
+
+    parsed, usage = asyncio.run(
+        _run_feature_json(
+            rotator=_FakeRotator(["key1", "key2"]),
+            model_name="test-model",
+            feature="user",
+            prompt="{}",
+            timeout_sec=5,
+        )
+    )
+
+    assert parsed == {"ok": True}
+    assert usage["retry"] == 1
+    assert calls == ["key1", "key2"]
+
+
+def test_reduce_daily_limit_fails_only_after_all_keys_daily(monkeypatch) -> None:
+    calls: list[str] = []
+
+    async def fake_generate(client, model_name, system_prompt, prompt):
+        calls.append(client)
+        raise _FakeRateLimitError("Rate limit reached for tokens per day (TPD)")
+
+    async def fake_sleep(seconds):
+        raise AssertionError("daily exhaustion should not sleep")
+
+    monkeypatch.setattr(reduce_api._groq_module, "RateLimitError", _FakeRateLimitError)
+    monkeypatch.setattr(reduce_api, "_generate_reduce_response", fake_generate)
+    monkeypatch.setattr(reduce_api.asyncio, "sleep", fake_sleep)
+
+    try:
+        asyncio.run(
+            _run_feature_json(
+                rotator=_FakeRotator(["key1", "key2", "key3"]),
+                model_name="test-model",
+                feature="user",
+                prompt="{}",
+                timeout_sec=5,
+            )
+        )
+    except _FakeRateLimitError:
+        pass
+    else:
+        raise AssertionError("expected daily exhaustion to fail after all keys are tried")
+
+    assert calls == ["key1", "key2", "key3"]
