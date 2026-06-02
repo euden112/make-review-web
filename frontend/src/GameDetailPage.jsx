@@ -529,8 +529,8 @@ function GameDetailPage({ isDark, toggleDark }) {
       setError(null)
 
       try {
-        const [gamesRes, summaryRes, playtimeRes, criticRes, userRes, buySignalRes, recommendationRes] = await Promise.all([
-          fetch(`${API_BASE}/api/v1/games/`),
+        const [gameRes, summaryRes, playtimeRes, criticRes, userRes, buySignalRes, recommendationRes] = await Promise.all([
+          fetch(`${API_BASE}/api/v1/games/${id}`),
           fetch(`${API_BASE}/api/v1/games/${id}/summary`),
           fetch(`${API_BASE}/api/v1/games/${id}/playtime-analysis`),
           fetch(`${API_BASE}/api/v1/games/${id}/critic-summary`),
@@ -539,10 +539,8 @@ function GameDetailPage({ isDark, toggleDark }) {
           fetch(`${API_BASE}/api/v1/games/${id}/recommendation-targets?limit=4`).catch(() => null),
         ])
 
-        if (gamesRes.ok) {
-          const gamesData = await gamesRes.json()
-          const found = gamesData.find(g => g.id === parseInt(id))
-          setGame(found || null)
+        if (gameRes.ok) {
+          setGame(await gameRes.json())
         }
 
         if (summaryRes.ok) {

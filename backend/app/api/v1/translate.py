@@ -14,7 +14,10 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _groq = AsyncGroq(api_key=os.getenv("GROQ_API_KEY", ""))
-_TRANSLATE_MODEL = os.getenv("GROQ_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
+_TRANSLATE_MODEL = os.getenv(
+    "GROQ_TRANSLATE_MODEL",
+    os.getenv("GROQ_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct"),
+)
 
 
 def _cache_key(text: str) -> str:

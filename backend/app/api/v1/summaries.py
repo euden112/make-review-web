@@ -127,6 +127,68 @@ async def get_games(db: AsyncSession = Depends(get_db)):
     return result
 
 
+@router.get("/{game_id}")
+async def get_game(game_id: int, db: AsyncSession = Depends(get_db)):
+    game = (await db.execute(
+        select(Game).where(Game.id == game_id)
+    )).scalar_one_or_none()
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+
+    steam_platform = (await db.execute(
+        select(Platform).where(Platform.code == "steam")
+    )).scalar_one_or_none()
+    metacritic_platform = (await db.execute(
+        select(Platform).where(Platform.code == "metacritic")
+    )).scalar_one_or_none()
+
+    steam_map = None
+    if steam_platform:
+        steam_map = (await db.execute(
+            select(GamePlatformMap).where(
+                and_(
+                    GamePlatformMap.platform_id == steam_platform.id,
+                    GamePlatformMap.game_id == game_id,
+                )
+            )
+        )).scalar_one_or_none()
+
+    meta_map = None
+    if metacritic_platform:
+        meta_map = (await db.execute(
+            select(GamePlatformMap).where(
+                and_(
+                    GamePlatformMap.platform_id == metacritic_platform.id,
+                    GamePlatformMap.game_id == game_id,
+                )
+            )
+        )).scalar_one_or_none()
+
+    cover_image = None
+    hero_image = None
+    tags: list[str] = []
+    rating: float | None = None
+
+    if steam_map and steam_map.platform_meta_json:
+        cover_image = steam_map.platform_meta_json.get("cover_image")
+        hero_image = steam_map.platform_meta_json.get("hero_image")
+        tags = steam_map.platform_meta_json.get("tags") or []
+
+    if meta_map and meta_map.platform_meta_json:
+        score = meta_map.platform_meta_json.get("score")
+        if score is not None:
+            rating = round(float(score) / 20, 1)
+
+    return {
+        "id": game.id,
+        "canonical_title": game.canonical_title,
+        "cover_image": cover_image,
+        "hero_image": hero_image,
+        "tags": tags,
+        "rating": rating,
+    }
+
+
 @router.post("/{game_id}/summarize", dependencies=[Depends(require_api_key)])
 async def trigger_summarization(
     game_id: int,

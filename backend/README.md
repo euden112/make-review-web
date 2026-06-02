@@ -66,13 +66,14 @@ REDIS_URL=redis://redis:6379/0
 GROQ_API_KEY=...
 GROQ_API_KEYS=key1,key2,key3
 GROQ_MODEL=meta-llama/llama-4-scout-17b-16e-instruct
+GROQ_TRANSLATE_MODEL=llama-3.1-8b-instant
 MAP_BACKEND=groq
 LOCAL_MAP_MODEL=gemma4:e4b
 OLLAMA_BASE_URL=http://localhost:11434
 API_SECRET_KEY=...
 ```
 
-`GROQ_API_KEYS`는 선택 값이지만, 여러 키를 쉼표로 넣으면 429 발생 시 다음 키로 자동 전환합니다. `MAP_BACKEND=groq`는 GPU가 없는 클라우드 기본값입니다. 로컬 Ollama Map을 백엔드에서 직접 쓰려면 `map_backend=local` 요청 파라미터와 접근 가능한 `OLLAMA_BASE_URL`이 필요합니다.
+`GROQ_API_KEYS`는 선택 값이지만, 여러 키를 쉼표로 넣으면 429 발생 시 다음 키로 자동 전환합니다. `GROQ_TRANSLATE_MODEL`은 대표 리뷰 번역 전용 모델이며, 설정하지 않으면 `GROQ_MODEL`을 사용합니다. `MAP_BACKEND=groq`는 GPU가 없는 클라우드 기본값입니다. 로컬 Ollama Map을 백엔드에서 직접 쓰려면 `map_backend=local` 요청 파라미터와 접근 가능한 `OLLAMA_BASE_URL`이 필요합니다.
 
 ## 인증
 
