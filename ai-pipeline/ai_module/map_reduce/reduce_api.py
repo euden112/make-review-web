@@ -2147,11 +2147,27 @@ async def run_feature_reduce_stage(
     late_payloads = _parse_map_payloads(grouped_summaries.get("late", []))
 
     usage: dict[str, Any] = {}
+    # 종합·유저 점수 공통 anchor: Steam 추천률(백필/enrich로 공식값). 유저/최종 reduce가
+    # 이 anchor 대비 delta만 제안하고 코드가 인용 검증 후 결합한다(출처별 독립 산출).
+    sentiment_anchor_value = None
+    if score_anchors and score_anchors.get("steam_recommend_ratio") is not None:
+        try:
+            sentiment_anchor_value = round(float(score_anchors["steam_recommend_ratio"]))
+        except (TypeError, ValueError):
+            sentiment_anchor_value = None
     try:
         user_contract = {
             "summary": "5-7 detailed Korean sentences; include at least 4 concrete evidence details and review_id anchors when possible",
             "sentiment_overall": "positive|mixed|negative",
-            "sentiment_score": "0..100",
+            "sentiment_score_delta": (
+                "integer in [-8, +8] adjusting the provided sentiment_score_anchor (Steam 추천률). "
+                "0 = anchor 그대로. Non-zero delta는 score_delta_evidence에 2건 이상의 review_id 인용 필수. "
+                "anchor가 null이면 0을 출력."
+            ),
+            "score_delta_evidence": (
+                "array of objects {review_id:int, why:string}. delta가 0이 아니면 ≥2건 필수. "
+                "review_id는 입력 evidence에 존재해야 함."
+            ),
             "pros": "4-5 concrete evidence-backed Korean strings with situation/detail, not labels",
             "cons": "3-4 concrete evidence-backed Korean strings with failure mode or frustration detail",
             "keywords": "6-8 evidence-backed topics; include specific terms like boss, area, crash, pathfinding when present",
@@ -2177,6 +2193,14 @@ async def run_feature_reduce_stage(
                 category_frequency=category_frequency,
                 representative_quotes=representative_quotes,
                 evidence_limit=14,
+                extra={
+                    "sentiment_score_anchor": sentiment_anchor_value,
+                    "scoring_protocol": (
+                        "Score는 직접 출력하지 말 것. sentiment_score_delta(앵커 대비)만 제안. "
+                        "non-zero delta는 score_delta_evidence에 ≥2건 review_id 인용 필요. "
+                        "근거 부재 시 delta=0. 코드가 anchor + 검증된 delta로 최종 유저 점수 산출."
+                    ),
+                },
             ),
         )
 
@@ -2314,9 +2338,7 @@ async def run_feature_reduce_stage(
             }
             for aspect, data in baseline_aspect_scores.items()
         }
-        sentiment_anchor_value = None
-        if score_anchors and score_anchors.get("steam_recommend_ratio") is not None:
-            sentiment_anchor_value = round(float(score_anchors["steam_recommend_ratio"]))
+        # sentiment_anchor_value는 user reduce 전에 이미 계산됨(상단).
 
         final_contract = {
             "one_liner": "one Korean sentence under 100 chars with a concrete evidence-backed tradeoff",
@@ -2497,13 +2519,32 @@ async def run_feature_reduce_stage(
         if not one_liner:
             one_liner = _fallback_one_liner_from_evidence(final_evidence_items)
 
-        # 유저 요약 점수를 Steam 추천률 anchor 기반 최종 점수와 정합시킨다.
-        # 추천률은 본질적으로 유저 신호이므로 user 버킷에 그대로 적용한다. 버킷 reduce LLM이
-        # pros/cons를 균형 요약하며 중간대(50~60)로 수렴해 항상 "mixed"로 보이던 문제를,
-        # anchor 결합 점수 + 결정론 라벨 도출로 unified와 일관되게 만든다.
-        if user_bucket is not None and isinstance(validated_sentiment_score, (int, float)):
-            user_bucket.sentiment_score = validated_sentiment_score
-            user_bucket.sentiment_overall = derived_sentiment_overall
+        # 유저 점수: 공식 추천률 anchor + Steam 유저 evidence 근거의 LLM delta(출처별 독립).
+        # 종합(validated_sentiment_score)은 유저+critic 합본 근거 delta를 쓰지만, 유저 버킷은
+        # user_payloads(Steam 유저 리뷰)만 근거로 delta를 검증·결합한다. 라벨은 점수에서 결정론
+        # 도출(LLM 자유 점수가 50~60 중간대로 수렴해 항상 mixed로 보이던 문제 차단).
+        if user_bucket is not None:
+            user_evidence_items = _evidence_subset(user_payloads, limit=BASELINE_EVIDENCE_SAMPLE)
+            user_valid_review_ids = {
+                int(it.get("review_id"))
+                for it in user_evidence_items
+                if isinstance(it.get("review_id"), (int, float))
+            }
+            user_score = _apply_sentiment_score_delta(
+                anchor=sentiment_anchor_value,
+                llm_delta=(user_data or {}).get("sentiment_score_delta"),
+                llm_evidence=(user_data or {}).get("score_delta_evidence"),
+                valid_review_ids=user_valid_review_ids,
+                min_sample=10,
+                sample_size=steam_total_count or 999,
+            )
+            if user_score is None:  # anchor 없음(Steam 추천률 부재) → 종합으로 폴백
+                user_score = validated_sentiment_score
+            if isinstance(user_score, (int, float)):
+                user_bucket.sentiment_score = user_score
+                user_bucket.sentiment_overall = (
+                    "positive" if user_score >= 60 else "negative" if user_score <= 45 else "mixed"
+                )
 
         # 비평가 요약 점수를 Metacritic critic 평균(이미 0~100) anchor에 정합시킨다.
         # critic 평균 자체가 평론 점수이므로 delta 없이 그대로 사용하고, 라벨은 결정론 도출.
