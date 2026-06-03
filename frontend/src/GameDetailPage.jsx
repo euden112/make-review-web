@@ -826,18 +826,16 @@ function GameDetailPage({ isDark, toggleDark }) {
                 <div className="flex items-center gap-3 flex-wrap">
                   {/* Steam 공식 등급은 정성 라벨만 노출. 공식 추천률/리뷰수/출처 태그는
                       요약이 ~200건 표본 LLM 산출물임에도 13만건 기반으로 오해시키므로 제외.
-                      공식 집계는 baseline anchor로만 쓰이고 요약 본문 근거가 아니다. */}
+                      점수%는 LLM 산출(표본 anchor+delta)이라 함께 표시한다. */}
                   {summary.steam_rating_label ? (
                     <SteamRatingBadge label={summary.steam_rating_label} desc={summary.steam_rating_desc} />
                   ) : (
-                    <>
-                      <SentimentBadge value={summary.sentiment_overall} />
-                      {summary.sentiment_score !== null && (
-                        <span className="text-sm text-gray-500 dark:text-gray-400">
-                          점수: {(summary.sentiment_score).toFixed(0)}%
-                        </span>
-                      )}
-                    </>
+                    <SentimentBadge value={summary.sentiment_overall} />
+                  )}
+                  {summary.sentiment_score !== null && (
+                    <span className="text-sm text-gray-500 dark:text-gray-400">
+                      점수: {(summary.sentiment_score).toFixed(0)}%
+                    </span>
                   )}
                 </div>
               </div>
