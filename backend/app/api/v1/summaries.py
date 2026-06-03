@@ -323,6 +323,11 @@ def _serialize_summary(
         "representative_reviews": rep_reviews,
         "sentiment_overall": summary.sentiment_overall,
         "sentiment_score": float(summary.sentiment_score) if summary.sentiment_score is not None else None,
+        # 종합 등급(표시용): Steam 공식 query_summary 기반. 프론트 헤드라인 배지가 이 값을 노출.
+        "steam_rating_desc": summary.steam_rating_desc,
+        "steam_rating_label": summary.steam_rating_label,
+        "steam_rating_ratio": float(summary.steam_rating_ratio) if summary.steam_rating_ratio is not None else None,
+        "steam_rating_count": summary.steam_rating_count,
         "aspect_sentiment": summary.aspect_sentiment_json,
         "created_at": summary.created_at.isoformat(),
         "reliability": None,

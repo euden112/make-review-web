@@ -206,6 +206,11 @@ class GameReviewSummary(Base):
     steam_recommend_ratio = Column(Numeric(5, 2))
     metacritic_critic_avg = Column(Numeric(5, 2))
     metacritic_user_avg = Column(Numeric(5, 2))
+    # 종합 등급(표시용): Steam 공식 query_summary 기반. 마이그레이션 15.
+    steam_rating_desc = Column(Text)             # raw 영문 "Very Positive"
+    steam_rating_label = Column(Text)            # 한글 9밴드 "매우 긍정적"
+    steam_rating_ratio = Column(Numeric(5, 2))   # 공식 추천률 %
+    steam_rating_count = Column(Integer)         # 공식 총 리뷰 수
     source_review_count = Column(Integer, default=0)
     covered_from_review_id = Column(BigInteger, ForeignKey("external_reviews.id"))
     covered_to_review_id = Column(BigInteger, ForeignKey("external_reviews.id"))

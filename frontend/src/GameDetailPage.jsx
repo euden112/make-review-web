@@ -47,6 +47,22 @@ function SentimentBadge({ value }) {
   )
 }
 
+// Steam 공식 종합 등급 배지(9밴드). 색은 desc 극성으로 결정.
+function steamRatingCls(desc) {
+  const d = String(desc || '').toLowerCase()
+  if (d.includes('negative')) return 'bg-red-50 text-red-600 dark:bg-red-900/20 dark:text-red-400'
+  if (d.includes('mixed')) return 'bg-gray-50 text-gray-600 dark:bg-gray-700 dark:text-gray-300'
+  return 'bg-green-50 text-green-600 dark:bg-green-900/20 dark:text-green-400'
+}
+
+function SteamRatingBadge({ label, desc }) {
+  return (
+    <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${steamRatingCls(desc)}`}>
+      {label}
+    </span>
+  )
+}
+
 const BUCKET_COLORS = {
   early: { bar: '#6366f1', light: 'rgba(99,102,241,0.15)' },
   mid:   { bar: '#f59e0b', light: 'rgba(245,158,11,0.15)' },
@@ -803,16 +819,33 @@ function GameDetailPage({ isDark, toggleDark }) {
               </div>
             </div>
 
-            {/* 감성 분석 */}
-            {summary.sentiment_overall && (
+            {/* 종합 평가 — Steam 공식 등급 우선, 없으면 AI 감성 폴백 */}
+            {(summary.steam_rating_label || summary.sentiment_overall) && (
               <div className="bg-white dark:bg-[#1e1e2e] rounded-xl p-7 border border-gray-200 dark:border-[#2a2a3e] shadow-sm">
-                <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0] mb-3">감성 분석</h2>
-                <div className="flex items-center gap-4">
-                  <SentimentBadge value={summary.sentiment_overall} />
-                  {summary.sentiment_score !== null && (
-                    <span className="text-sm text-gray-500 dark:text-gray-400">
-                      점수: {(summary.sentiment_score).toFixed(0)}%
-                    </span>
+                <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0] mb-3">종합 평가</h2>
+                <div className="flex items-center gap-3 flex-wrap">
+                  {summary.steam_rating_label ? (
+                    <>
+                      <SteamRatingBadge label={summary.steam_rating_label} desc={summary.steam_rating_desc} />
+                      <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-300 border border-blue-200 dark:border-blue-700">
+                        Steam 공식
+                      </span>
+                      {summary.steam_rating_ratio != null && (
+                        <span className="text-sm text-gray-500 dark:text-gray-400">
+                          긍정 {summary.steam_rating_ratio.toFixed(0)}%
+                          {summary.steam_rating_count != null && ` · 리뷰 ${summary.steam_rating_count.toLocaleString()}개`}
+                        </span>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <SentimentBadge value={summary.sentiment_overall} />
+                      {summary.sentiment_score !== null && (
+                        <span className="text-sm text-gray-500 dark:text-gray-400">
+                          점수: {(summary.sentiment_score).toFixed(0)}%
+                        </span>
+                      )}
+                    </>
                   )}
                 </div>
               </div>

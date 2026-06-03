@@ -283,6 +283,12 @@ class FinalSummary:
     full_text: str = ""
     sentiment_overall: str | None = None
     sentiment_score: float | None = None
+    # 종합 등급(표시용): Steam 공식 query_summary 기반. sentiment_overall(내부 3값
+    # 제어 enum)과 분리 — 프론트 헤드라인 배지를 이 값으로 노출한다.
+    steam_rating_desc: str | None = None   # raw 영문 (예: "Very Positive")
+    steam_rating_label: str | None = None  # 한글 밴드 (예: "매우 긍정적")
+    steam_rating_ratio: float | None = None  # 공식 추천률 % (total_positive/total_reviews)
+    steam_rating_count: int | None = None    # 공식 집계 총 리뷰 수
     pros: list[str] = field(default_factory=list)
     cons: list[str] = field(default_factory=list)
     keywords: list[str] = field(default_factory=list)
@@ -305,6 +311,47 @@ class FinalSummary:
     reduce_usage: dict[str, Any] = field(default_factory=dict)
     error_code: str | None = None
     is_retryable: bool | None = None
+
+
+# Steam 공식 review_score_desc(영문) → 한글 밴드. Steam 자체 한국어 현지화 표기에 맞춤.
+# 요청 시 l=english로 받아 문자열을 안정화한 뒤 매핑한다.
+_STEAM_RATING_LABEL_KO: dict[str, str] = {
+    "Overwhelmingly Positive": "압도적으로 긍정적",
+    "Very Positive": "매우 긍정적",
+    "Positive": "긍정적",
+    "Mostly Positive": "대체로 긍정적",
+    "Mixed": "복합적",
+    "Mostly Negative": "대체로 부정적",
+    "Negative": "부정적",
+    "Very Negative": "매우 부정적",
+    "Overwhelmingly Negative": "압도적으로 부정적",
+}
+
+
+def _steam_rating_from_anchors(score_anchors: dict[str, Any] | None) -> dict[str, Any]:
+    """score_anchors의 Steam 공식 집계 → 표시용 종합 등급 필드.
+
+    값이 없으면 빈 dict. desc 매핑 실패해도 raw desc는 살린다.
+    반환 키: steam_rating_desc/label/ratio/count(헤드라인 표시용).
+    """
+    if not score_anchors:
+        return {}
+    desc = score_anchors.get("steam_review_score_desc")
+    total = score_anchors.get("steam_total_reviews")
+    pos = score_anchors.get("steam_total_positive")
+    if not desc or not total:
+        return {}
+    desc = str(desc).strip()
+    try:
+        ratio = round(int(pos) / int(total) * 100, 1) if int(total) > 0 else None
+    except (TypeError, ValueError):
+        ratio = score_anchors.get("steam_recommend_ratio")
+    return {
+        "steam_rating_desc": desc,
+        "steam_rating_label": _STEAM_RATING_LABEL_KO.get(desc, desc),
+        "steam_rating_ratio": ratio,
+        "steam_rating_count": int(total),
+    }
 
 
 def _safe_parse_json(text: str) -> dict[str, Any]:
@@ -2420,6 +2467,12 @@ async def run_feature_reduce_stage(
         else:
             derived_sentiment_overall = _normalize_sentiment_overall(final_data.get("sentiment_overall"))
 
+        # 표시용 종합 등급(Steam 공식 9밴드 라벨). 점수/라벨 '값'은 덮지 않는다 —
+        # 종합 감성은 공식 추천률을 baseline(anchor)으로 LLM delta를 얹어 산출하고
+        # (score_anchors.steam_recommend_ratio가 이미 공식값), one_liner/evidence는
+        # 그 결과(derived_sentiment_overall)를 그대로 쓴다. 여기선 헤드라인 표시 필드만 만든다.
+        _steam_rating = _steam_rating_from_anchors(score_anchors)
+
         # one_liner는 개요 합성 문장이라 "평이 많다/대체로/긍정과 불만이 함께" 같은
         # 일반화 표현이 자연스럽다. drop_vague=True를 쓰면 이런 문장이 대거 잘려
         # 일반 긍정 폴백으로 떨어지므로(편향+중복), 버킷 요약과 동일하게 vague 컷을 끈다.
@@ -2524,6 +2577,10 @@ async def run_feature_reduce_stage(
             full_text="",
             sentiment_overall=derived_sentiment_overall,
             sentiment_score=validated_sentiment_score,
+            steam_rating_desc=_steam_rating.get("steam_rating_desc"),
+            steam_rating_label=_steam_rating.get("steam_rating_label"),
+            steam_rating_ratio=_steam_rating.get("steam_rating_ratio"),
+            steam_rating_count=_steam_rating.get("steam_rating_count"),
             pros=final_pros,
             cons=final_cons,
             keywords=_sanitize_keyword_list(final_data.get("keywords", [])),
