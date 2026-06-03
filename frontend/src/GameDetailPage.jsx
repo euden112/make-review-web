@@ -47,20 +47,33 @@ function SentimentBadge({ value }) {
   )
 }
 
-// Steam 공식 종합 등급 배지(9밴드). 색은 desc 극성으로 결정.
-function steamRatingCls(desc) {
-  const d = String(desc || '').toLowerCase()
-  if (d.includes('negative')) return 'bg-red-50 text-red-600 dark:bg-red-900/20 dark:text-red-400'
-  if (d.includes('mixed')) return 'bg-gray-50 text-gray-600 dark:bg-gray-700 dark:text-gray-300'
-  return 'bg-green-50 text-green-600 dark:bg-green-900/20 dark:text-green-400'
+// 점수(0~100)→9밴드 등급. 라벨을 점수에서 도출해 점수-라벨 출처를 일치시킨다
+// (종합·유저 모두 LLM 산출 점수라 Steam desc를 따로 가져오지 않는다). 경계는 Steam % 기준.
+const SCORE_BANDS = [
+  { min: 95, label: '압도적으로 긍정적', tone: 'pos' },
+  { min: 85, label: '매우 긍정적',      tone: 'pos' },
+  { min: 80, label: '긍정적',          tone: 'pos' },
+  { min: 70, label: '대체로 긍정적',    tone: 'pos' },
+  { min: 40, label: '복합적',          tone: 'mix' },
+  { min: 30, label: '대체로 부정적',    tone: 'neg' },
+  { min: 20, label: '부정적',          tone: 'neg' },
+  { min: 10, label: '매우 부정적',      tone: 'neg' },
+  { min: 0,  label: '압도적으로 부정적', tone: 'neg' },
+]
+const SCORE_TONE_CLS = {
+  pos: 'bg-green-50 text-green-600 dark:bg-green-900/20 dark:text-green-400',
+  mix: 'bg-gray-50 text-gray-600 dark:bg-gray-700 dark:text-gray-300',
+  neg: 'bg-red-50 text-red-600 dark:bg-red-900/20 dark:text-red-400',
 }
-
-function SteamRatingBadge({ label, desc }) {
-  return (
-    <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${steamRatingCls(desc)}`}>
-      {label}
-    </span>
-  )
+function scoreToBand(score) {
+  const s = Number(score)
+  const b = SCORE_BANDS.find((x) => s >= x.min) || SCORE_BANDS[SCORE_BANDS.length - 1]
+  return { label: b.label, cls: SCORE_TONE_CLS[b.tone] }
+}
+function ScoreBandBadge({ score }) {
+  if (score == null || Number.isNaN(Number(score))) return null
+  const { label, cls } = scoreToBand(score)
+  return <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${cls}`}>{label}</span>
 }
 
 const BUCKET_COLORS = {
@@ -372,7 +385,7 @@ function SummaryCard({ title, data, emptyMessage }) {
       {data?.summary ? (
         <>
           <div className="flex items-center gap-2 mb-3">
-            <SentimentBadge value={data.sentiment_overall} />
+            <ScoreBandBadge score={data.sentiment_score} />
             {data.sentiment_score != null && (
               <span className="text-xs text-gray-500 dark:text-gray-400">
                 점수: {data.sentiment_score.toFixed(0)}%
@@ -819,24 +832,15 @@ function GameDetailPage({ isDark, toggleDark }) {
               </div>
             </div>
 
-            {/* 종합 평가 — Steam 공식 등급 우선, 없으면 AI 감성 폴백 */}
-            {(summary.steam_rating_label || summary.sentiment_overall) && (
+            {/* 종합 평가 — 라벨은 LLM 점수에서 9밴드 도출(점수-라벨 출처 일치) */}
+            {summary.sentiment_score != null && (
               <div className="bg-white dark:bg-[#1e1e2e] rounded-xl p-7 border border-gray-200 dark:border-[#2a2a3e] shadow-sm">
                 <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0] mb-3">종합 평가</h2>
                 <div className="flex items-center gap-3 flex-wrap">
-                  {/* Steam 공식 등급은 정성 라벨만 노출. 공식 추천률/리뷰수/출처 태그는
-                      요약이 ~200건 표본 LLM 산출물임에도 13만건 기반으로 오해시키므로 제외.
-                      점수%는 LLM 산출(표본 anchor+delta)이라 함께 표시한다. */}
-                  {summary.steam_rating_label ? (
-                    <SteamRatingBadge label={summary.steam_rating_label} desc={summary.steam_rating_desc} />
-                  ) : (
-                    <SentimentBadge value={summary.sentiment_overall} />
-                  )}
-                  {summary.sentiment_score !== null && (
-                    <span className="text-sm text-gray-500 dark:text-gray-400">
-                      점수: {(summary.sentiment_score).toFixed(0)}%
-                    </span>
-                  )}
+                  <ScoreBandBadge score={summary.sentiment_score} />
+                  <span className="text-sm text-gray-500 dark:text-gray-400">
+                    점수: {(summary.sentiment_score).toFixed(0)}%
+                  </span>
                 </div>
               </div>
             )}
