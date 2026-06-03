@@ -569,6 +569,12 @@ async def main():
                     print(f"  라우팅→로컬 map ({map_model}) | 리뷰 {review_count}건")
                     payload = await _run_map(game_id, data, args.ollama_url, map_model, map_cache)
 
+                # 종합 등급/baseline을 Steam 공식 집계로 보강(있으면). 실패 시 표본 유지(fail-soft).
+                # 저장·전송 전에 적용해 payload(및 향후 replay)가 공식 기준을 담게 한다.
+                from steam_rating import enrich_anchors_with_official
+                if isinstance(payload.get("score_anchors"), dict):
+                    enrich_anchors_with_official(payload["score_anchors"], cloud_url, game_id)
+
                 in_tok  = payload["map_stats"]["map_input_tokens"]
                 out_tok = payload["map_stats"]["map_output_tokens"]
                 chunks  = payload["map_stats"]["chunk_count"]

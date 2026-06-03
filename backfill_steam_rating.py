@@ -29,12 +29,10 @@ import sys
 import time
 from pathlib import Path
 
-import requests
+from steam_rating import fetch_query_summary, official_anchor_fields, resolve_appid
 
 ROOT = Path(__file__).resolve().parent
 PAYLOAD_DIR = ROOT / "ai-pipeline" / "artifacts" / "reduce_payloads" / "keep"
-STEAM_APPREVIEWS = "https://store.steampowered.com/appreviews/{appid}"
-APPID_RE = re.compile(r"/app(?:s)?/(\d+)")
 
 
 def load_env() -> dict[str, str]:
@@ -48,53 +46,6 @@ def load_env() -> dict[str, str]:
     return env
 
 
-def resolve_appid(cloud: str, game_id: int) -> str | None:
-    """게임 상세 cover/hero/store_url에서 Steam appid 추출."""
-    try:
-        g = requests.get(f"{cloud}/api/v1/games/{game_id}", timeout=20).json()
-    except Exception as e:  # noqa: BLE001
-        print(f"  game {game_id}: 상세 조회 실패 {e}")
-        return None
-    for key in ("cover_image", "hero_image"):
-        m = APPID_RE.search(str(g.get(key) or ""))
-        if m:
-            return m.group(1)
-    # 폴백: buy-signal store_url
-    try:
-        b = requests.get(f"{cloud}/api/v1/games/{game_id}/buy-signal", timeout=20).json()
-        m = APPID_RE.search(str(b.get("store_url") or ""))
-        if m:
-            return m.group(1)
-    except Exception:  # noqa: BLE001
-        pass
-    return None
-
-
-def fetch_query_summary(appid: str) -> dict | None:
-    """Steam 전역 query_summary(리뷰 본문 0건, 집계만). l=english로 desc 안정화."""
-    params = {
-        "json": 1,
-        "language": "all",
-        "purchase_type": "all",
-        "num_per_page": 0,
-        "filter": "all",
-        "l": "english",
-    }
-    for attempt in range(4):
-        try:
-            r = requests.get(STEAM_APPREVIEWS.format(appid=appid), params=params, timeout=20)
-            data = r.json()
-            if data.get("success") == 1 and data.get("query_summary"):
-                return data["query_summary"]
-            return None
-        except Exception as e:  # noqa: BLE001
-            if attempt < 3:
-                time.sleep(2 ** attempt)
-            else:
-                print(f"  appid {appid}: query_summary 실패 {e}")
-    return None
-
-
 def latest_payload(game_id: int) -> Path | None:
     cands = sorted(glob.glob(str(PAYLOAD_DIR / f"game_{game_id}_*.json")), key=os.path.getmtime)
     return Path(cands[-1]) if cands else None
@@ -106,19 +57,17 @@ def patch_payload(path: Path, qs: dict, dry: bool) -> str:
     if not isinstance(rp, dict):
         return "payload 구조 이상(reduce_payload 없음)"
     anchors = rp.get("score_anchors") or {}
-    total = int(qs.get("total_reviews") or 0)
-    pos = int(qs.get("total_positive") or 0)
-    if total <= 0:
+    fields = official_anchor_fields(qs)
+    if not fields:
         return "공식 리뷰 0건 — 스킵"
-    anchors["steam_review_score_desc"] = qs.get("review_score_desc")
-    anchors["steam_total_positive"] = pos
-    anchors["steam_total_reviews"] = total
-    anchors["steam_recommend_ratio"] = round(pos / total * 100, 2)  # baseline 공식화
+    anchors.update(fields)
     rp["score_anchors"] = anchors
+    desc = fields["steam_review_score_desc"]
+    summary = f"{desc} {fields['steam_total_positive']}/{fields['steam_total_reviews']} ({fields['steam_recommend_ratio']}%)"
     if dry:
-        return f"[dry] {qs.get('review_score_desc')} {pos}/{total} ({anchors['steam_recommend_ratio']}%)"
+        return f"[dry] {summary}"
     path.write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
-    return f"patched {qs.get('review_score_desc')} {pos}/{total} ({anchors['steam_recommend_ratio']}%)"
+    return f"patched {summary}"
 
 
 def parse_games(spec: str) -> list[int]:
