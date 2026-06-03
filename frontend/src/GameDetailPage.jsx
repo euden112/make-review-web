@@ -824,19 +824,11 @@ function GameDetailPage({ isDark, toggleDark }) {
               <div className="bg-white dark:bg-[#1e1e2e] rounded-xl p-7 border border-gray-200 dark:border-[#2a2a3e] shadow-sm">
                 <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0] mb-3">종합 평가</h2>
                 <div className="flex items-center gap-3 flex-wrap">
+                  {/* Steam 공식 등급은 정성 라벨만 노출. 공식 추천률/리뷰수/출처 태그는
+                      요약이 ~200건 표본 LLM 산출물임에도 13만건 기반으로 오해시키므로 제외.
+                      공식 집계는 baseline anchor로만 쓰이고 요약 본문 근거가 아니다. */}
                   {summary.steam_rating_label ? (
-                    <>
-                      <SteamRatingBadge label={summary.steam_rating_label} desc={summary.steam_rating_desc} />
-                      <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-300 border border-blue-200 dark:border-blue-700">
-                        Steam 공식
-                      </span>
-                      {summary.steam_rating_ratio != null && (
-                        <span className="text-sm text-gray-500 dark:text-gray-400">
-                          긍정 {summary.steam_rating_ratio.toFixed(0)}%
-                          {summary.steam_rating_count != null && ` · 리뷰 ${summary.steam_rating_count.toLocaleString()}개`}
-                        </span>
-                      )}
-                    </>
+                    <SteamRatingBadge label={summary.steam_rating_label} desc={summary.steam_rating_desc} />
                   ) : (
                     <>
                       <SentimentBadge value={summary.sentiment_overall} />
