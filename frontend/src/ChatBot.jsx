@@ -15,12 +15,17 @@ export default function ChatBot({ isDark }) {
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const bottomRef = useRef(null)
+  const abortRef = useRef(null)
 
   useEffect(() => {
     if (isOpen) {
       bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
     }
   }, [messages, isOpen])
+
+  useEffect(() => {
+    return () => abortRef.current?.abort()
+  }, [])
 
   const sendMessage = async () => {
     const text = input.trim()
@@ -32,10 +37,14 @@ export default function ChatBot({ isDark }) {
     setInput('')
     setLoading(true)
 
+    const controller = new AbortController()
+    abortRef.current = controller
+
     try {
       const res = await fetch(`${API_BASE}/api/v1/chat/recommend`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
         body: JSON.stringify({
           messages: nextMessages
             .filter((m) => m !== WELCOME_MESSAGE)
@@ -56,6 +65,7 @@ export default function ChatBot({ isDark }) {
       const data = await res.json()
       setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: 'assistant', content: data.reply }])
     } catch (err) {
+      if (err.name === 'AbortError') return
       setMessages((prev) => [
         ...prev,
         { id: crypto.randomUUID(), role: 'assistant', content: err.message || '오류가 발생했습니다. 다시 시도해주세요.' },

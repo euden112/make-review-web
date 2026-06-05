@@ -1,9 +1,10 @@
 import logging
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
+from app.core.redis_client import redis_db
 from app.services.chat_service import get_recommendation
 
 logger = logging.getLogger(__name__)
@@ -24,16 +25,40 @@ class ChatResponse(BaseModel):
     reply: str
 
 
-_MAX_MESSAGES = 40          # 최대 메시지 수 (왕복 20회)
+# chat_service.MAX_HISTORY_MESSAGES(20)와 일치: 그 이상은 어차피 trim됨
+_MAX_MESSAGES = 20
 _MAX_CONTENT_CHARS = 1000   # 메시지 1건당 최대 글자 수
+_RATE_LIMIT = 10            # 분당 최대 요청 수 (IP 기준)
+_RATE_WINDOW = 60           # 윈도우 크기(초)
+
+
+async def _check_rate_limit(request: Request) -> None:
+    client_ip = request.client.host if request.client else "unknown"
+    key = f"chat_rate:{client_ip}"
+    try:
+        count = await redis_db.incr(key)
+        if count == 1:
+            await redis_db.expire(key, _RATE_WINDOW)
+        if count > _RATE_LIMIT:
+            raise HTTPException(
+                status_code=429,
+                detail=f"요청이 너무 많습니다. {_RATE_WINDOW}초 후 다시 시도해주세요.",
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        pass  # Redis 장애 시 rate limit 건너뜀
 
 
 @router.post("/recommend", response_model=ChatResponse)
 async def recommend_games(
+    request: Request,
     body: ChatRequest,
     db: AsyncSession = Depends(get_db),
 ):
     """좋아하는/싫어하는 게임을 기반으로 게임 추천 (Groq API 사용)"""
+    await _check_rate_limit(request)
+
     if not body.messages:
         raise HTTPException(status_code=400, detail="messages가 비어있습니다.")
 
