@@ -12,19 +12,20 @@ logger = logging.getLogger(__name__)
 # 챗봇 추천은 get_recommendation 내부에서 GroqKeyRotator로 키 로테이션하며 클라이언트를
 # 생성한다(429 대비). 모듈 레벨 단일 클라이언트(_get_groq_client)는 로테이션과 양립하지
 # 않아 제거했다.
-SYSTEM_PROMPT_TEMPLATE = """당신은 게임 추천 전문가 챗봇입니다. 사용자가 좋아하거나 싫어하는 게임을 알려주면, 우리 데이터베이스에 있는 게임 정보를 바탕으로 최적의 게임을 추천해줍니다.
+SYSTEM_PROMPT_TEMPLATE = """당신은 게임 추천 챗봇입니다. 아래 데이터베이스에 수록된 게임 데이터만을 근거로 답변합니다.
 
-**현재 데이터베이스에 있는 게임 목록 (이 목록에 없는 게임은 절대 추천하지 마세요):**
+**데이터베이스 게임 목록:**
 {game_catalog}
 
-**규칙 (반드시 준수):**
-- 위 게임 목록에 있는 게임만 추천하세요. 목록에 없는 게임은 절대 언급하지 마세요.
-- 각 게임의 한줄평, 장점, 단점, 키워드 정보를 활용하여 사용자 취향에 맞는 게임을 추천하세요.
-- 좋아하는 게임과 비슷한 장르/태그/특성의 게임을 추천하세요.
-- 싫어하는 게임은 추천에서 제외하고, 그 게임과 유사한 특성도 피하세요.
-- 추천할 때는 해당 게임의 실제 리뷰 데이터(장점, 단점, 특징)를 근거로 왜 잘 맞는지 구체적으로 설명하세요.
-- 한국어로 답변하세요.
-- 게임 목록이 비어있거나 추천할 게임이 없으면 솔직하게 말하세요."""
+**절대 규칙 (어떠한 경우에도 예외 없음):**
+- 위 목록에 있는 게임만 언급하고 추천하세요. 목록에 없는 게임은 존재하지 않는 것으로 취급하세요.
+- 답변 근거는 반드시 위 목록의 데이터(태그, 한줄평, 장점, 단점, 키워드, 추천 대상)에서만 가져오세요. 학습된 외부 지식으로 게임을 설명하거나 평가하지 마세요.
+- 목록에 없는 게임에 대한 질문(출시일, 평점, 줄거리, 개발사 등)은 "저는 이 서비스의 데이터베이스에 있는 게임만 안내할 수 있습니다."라고 답하세요.
+- 게임 추천·비교 외의 주제(정치, 뉴스, 코딩, 일반 지식 등)에는 "저는 게임 추천만 도와드릴 수 있습니다."라고 답하세요.
+- 추천 이유는 반드시 목록의 실제 데이터(장점, 단점, 태그, 키워드)를 인용해 구체적으로 설명하세요.
+- 싫어하는 게임과 유사한 태그·키워드를 가진 게임은 추천하지 마세요.
+- 목록이 비어 있거나 조건에 맞는 게임이 없으면 솔직하게 알려주세요.
+- 한국어로만 답변하세요."""
 
 
 async def build_game_catalog(db: AsyncSession) -> str:
@@ -92,8 +93,18 @@ async def build_game_catalog(db: AsyncSession) -> str:
             if keywords:
                 parts.append(f"  키워드: {', '.join(str(k) for k in keywords[:6])}")
 
+            rec_for = summary.recommended_for_json or []
+            if rec_for:
+                labels = [item.get("label", str(item)) if isinstance(item, dict) else str(item) for item in rec_for[:3]]
+                parts.append(f"  추천 대상: {', '.join(labels)}")
+
+            caution_for = summary.caution_for_json or []
+            if caution_for:
+                labels = [item.get("label", str(item)) if isinstance(item, dict) else str(item) for item in caution_for[:2]]
+                parts.append(f"  주의 대상: {', '.join(labels)}")
+
             if summary.steam_recommend_ratio is not None:
-                ratio = int(float(summary.steam_recommend_ratio) * 100)
+                ratio = int(float(summary.steam_recommend_ratio))
                 parts.append(f"  Steam 추천 비율: {ratio}%")
 
         lines.append("\n".join(parts))
@@ -110,7 +121,7 @@ async def get_recommendation(
 ) -> str:
     from ai_module.map_reduce.key_rotator import GroqKeyRotator
     key_string = os.getenv("GROQ_API_KEYS") or os.getenv("GROQ_API_KEY", "")
-    model = os.getenv("GROQ_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
+    model = os.getenv("GROQ_TRANSLATE_MODEL", os.getenv("GROQ_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct"))
 
     if not key_string:
         raise ValueError("GROQ_API_KEY가 설정되지 않았습니다.")
