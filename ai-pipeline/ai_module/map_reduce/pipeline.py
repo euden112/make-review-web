@@ -114,6 +114,34 @@ def _select_representative_quotes(
     return quotes
 
 
+def _merge_grouped_evidence(
+    prior: dict[str, list[str]] | None,
+    new: dict[str, list[str]],
+    *,
+    cap_per_group: int = 80,
+) -> dict[str, list[str]]:
+    """직전 실행이 캐시한 grouped evidence(prior)를 이번 신규 evidence(new)와 병합.
+
+    그룹(all/early/mid/late/critic/user)별로 new를 앞에(최신 우선) 두고 prior를 이어붙인 뒤
+    동일 문자열을 제거하고 cap_per_group으로 자른다. 매 실행 결과를 다시 캐시하므로
+    롤링 윈도우가 되어 누적 대표성과 토큰 상한을 동시에 만족한다.
+    """
+    if not prior:
+        return new
+    keys = set(new) | set(prior)
+    out: dict[str, list[str]] = {}
+    for key in keys:
+        seen: set[str] = set()
+        merged: list[str] = []
+        for item in list(new.get(key) or []) + list(prior.get(key) or []):
+            if not isinstance(item, str) or item in seen:
+                continue
+            seen.add(item)
+            merged.append(item)
+        out[key] = merged[:cap_per_group]
+    return out
+
+
 def _normalize_platform_code(row: Any) -> str:
     platform_code = (getattr(row, "platform_code", "") or "").strip().lower()
     if platform_code:
@@ -373,6 +401,8 @@ async def run_hybrid_summary_pipeline(
     map_runner: MapRunner | None = None,
     reduce_runner: ReduceRunner | None = None,
     reduce_payload_hook: Callable[[dict[str, Any]], None] | None = None,
+    prior_grouped_summaries: dict[str, list[str]] | None = None,
+    prior_representative_quotes: list[str] | None = None,
 ) -> tuple[list[MapResult], FinalSummary, Any]:
     normalized_reviews = _normalize_reviews(all_reviews, language_code)
     if not normalized_reviews:
@@ -457,6 +487,21 @@ async def run_hybrid_summary_pipeline(
         grouped_summaries["mid"] = []
         grouped_summaries["late"] = []
     representative_quotes = _select_representative_quotes(tagged)
+
+    # 증분 최근 편향 완화(기능 b): Map은 신규 리뷰만 처리하되, 직전 실행이 캐시한
+    # 기존 대표 evidence를 reduce 입력에 합쳐 누적 대표성을 유지한다. 중복 제거 후
+    # 그룹별 상한으로 토큰을 묶고, reduce가 다시 160개로 subset하므로 비용 영향은 작다.
+    if prior_grouped_summaries:
+        grouped_summaries = _merge_grouped_evidence(prior_grouped_summaries, grouped_summaries)
+    if prior_representative_quotes:
+        _seen_q: set[str] = set()
+        _merged_q: list[str] = []
+        for q in list(representative_quotes) + list(prior_representative_quotes):
+            if not isinstance(q, str) or q in _seen_q:
+                continue
+            _seen_q.add(q)
+            _merged_q.append(q)
+        representative_quotes = _merged_q[:24]
 
     reduce_payload = {
         "language_code": language_code,

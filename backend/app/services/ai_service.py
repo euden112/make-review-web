@@ -21,13 +21,14 @@ from sqlalchemy.future import select
 from sqlalchemy import and_, func
 
 from app.models.domain import (
-    ExternalReview, Game, GameSummaryCursor, ReviewSummaryJob,
+    ExternalReview, Game, GamePlatformMap, GameSummaryCursor, ReviewSummaryJob,
     GameReviewSummary, Platform, ReviewType,
     PlaytimeAnalysis, CriticSummary, UserSummary,
 )
 from app.core.redis_client import (
     invalidate_summary_cache, invalidate_playtime_cache, invalidate_critic_cache,
     invalidate_user_summary_cache, get_redis_cache,
+    get_json_cache, set_json_cache,
 )
 from ai_module.cache.redis_cache import RedisCache
 from app.core.database import AsyncSessionLocal
@@ -54,6 +55,57 @@ logger.setLevel(logging.INFO)
 
 
 import re
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _env_flag(name: str, *, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
+# 증분 품질 가드 (모드 A 전용). 저품질 신규 배치가 기존 양질 요약을 덮는 것을 막는다.
+# (a) 신규가 이 수 미만이면 누적 재요약을 건너뛰고 기존 요약 유지(커서 미전진→누적).
+_MIN_NEW_REVIEWS = _env_int("AI_MIN_NEW_REVIEWS", 8)
+# (b) 직전 실행의 grouped evidence를 다음 reduce 입력에 합쳐 최근 편향을 완화한다.
+_EVIDENCE_CARRY = _env_flag("AI_EVIDENCE_CARRY", default=True)
+_EVIDENCE_CACHE_TTL = _env_int("AI_EVIDENCE_CACHE_TTL", 90 * 24 * 3600)  # 90일
+# (c) reduce 결과가 빈약(한줄평 없음/센티넬 또는 장단점·키워드 전무)하면 덮어쓰기 생략.
+_DEGRADED_ONE_LINERS = {
+    "요약 가능한 리뷰가 없습니다.",
+    "요약 생성 중 오류가 발생했습니다.",
+}
+
+
+def _evidence_cache_key(game_id: int) -> str:
+    return f"reduce_evidence:{game_id}"
+
+
+def _is_degraded_summary(ai_result) -> bool:
+    """reduce 결과가 빈약해 기존 요약을 덮으면 안 되는 상태인지 판정 (기능 c).
+
+    error_code는 호출부에서 별도 처리하므로 여기선 내용 빈약만 본다.
+    한줄평이 비었거나 센티넬이거나, 장점·단점·키워드가 모두 비면 degraded.
+    """
+    one_liner = (getattr(ai_result, "one_liner", None) or "").strip()
+    if not one_liner or one_liner in _DEGRADED_ONE_LINERS:
+        return True
+    pros = getattr(ai_result, "pros", None) or []
+    cons = getattr(ai_result, "cons", None) or []
+    keywords = getattr(ai_result, "keywords", None) or []
+    if not pros and not cons and not keywords:
+        return True
+    return False
 
 
 def _safe_artifact_slug(value: object) -> str:
@@ -245,6 +297,57 @@ def _compute_cumulative_aspect_counts(reviews) -> dict[str, dict[str, int]]:
             d = counts.setdefault(asp, {"positive": 0, "negative": 0, "mixed": 0})
             d[sentiment if sentiment in ("positive", "negative", "mixed") else "mixed"] += 1
     return counts
+
+
+async def _enrich_anchors_with_official(db, game_id: int, steam_pid, score_anchors: dict) -> bool:
+    """score_anchors를 Steam 공식 query_summary 집계로 in-place 보강 (모드 A in-process용).
+
+    모드 B(run_map_pipeline)는 enrich_anchors_with_official로 같은 보강을 하지만, 그 함수는
+    cloud URL HTTP 자기호출로 appid를 찾는다. in-process 경로는 DB에서 appid를 직접 읽고
+    blocking requests 호출만 스레드로 돌려 동일한 공식 baseline·등급을 적용한다.
+
+    이로써 일일 증분 재요약(모드 A)도 표본 추천률이 아니라 공식 전체 추천률을 anchor로 쓰고,
+    steam_rating_* 등급 필드가 None으로 덮이지 않는다. 실패 시 표본 유지(fail-soft).
+    반환: 공식 적용 여부.
+    """
+    if steam_pid is None or not isinstance(score_anchors, dict):
+        return False
+    try:
+        appid = (await db.execute(
+            select(GamePlatformMap.external_game_id).where(
+                and_(
+                    GamePlatformMap.game_id == game_id,
+                    GamePlatformMap.platform_id == steam_pid,
+                )
+            )
+        )).scalar_one_or_none()
+        if not appid:
+            return False
+
+        # steam_rating.py는 repo 루트에 있다. 백엔드 PYTHONPATH에 루트가 없으므로 보강.
+        root = os.path.dirname(AI_PIPELINE_PATH)
+        if root not in sys.path:
+            sys.path.append(root)
+        from steam_rating import fetch_query_summary, official_anchor_fields
+
+        qs = await asyncio.to_thread(fetch_query_summary, str(appid))
+        if not qs:
+            logger.info("steam official anchor: query_summary 없음 game=%s appid=%s — 표본 유지", game_id, appid)
+            return False
+        fields = official_anchor_fields(qs)
+        if not fields:
+            return False
+        score_anchors.update(fields)
+        logger.info(
+            "steam official anchor game=%s: %s %s/%s (%.2f%%)",
+            game_id, fields["steam_review_score_desc"],
+            fields["steam_total_positive"], fields["steam_total_reviews"],
+            fields["steam_recommend_ratio"],
+        )
+        return True
+    except Exception:
+        logger.exception("steam official anchor enrich 실패 game=%s — 표본 유지", game_id)
+        return False
 
 
 async def get_pipeline_tasks(game_id: int, db) -> list[tuple[str, str | None]]:
@@ -505,6 +608,27 @@ async def run_ai_pipeline_task(
                     logger.info("ai pipeline skipped: truly no reviews for game_id=%s", game_id)
                     return
 
+            # 2-1. (기능 a) 신규가 임계 미만이면 누적 재요약을 건너뛰고 기존 요약 유지.
+            # 커서를 전진시키지 않아 다음 실행까지 신규가 누적되며, 임계를 넘으면 함께 요약된다.
+            # 첫 요약(현재 요약 없음)·force는 예외.
+            if not force and 0 < len(new_reviews) < _MIN_NEW_REVIEWS:
+                has_current_summary = (await db.execute(
+                    select(GameReviewSummary.id).where(
+                        and_(
+                            GameReviewSummary.game_id == game_id,
+                            GameReviewSummary.summary_type == mode,
+                            GameReviewSummary.review_language.is_(None),
+                            GameReviewSummary.is_current == True,
+                        )
+                    )
+                )).scalar_one_or_none()
+                if has_current_summary:
+                    logger.info(
+                        "ai pipeline skipped: new=%d < min=%d, 기존 요약 유지(커서 미전진) game_id=%s",
+                        len(new_reviews), _MIN_NEW_REVIEWS, game_id,
+                    )
+                    return
+
             # 3. 누적 리뷰 (집계용)
             summary_reviews = (await db.execute(
                 select(ExternalReview).where(
@@ -590,6 +714,14 @@ async def run_ai_pipeline_task(
                 "steam_total": steam_total,
             }
 
+            # 6-1. Steam 공식 query_summary로 baseline·종합 등급 보강 (모드 B와 동일 정책).
+            # 일일 증분 재요약도 표본 추천률이 아니라 공식 전체 추천률을 anchor로 쓰게 한다.
+            await _enrich_anchors_with_official(db, game_id, steam_pid, score_anchors)
+            # 공식 보강이 적용되면 DB 컬럼·신뢰도 지표도 공식 추천률을 쓰도록 동기화한다
+            # (모드 B는 score_anchors.steam_recommend_ratio를 그대로 저장 — 동일 정합성).
+            # steam_total은 표본 근거 수(delta 표본 게이팅)이므로 덮지 않는다.
+            steam_recommend_ratio = score_anchors.get("steam_recommend_ratio", steam_recommend_ratio)
+
             # 7. Job 시작 기록
             job = ReviewSummaryJob(
                 game_id=game_id,
@@ -633,6 +765,20 @@ async def run_ai_pipeline_task(
                 select(Game.canonical_title).where(Game.id == game_id)
             )).scalar_one_or_none()
 
+            # 8-1. (기능 b) 직전 실행이 캐시한 grouped evidence를 불러와 reduce 입력에 합친다.
+            # Map은 신규 리뷰만 처리(비용 유지)하되, 누적 대표성을 유지해 최근 편향을 완화한다.
+            # force(전체 재처리)는 신규=전체라 prior 불필요. fail-soft(없거나 오류면 무시).
+            prior_grouped_summaries = None
+            prior_representative_quotes = None
+            if _EVIDENCE_CARRY and not force:
+                try:
+                    cached_ev = await get_json_cache(_evidence_cache_key(game_id))
+                    if isinstance(cached_ev, dict):
+                        prior_grouped_summaries = cached_ev.get("grouped_summaries")
+                        prior_representative_quotes = cached_ev.get("representative_quotes")
+                except Exception:
+                    logger.warning("prior evidence 로드 실패 game=%s — 신규 evidence만 사용", game_id)
+
             # 9. 파이프라인 실행 (Sprint 4: 단일 unified 실행)
             map_results, ai_result, playtime_buckets = await run_hybrid_summary_pipeline(
                 game_id=game_id,
@@ -654,6 +800,8 @@ async def run_ai_pipeline_task(
                 category_frequency=top_categories,
                 cumulative_aspect_counts=cumulative_aspect_counts,
                 reduce_payload_hook=_capture_reduce_payload,
+                prior_grouped_summaries=prior_grouped_summaries,
+                prior_representative_quotes=prior_representative_quotes,
             )
 
             # 10. Job 토큰/캐시 기록
@@ -741,6 +889,18 @@ async def run_ai_pipeline_task(
                 )
                 return {"status": "reduce_failed", "game_id": game_id, "error_code": ai_result.error_code}
 
+            # (기능 c) reduce는 성공했으나 결과가 빈약(한줄평 없음/장단점·키워드 전무)하면,
+            # 기존 양질 요약을 덮지 않고 보존한다. 커서도 전진시키지 않아 다음 실행에서
+            # 신규가 더 쌓인 뒤 재시도된다. 첫 요약(기존 없음)·force는 빈약해도 그대로 저장.
+            if not force and existing_summary is not None and _is_degraded_summary(ai_result):
+                job.status = "skipped_degraded"
+                job.error_message = "reduce 결과 빈약 — 기존 요약 보존, 덮어쓰기 생략"
+                await db.commit()
+                logger.warning(
+                    "reduce degraded (game %s) — 기존 요약 보존, 커서 미전진", game_id,
+                )
+                return {"status": "skipped_degraded", "game_id": game_id}
+
             if existing_summary:
                 await db.delete(existing_summary)
                 await db.flush()
@@ -756,11 +916,19 @@ async def run_ai_pipeline_task(
 
             # B안: unified 본문 폐지 — summary_text는 None으로 저장.
             # 본문은 user_summaries.summary / critic_summaries.summary로 분리.
+            # reduce가 인용한 review_id를 표시용 선별에 우선 포함 → 요약 근거와 정합성 확보
+            # (모드 B run_reduce_from_precomputed_map와 동일 정책).
+            cited_ids = {
+                int(m)
+                for q in (captured_reduce_payload.get("representative_quotes") or [])
+                for m in re.findall(r"review_id\s*=\s*(\d+)", str(q))
+            }
             representative_reviews = _select_platform_representative_reviews(
                 summary_reviews,
                 steam_pid,
                 meta_pid,
                 limit_per_platform=3,
+                prioritized_ids=cited_ids,
             )
 
             new_summary = GameReviewSummary(
@@ -862,6 +1030,21 @@ async def run_ai_pipeline_task(
             await invalidate_playtime_cache(game_id)
             await invalidate_critic_cache(game_id)
             await invalidate_user_summary_cache(game_id)
+
+            # (기능 b) 이번 reduce에 실제 사용된 grouped evidence(신규+prior 병합본)를
+            # 캐시해 다음 증분이 누적 대표성을 이어가게 한다(롤링 윈도우). fail-soft.
+            if _EVIDENCE_CARRY and captured_reduce_payload:
+                try:
+                    await set_json_cache(
+                        _evidence_cache_key(game_id),
+                        {
+                            "grouped_summaries": captured_reduce_payload.get("grouped_summaries") or {},
+                            "representative_quotes": captured_reduce_payload.get("representative_quotes") or [],
+                        },
+                        _EVIDENCE_CACHE_TTL,
+                    )
+                except Exception:
+                    logger.warning("prior evidence 캐시 저장 실패 game=%s", game_id)
 
         except Exception as e:
             await db.rollback()
@@ -1249,6 +1432,22 @@ async def run_reduce_from_precomputed_map(
             await invalidate_playtime_cache(game_id)
             await invalidate_critic_cache(game_id)
             await invalidate_user_summary_cache(game_id)
+
+            # (기능 b 시드) full/force/replay 실행의 누적 evidence를 캐시에 시드한다.
+            # 이로써 백필·full 직후의 첫 mode-A 증분이 prior 없이 신규-편향으로 덮어쓰는
+            # 갭이 닫힌다. 이 grouped_summaries는 run_map_pipeline이 만든 전체 근거다.
+            if _EVIDENCE_CARRY and grouped_summaries:
+                try:
+                    await set_json_cache(
+                        _evidence_cache_key(game_id),
+                        {
+                            "grouped_summaries": grouped_summaries,
+                            "representative_quotes": representative_quotes or [],
+                        },
+                        _EVIDENCE_CACHE_TTL,
+                    )
+                except Exception:
+                    logger.warning("prior evidence 시드 저장 실패 game=%s", game_id)
 
         except Exception as e:
             await db.rollback()

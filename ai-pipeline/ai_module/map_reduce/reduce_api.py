@@ -149,6 +149,32 @@ ASPECT_LABELS = {
 }
 
 
+# aspect별 mention-polarity prior (기댓 skew = 평균적 게임에서의 (긍정-부정)/(긍정+부정+1)).
+# 일부 aspect는 "좋을 땐 침묵, 나쁠 때만 언급"되는 불만 주도(complaint-driven) 특성이 있어
+# 평균적 게임도 구조적으로 음수 skew를 보인다(조작감·최적화 등). 이를 보정하지 않으면
+# 정상적인 게임도 해당 aspect가 baseline 아래로 깔려 항상 '약점'으로 표시된다.
+# 점수 산출과 약점 라벨 게이트에서 이 prior를 빼/더해 "이 aspect의 평균 대비"로 비교한다.
+#
+# 부호 규약: skew와 동일(양수=칭찬 주도, 음수=불만 주도). 0이면 보정 없음.
+# 값은 도메인 추정 초기값이며, ai-pipeline/calibrate_aspect_priors.py로 실데이터(저장된
+# aspect_sentiment_json의 polarity_mix) 평균을 산출해 교체·튜닝할 수 있다.
+_ASPECT_POLARITY_PRIOR: dict[str, float] = {
+    "optimization": -0.35,  # FPS·버그·크래시·발적화 — 거의 불만으로만 언급
+    "controls": -0.30,      # 조작감 — 좋으면 무언급, 나쁠 때만 도드라짐
+    "price_value": -0.15,   # 가성비 — 비쌀 때 불만, 쌀 때만 칭찬
+    "difficulty": -0.10,    # 난이도 — '어렵지만 재밌다' 칭찬과 좌절 불만 혼재(약한 불만 편향)
+    "content": 0.0,         # 콘텐츠 — 할 거리 칭찬 vs 부족·반복 불만 균형
+    "sound": 0.05,          # 음향 — 명곡은 칭찬, 평범하면 무언급(약한 칭찬 편향)
+    "story": 0.05,          # 스토리 — 호평·혹평 모두 활발(거의 중립)
+    "graphics": 0.10,       # 그래픽 — 좋으면 적극 칭찬(칭찬 주도)
+    "gameplay": 0.15,       # 재미 — 핵심 호평 대상(칭찬 주도)
+}
+
+
+def _aspect_polarity_prior(aspect: str) -> float:
+    return _ASPECT_POLARITY_PRIOR.get((aspect or "").strip().lower(), 0.0)
+
+
 CandidateDecision = Literal["accept", "ambiguous", "reject"]
 
 
@@ -1454,18 +1480,24 @@ def _compute_baseline_aspect_scores(
             continue
         # 비율 기반 skew: (pos − neg) / (pos + neg + 1) ∈ [-1, +1]. mixed는 분모만 키워 희석.
         skew = (bucket["positive"] - bucket["negative"]) / (bucket["positive"] + bucket["negative"] + 1)
+        # aspect별 mention-polarity prior 보정: 불만 주도 aspect(조작감·최적화 등)는 평균적
+        # 게임도 음수 skew라, prior를 빼 "이 aspect의 평균 대비"로 재중심화한다. 평균적이면
+        # adjusted_skew≈0 → baseline, 진짜 나쁠 때만 음수가 남아 점수가 내려간다.
+        prior = _aspect_polarity_prior(aspect)
+        adjusted_skew = skew - prior
         # 표본 수축(shrinkage): 증거가 적은 aspect는 skew를 baseline 쪽으로 끌어당겨
         # run마다 1~2건 차이로 점수가 크게 흔들리는 일관성 문제를 막는다.
         # n이 충분히 크면 full skew, 작으면 0으로 수축. K는 절반-신뢰 표본 수.
         _K = 5.0
         confidence = total / (total + _K)
-        score = baseline_neutral + skew * 2.0 * confidence
+        score = baseline_neutral + adjusted_skew * 2.0 * confidence
         score = round(max(2.0, min(9.0, score)), 1)
         result[aspect] = {
             "label": ASPECT_LABELS.get(aspect, "리뷰"),
             "score": score,
             "evidence_count": total,
             "evidence_review_ids": sorted(cited_review_ids.get(aspect, set())),
+            "polarity_prior": prior,
             "polarity_mix": {
                 "positive": int(bucket["positive"]),
                 "mixed": int(bucket["mixed"]),
@@ -1588,6 +1620,11 @@ def _enrich_aspect_relative(aspect_scores: dict[str, Any]) -> dict[str, Any]:
         ec = int(d.get("evidence_count") or 0)
         share = (ec / total_mentions) if total_mentions > 0 else 0.0
         pos_ratio, neg_mixed_ratio, neg_dominance, _ = _polarity_ratios(d.get("polarity_mix"))
+        # aspect prior로 순부정을 재중심화: 불만 주도 aspect는 구조적 순부정이 정상이므로
+        # 그 기대치(=-prior)를 넘어선 '과잉' 순부정만 단독 약점으로 본다. prior 음수 →
+        # adj_neg_dominance가 작아져, 정상적 조작감/최적화가 평균 무관하게 약점이 되는 것 방지.
+        prior = _aspect_polarity_prior(aspect)
+        adj_neg_dominance = neg_dominance + prior
         rel = score - mean_score
         enough = ec >= ASPECT_REL_MIN_EVIDENCE
         # top_share = "균등 분배보다 유의미하게 많이 언급". 고정 0.20을 하한으로 두되
@@ -1621,14 +1658,14 @@ def _enrich_aspect_relative(aspect_scores: dict[str, Any]) -> dict[str, Any]:
         elif enough and (
             (rel <= -ASPECT_REL_MEAN_MARGIN
              and (score <= ASPECT_REL_WEAKNESS_SCORE or neg_mixed_ratio >= ASPECT_REL_NEG_RATIO))
-            or neg_dominance >= ASPECT_REL_NEG_DOMINANCE
+            or adj_neg_dominance >= ASPECT_REL_NEG_DOMINANCE
         ):
             label = "weakness"
             if rel <= -ASPECT_REL_MEAN_MARGIN:
                 reasons.append("게임 내 평균 대비 낮음")
             if score <= ASPECT_REL_WEAKNESS_SCORE:
                 reasons.append("점수 낮음")
-            if neg_dominance >= ASPECT_REL_NEG_DOMINANCE:
+            if adj_neg_dominance >= ASPECT_REL_NEG_DOMINANCE:
                 reasons.append("부정 반응 우세")
             elif neg_mixed_ratio >= ASPECT_REL_NEG_RATIO:
                 reasons.append("부정·복합 반응 많음")
