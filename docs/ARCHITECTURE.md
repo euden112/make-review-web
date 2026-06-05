@@ -274,21 +274,22 @@ API 문서: `http://localhost:8000/docs`.
 ## 13. 환경 변수 (`.env`)
 
 ```
-GROQ_API_KEY=...                # Reduce/Groq Map 단일 키
-GROQ_API_KEYS=key1,key2,key3    # (선택) 여러 키. 429 시 자동 전환
+# 활성/주석(#=선택, 기본값 사용) 상태는 .env.example과 동일하게 맞췄습니다.
+GROQ_API_KEY=your_groq_api_key_here          # Reduce/Groq Map 단일 키
+# GROQ_API_KEYS=key1,key2,key3               # (선택) 여러 키. 429 시 자동 전환
 GROQ_MODEL=meta-llama/llama-4-scout-17b-16e-instruct
-GROQ_TRANSLATE_MODEL=llama-3.1-8b-instant   # 번역·챗봇 모델(미설정 시 GROQ_MODEL)
-MAP_BACKEND=groq                # groq(클라우드 기본) | local
-GROQ_MAP_MODEL=...              # (선택) Groq Map 모델(미설정 시 GROQ_MODEL)
-API_SECRET_KEY=...              # 백엔드 쓰기 엔드포인트 인증 키
-INTERNAL_API_BASE=http://backend:8000   # 스케줄러 크롤 자기호출 대상
-CRAWL_RECENT_PER_LANG=100       # 증분 크롤 수집 깊이(언어당)
-AI_MIN_NEW_REVIEWS=8            # 증분 가드(a): 신규 < N이면 재요약 스킵·기존 유지(0이면 비활성)
-AI_EVIDENCE_CARRY=1            # 증분 가드(b): 직전 grouped evidence를 다음 reduce에 합침
-AI_EVIDENCE_CACHE_TTL=7776000  # 증분 가드(b): prior evidence 캐시 TTL(초, 기본 90일)
-OLLAMA_BASE_URL=http://localhost:11434   # map_backend=local 경로 전용
-LOCAL_MAP_MODEL=gemma4:e4b      # 로컬 Map 기본 모델
-VITE_API_BASE=                  # 비우면 nginx /api 프록시 사용
+GROQ_TRANSLATE_MODEL=llama-3.1-8b-instant    # 번역·챗봇 모델(미설정 시 GROQ_MODEL)
+MAP_BACKEND=groq                             # groq(클라우드 기본) | local
+# GROQ_MAP_MODEL=...                         # (선택) Groq Map 모델(미설정 시 GROQ_MODEL)
+API_SECRET_KEY=your_secret_key_here          # 백엔드 쓰기 엔드포인트 인증 키
+# INTERNAL_API_BASE=http://backend:8000      # (선택) 스케줄러 크롤 자기호출 대상(기본값)
+CRAWL_RECENT_PER_LANG=100                    # 증분 크롤 수집 깊이(언어당)
+AI_MIN_NEW_REVIEWS=8                         # 증분 가드(a): 신규 < N이면 재요약 스킵(0이면 비활성)
+AI_EVIDENCE_CARRY=1                          # 증분 가드(b): 직전 grouped evidence를 다음 reduce에 합침
+AI_EVIDENCE_CACHE_TTL=7776000                # 증분 가드(b): prior evidence 캐시 TTL(초, 기본 90일)
+# OLLAMA_BASE_URL=https://xxxx.trycloudflare.com   # (선택) map_backend=local 경로 전용
+# LOCAL_MAP_MODEL=gemma4:e4b                 # (선택) 로컬 Map 기본 모델
+VITE_API_BASE=                               # 비우면 nginx /api 프록시 사용
 ```
 
 > 위 목록은 운영에서 주로 설정하는 변수입니다. 복사용 템플릿은 [`.env.example`](../.env.example)을 쓰세요. 이 외에 코드가 직접 읽는 토글로 `AI_REDUCE_PAYLOAD_SAVE`(기본 `auto`, 첫/`force`만 artifact 저장 — `0/false`로 끔), `AI_SUMMARY_REVIEW_TARGET`(샘플링 목표 수, 기본 200) 등이 있으며 보통 기본값으로 둡니다(`.env.example`에는 포함되지 않음).
