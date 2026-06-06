@@ -11,6 +11,7 @@ run_map_pipeline.py 자체는 .env를 읽지 않으므로(셸 환경변수만 �
   .\run_local_map.ps1 -Games "1-50" -Model qwen2.5:3b   # 더 빠른 모델
   .\run_local_map.ps1 -Games "10-20" -Force:$false      # 증분(커서 이후만)
   .\run_local_map.ps1 -Games "1-50" -Replay    # 저장된 payload로 map 스킵, reduce만 재전송
+  .\run_local_map.ps1 -Games "1-10" -Replay -ReplayDelaySeconds 120  # RPM/TPM 보호용 간격
 
 -Replay: 이미 저장된 reduce payload(ai-pipeline/artifacts/reduce_payloads/keep)를 게임별
 최신본으로 골라 /reduce에만 재전송한다. map(로컬 GPU) 단계를 건너뛰므로 reduce-side
@@ -22,6 +23,7 @@ param(
   [string]$Model = "gemma4:e4b",  # 로컬 Ollama 모델
   [bool]$Force = $true,           # 첫 요약은 $true(전체 재처리), 증분은 $false
   [switch]$Replay,                # 저장된 payload로 reduce만 재전송(map 스킵)
+  [int]$ReplayDelaySeconds = 0,    # Replay 게임별 reduce 등록 후 대기(429/RPM/TPM 완화)
   [string]$PayloadDir = (Join-Path $PSScriptRoot "ai-pipeline\artifacts\reduce_payloads\keep")
 )
 
@@ -67,13 +69,18 @@ if ($Replay) {
   # 3a) Replay: map 스킵, 저장된 payload로 reduce만 재전송
   if (-not (Test-Path $PayloadDir)) { Write-Error "payload 디렉터리 없음: $PayloadDir"; exit 1 }
   Write-Host "REPLAY 모드 — payload 디렉터리: $PayloadDir" -ForegroundColor Magenta
-  foreach ($id in $ids) {
+  for ($i = 0; $i -lt $ids.Count; $i++) {
+    $id = $ids[$i]
     $pl = Get-LatestPayload $id
     if (-not $pl) { $skip += $id; Write-Host "  SKIP game $id (payload 없음)" -ForegroundColor DarkYellow; continue }
     Write-Host "=== replay game $id ===" -ForegroundColor Cyan
     python run_map_pipeline.py --from-payload $pl
     if ($LASTEXITCODE -eq 0) { $ok++ }
     else { $fail += $id; Write-Host "  FAIL game $id (exit $LASTEXITCODE)" -ForegroundColor Red }
+    if ($ReplayDelaySeconds -gt 0 -and $i -lt ($ids.Count - 1)) {
+      Write-Host ("  wait {0}s before next replay" -f $ReplayDelaySeconds) -ForegroundColor DarkGray
+      Start-Sleep -Seconds $ReplayDelaySeconds
+    }
   }
 } else {
   # 3b) Full: 게임 순차 map+reduce (1개씩 → 로컬 GPU 직렬, 동시성/터널 타임아웃 없음)

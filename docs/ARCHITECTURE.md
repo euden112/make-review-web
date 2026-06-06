@@ -104,11 +104,19 @@ Groq 클라이언트는 `GroqKeyRotator`로 감싸 429 발생 시 다음 키로 
 
 - **baseline_neutral**: 감성 앵커(추천률 0~100)를 선형 매핑 → `5.0 + (anchor − 50) × 0.04`, `[2.5, 7.0]` 클램프. 게임 전반 수용도를 시작점에 반영합니다.
 - **항목별 skew**: `(긍정 − 부정) / (긍정 + 부정 + 1)`에 표본 수축(`confidence = n / (n + 5)`)을 곱해 더합니다 → `score = baseline_neutral + adjusted_skew × 2.0 × confidence`, `[2.0, 9.0]` 클램프.
-- **mention-polarity prior 보정**: 일부 항목은 "좋을 땐 침묵, 나쁠 때만 언급"되는 불만 주도(complaint-driven) 특성이 있어(조작감·최적화 등), 평균적인 게임도 구조적으로 음수 skew를 보입니다. 이를 그대로 두면 정상적인 게임도 해당 항목이 baseline 아래로 깔려 항상 약점으로 표시됩니다. 그래서 항목별 기대 skew(`_ASPECT_POLARITY_PRIOR`)를 빼 `adjusted_skew = skew − prior`로 **그 항목의 평균 대비**로 재중심화합니다. 평균적이면 `adjusted_skew ≈ 0` → baseline, 진짜 나쁠 때만 음수가 남아 점수가 내려갑니다. 같은 prior가 약점 라벨 게이트(`neg_dominance + prior ≥ 임계`, `_enrich_aspect_relative`)에도 적용돼, 구조적 순부정을 넘어선 과잉 부정일 때만 단독 약점으로 찍힙니다. prior는 도메인 초기값이며 `ai-pipeline/calibrate_aspect_priors.py`가 저장된 `polarity_mix`로 실측 평균을 산출해 튜닝합니다.
+- **mention-polarity prior 보정**: 일부 항목은 "좋을 땐 침묵, 나쁠 때만 언급"되는 불만 주도(complaint-driven) 특성이 있어(조작감·최적화 등), 평균적인 게임도 구조적으로 음수 skew를 보입니다. 이를 그대로 두면 정상적인 게임도 해당 항목이 baseline 아래로 깔려 항상 약점으로 표시됩니다. 그래서 항목별 기대 skew(`_ASPECT_POLARITY_PRIOR`)를 빼 `adjusted_skew = skew − prior`로 **그 항목의 평균 대비**로 재중심화합니다. 평균적이면 `adjusted_skew ≈ 0` → baseline, 진짜 나쁠 때만 음수가 남아 점수가 내려갑니다. 이 prior는 **점수 산출에만** 쓰입니다(강·약점 라벨은 §5-1-1로 분리). prior는 도메인 초기값이며 `ai-pipeline/calibrate_aspect_priors.py`가 저장된 `polarity_mix`로 실측 평균을 산출해 튜닝합니다.
 - **긍·부정 출처 우선순위**: Map LLM evidence의 `polarity`를 우선하고, Map이 다루지 않은 항목만 크롤러 카테고리 누적치로 폴백합니다. 과거 크롤러 태그(부정 키워드 없으면 긍정 처리)가 기준이 되어 불만 항목(예: 최적화)이 긍정으로 역전되던 문제를 교정한 것입니다.
 - 데이터가 없는 항목은 점수를 지어내지 않고 누락시켜 프론트가 "데이터 부족"으로 표시합니다.
 
 `_apply_aspect_score_deltas`: LLM이 제안한 항목별 delta는 **`[-2.0, +2.0]` 클램프 + 인용 검증**을 통과해야 적용됩니다(`aspect_delta_evidence`에 유효 `review_id` ≥1개, baseline evidence_count ≥2). 미인용/무효 id면 delta 0. 즉 **최종 점수는 코드가 결정하고 LLM은 검증된 보정값만 제안**합니다.
+
+### 5-1-1. 항목별 강·약점 라벨 (`relative_label`)
+
+점수(0~10)와 별개로 각 항목에 `strength`/`weakness`/`neutral` 라벨을 부여합니다(`_enrich_aspect_relative`). 라벨은 reduce에 전달된 **`category_frequency`(전체 리뷰에서 집계한 항목별 언급 횟수 + 긍정률)**를 신호로 씁니다. 샘플 단위 `polarity_mix`는 "복합(mixed)" 과버킷·최소근거 컷으로 신호가 희석돼(스토리 183건·긍정 94%가 샘플 16/12/2로 압축) 명작의 강점이 묻히고 정상적인 조작감·최적화가 거짓 약점으로 찍히는 문제가 있었습니다.
+
+- **강점**: `언급 ≥ 30 AND 긍정률 ≥ 0.92`. 긍정 편향 코퍼스에서 단순 고긍정률은 거의 모든 항목이 충족하므로(0.90+), 언급량 하한으로 **자주 회자되는 정의적 특징**만 남깁니다(소수 언급 incidental 긍정 배제).
+- **약점**: `언급 ≥ 12 AND 긍정률 ≤ 0.78`. 낮은 긍정률은 드물어 진짜 불만만 잡힙니다(예: Witcher 3 조작감 0.61, Starfield 가성비 0.59). 정상 최적화(BF1 0.97)는 제외됩니다.
+- 카테고리→항목 매핑은 `ASPECT_KEY_MAP`. '버그'·'멀티플레이'는 9개 항목으로 안 떨어져 제외하며, 특히 '버그'는 "버그 있지만 재밌다" 식 긍정 태깅이 많아 최적화 신호를 오염시키므로 매핑하지 않습니다. 임계값은 대표 게임(엘든 링·Cyberpunk 2077·Baldur's Gate 3·Witcher 3·Starfield·Overwatch 2 등) 캘리브레이션값입니다.
 
 ### 5-2. 감성 점수의 출처 분리 (유저 / 종합 / 평론가 독립 산출)
 
@@ -228,7 +236,7 @@ API 문서: `http://localhost:8000/docs`.
 - **`GameListPage`** (`/`): 게임 카드 그리드, 태그(장르) 필터, 구매 시그널 bulk 조회(`/buy-signals/bulk`).
 - **`GameDetailPage`** (`/games/:id`): 한 화면에서 7개 데이터원을 병렬 fetch(`/games/{id}`, `/summary`, `/playtime-analysis`, `/critic-summary`, `/user-summary`, `/buy-signal`, `/recommendation-targets`).
   - **종합 평가**: 점수 + 9밴드 등급 배지(점수 기반 도출).
-  - **항목별 레이더**: 공통 5축(`content·gameplay·graphics·controls·optimization`) 고정. 면적=점수 절대 크기, 색·라벨=게임 내 상대 강·약점. 데이터 부족 축은 중앙 함몰. `story·difficulty·sound·price_value`는 근거·기준점 차이가 충분할 때만 방향 문구로 노출.
+  - **항목별 레이더**: 공통 5축(`content·gameplay·graphics·controls·optimization`) 고정. 면적=점수 절대 크기, 색·라벨=항목별 강·약점(`relative_label`, §5-1-1). 데이터 부족 축은 중앙 함몰. `story·difficulty·sound·price_value`는 근거·기준점 차이가 충분할 때만 방향 문구로 노출.
   - **유저/평론가 요약 카드**, **플레이타임 구간 카드**, **이런 사람에게 추천/주의**, **플랫폼별 대표 리뷰**(도움 수 높은 순, 비한국어는 `/translate/batch`로 번역), **구매 타이밍 시그널**.
 - **`GameComparePage`** (`/compare`): 여러 게임의 요약·점수·플레이타임을 나란히 비교.
 

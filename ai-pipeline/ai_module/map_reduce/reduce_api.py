@@ -128,6 +128,9 @@ ASPECT_KEY_MAP = {
     "story": "story", "narrative": "story", "plot": "story", "character": "story", "characters": "story",
     "worldbuilding": "story", "world building": "story",
     "가격": "price_value", "가성비": "price_value", "value": "price_value", "price": "price_value",
+    "재미": "gameplay", "전투": "gameplay", "gameplay": "gameplay", "fun": "gameplay", "combat": "gameplay",
+    "사운드": "sound", "음향": "sound", "음악": "sound", "sound": "sound", "music": "sound", "audio": "sound",
+    "난이도": "difficulty", "difficulty": "difficulty",
 }
 
 ASPECT_LABELS = {
@@ -1594,7 +1597,38 @@ def _polarity_ratios(mix: Any) -> tuple[float, float, float, int]:
     return pos / tot, (neg + mxd) / tot, (neg - pos) / tot, tot
 
 
-def _enrich_aspect_relative(aspect_scores: dict[str, Any]) -> dict[str, Any]:
+# category_frequency 기반 강·약점 임계. map 단계가 전체 리뷰에서 집계한 (언급 횟수, 긍정률)을
+# 라벨 신호로 쓴다 — 샘플 polarity_mix는 mixed 과버킷·MIN_EVIDENCE 희석으로 신호가 망가져
+# (스토리 183건@0.94 → 샘플 16/12/2), 강점 억눌림·거짓 약점을 유발했다. 임계는 11개 대표
+# 게임(엘든링·Cyberpunk·BG3·Witcher3·Starfield·OW2 등) 캘리브레이션값.
+ASPECT_STRENGTH_MIN_COUNT = 30    # 강점: 자주 회자되는 정의적 특징만(소수 incidental 긍정 배제)
+ASPECT_STRENGTH_POS_RATIO = 0.92  # 강점: 긍정 도배 코퍼스라 임계를 높게
+ASPECT_WEAKNESS_MIN_COUNT = 12    # 약점: 충분히 언급된 불만만
+ASPECT_WEAKNESS_POS_RATIO = 0.78  # 약점: 낮은 긍정률(드물어 진짜 불만만 잡힘)
+
+
+def _aspect_freq_map(category_frequency: list | None) -> dict[str, tuple[int, float]]:
+    """category_frequency [(label, count, pos_ratio)] → {aspect_key: (count, pos_ratio)}.
+
+    같은 aspect로 매핑되는 라벨은 count 가중 평균으로 합친다. '버그'·'멀티플레이' 등
+    9개 aspect로 안 떨어지는 라벨은 ASPECT_KEY_MAP에 없어 자동 제외된다(특히 '버그'는
+    "버그 있지만 재밌다" 식 긍정 태깅이 많아 최적화 신호를 오염시키므로 매핑하지 않음).
+    """
+    agg: dict[str, tuple[int, float]] = {}
+    for row in category_frequency or []:
+        try:
+            label, cnt, pr = str(row[0]).strip(), int(row[1]), float(row[2])
+        except (TypeError, ValueError, IndexError):
+            continue
+        aspect = ASPECT_KEY_MAP.get(label)
+        if not aspect or cnt <= 0:
+            continue
+        c0, s0 = agg.get(aspect, (0, 0.0))
+        agg[aspect] = (c0 + cnt, s0 + cnt * pr)
+    return {a: (c, (s / c if c else 0.0)) for a, (c, s) in agg.items()}
+
+
+def _enrich_aspect_relative(aspect_scores: dict[str, Any], category_frequency: list | None = None) -> dict[str, Any]:
     """각 aspect에 delta와 분리된 강·약점 신호를 부여한다.
 
     추가 필드: relative_label(strength|weakness|neutral), relative_reason(ko),
@@ -1612,68 +1646,36 @@ def _enrich_aspect_relative(aspect_scores: dict[str, Any]) -> dict[str, Any]:
     ]
     if not scored:
         return aspect_scores
-    mean_score = sum(float(d["score"]) for _, d in scored) / len(scored)
     total_mentions = sum(int(d.get("evidence_count") or 0) for _, d in scored)
+    freq = _aspect_freq_map(category_frequency)
 
     for aspect, d in scored:
-        score = float(d["score"])
         ec = int(d.get("evidence_count") or 0)
         share = (ec / total_mentions) if total_mentions > 0 else 0.0
-        pos_ratio, neg_mixed_ratio, neg_dominance, _ = _polarity_ratios(d.get("polarity_mix"))
-        # aspect prior로 순부정을 재중심화: 불만 주도 aspect는 구조적 순부정이 정상이므로
-        # 그 기대치(=-prior)를 넘어선 '과잉' 순부정만 단독 약점으로 본다. prior 음수 →
-        # adj_neg_dominance가 작아져, 정상적 조작감/최적화가 평균 무관하게 약점이 되는 것 방지.
-        prior = _aspect_polarity_prior(aspect)
-        adj_neg_dominance = neg_dominance + prior
-        rel = score - mean_score
-        enough = ec >= ASPECT_REL_MIN_EVIDENCE
-        # top_share = "균등 분배보다 유의미하게 많이 언급". 고정 0.20을 하한으로 두되
-        # N-상대(균등 share의 1.5배)와 함께 적용한다. 그러지 않으면 aspect가 3개뿐인
-        # 게임은 균등 share(0.33)만으로 전부 top_share가 돼 강점이 도배된다.
-        equal_share = 1.0 / len(scored)
-        top_share = share >= max(ASPECT_REL_TOP_SHARE, 1.5 * equal_share)
-
-        # 강·약점은 "게임 내 상대" 신호다. 절대 점수 단독으로 칠하지 않는다.
-        #   - 저평가 게임은 baseline_neutral이 낮아 aspect 점수가 전반적으로 낮다.
-        #     score<=6.0 같은 절대 floor를 단독 weakness 트리거로 쓰면 모든 aspect가
-        #     약점으로 도배된다(점수 변별력 ≠ 약점). 따라서 weakness는 평균 대비
-        #     하위(rel<=-margin)를 필수로 하고, 절대 저점/부정은 확인 조건으로만 쓴다.
-        #   - 예외: aspect 자체가 순부정 우세(neg-pos >= 0.3)면 평균과 무관하게 약점.
-        #   - strength는 평균 대비 상위(rel>=margin)만으로 판정한다. mention_share는
-        #     _evidence_subset의 (source, aspect) 균형 샘플링(365a191) 때문에 aspect
-        #     간 거의 균등해져 변별력이 없다(raw에서 content가 ~49%여도 균형 후 subset
-        #     share는 ~0.12로 평탄화). 설령 균등하지 않더라도 언급량은 aspect의 폭이지
-        #     우수성이 아니다. 따라서 라벨 근거에서 제외하고, 점수 자체에 이미 polarity가
-        #     반영된 게임 내 상대 위치(rel)만으로 공정 비교한다. mention_share/top_share는
-        #     표시용 메타·보조 사유로만 남긴다.
+        # 강·약점 라벨은 map 단계가 전체 리뷰에서 집계한 category_frequency(언급 횟수 +
+        # 긍정률)로 판정한다. 샘플 polarity_mix는 mixed 과버킷·MIN_EVIDENCE 희석으로
+        # 신호가 망가져(스토리 183건@0.94 → 샘플 16/12/2) 명작의 강점이 묻히고 정상
+        # 조작감/최적화가 거짓 약점이 됐다. 점수(0~10)는 기존 polarity_mix/baseline
+        # 산출을 유지하고, 여기선 strength/weakness '라벨'만 정한다.
+        #   - 강점: 많이 언급(count) + 높은 긍정률. 긍정 도배 코퍼스라 임계를 높게 두고
+        #     '정의적 특징'(자주 회자되는 호평)만 남긴다 — 소수 언급 incidental 긍정 배제.
+        #   - 약점: 충분히 언급된 낮은 긍정률만. 낮은 긍정률은 드물어 진짜 불만만 잡힌다
+        #     (Witcher 조작감 0.61, Starfield 가성비 0.59). 정상 최적화(BF1 0.97)는 제외.
+        cnt, pr = freq.get(aspect, (0, None))
         label = "neutral"
-        reasons: list[str] = []
-        if enough and score >= ASPECT_REL_STRENGTH_SCORE and rel >= ASPECT_REL_MEAN_MARGIN:
-            label = "strength"
-            reasons.append("게임 내 평균 대비 높음")
-            if top_share:
-                reasons.append("리뷰에서 자주 언급됨")
-            if pos_ratio >= ASPECT_REL_POS_RATIO:
-                reasons.append("긍정 반응 우세")
-        elif enough and (
-            (rel <= -ASPECT_REL_MEAN_MARGIN
-             and (score <= ASPECT_REL_WEAKNESS_SCORE or neg_mixed_ratio >= ASPECT_REL_NEG_RATIO))
-            or adj_neg_dominance >= ASPECT_REL_NEG_DOMINANCE
-        ):
-            label = "weakness"
-            if rel <= -ASPECT_REL_MEAN_MARGIN:
-                reasons.append("게임 내 평균 대비 낮음")
-            if score <= ASPECT_REL_WEAKNESS_SCORE:
-                reasons.append("점수 낮음")
-            if adj_neg_dominance >= ASPECT_REL_NEG_DOMINANCE:
-                reasons.append("부정 반응 우세")
-            elif neg_mixed_ratio >= ASPECT_REL_NEG_RATIO:
-                reasons.append("부정·복합 반응 많음")
+        reason = None
+        if pr is not None:
+            if cnt >= ASPECT_STRENGTH_MIN_COUNT and pr >= ASPECT_STRENGTH_POS_RATIO:
+                label = "strength"
+                reason = f"리뷰 {cnt}건 중 긍정 {round(pr * 100)}%"
+            elif cnt >= ASPECT_WEAKNESS_MIN_COUNT and pr <= ASPECT_WEAKNESS_POS_RATIO:
+                label = "weakness"
+                reason = f"리뷰 {cnt}건 중 긍정 {round(pr * 100)}%로 낮음"
 
         d["mention_count"] = ec
         d["mention_share"] = round(share, 3)
         d["relative_label"] = label
-        d["relative_reason"] = ", ".join(reasons) if reasons else None
+        d["relative_reason"] = reason
     return aspect_scores
 
 
@@ -2497,8 +2499,9 @@ async def run_feature_reduce_stage(
             final_data.get("aspect_delta_evidence", {}),
             valid_review_ids,
         )
-        # delta와 분리된 강·약점 신호(relative_label/mention_share/polarity_mix) 부여
-        aspect_scores = _enrich_aspect_relative(aspect_scores)
+        # delta와 분리된 강·약점 신호(relative_label/mention_share/polarity_mix) 부여.
+        # 라벨은 category_frequency(풀 코퍼스 언급량+긍정률) 기반.
+        aspect_scores = _enrich_aspect_relative(aspect_scores, category_frequency=category_frequency)
 
         # Sentiment 점수: anchor + LLM delta (인용 검증 후 결합)
         steam_total_count = 0

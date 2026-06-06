@@ -161,24 +161,22 @@ function AspectRadarChart({ aspects, isDark }) {
   const stroke = isDark ? '#3a3a5e' : '#e5e7eb'
   const labelColor = isDark ? '#e0e0e0' : '#374151'
   const accent = '#6366f1'
-  // 게임 평균 대비 상대 강약으로 색을 정한다.
-  // 평균 위 = 강점(녹), 평균 아래 = 약점(적), 평균 근처 = 보통(회색).
+  // 강·약점 색은 backend가 prior 보정해 내려준 relative_label을 따른다(아래 relColor/tierOf).
   // 근거 없는(missing) 축은 중앙으로 함몰시키고 회색으로 표시한다.
-  const present = aspects.filter((a) => !a.missing && Number.isFinite(a.score))
-  const mean = present.length ? present.reduce((s, a) => s + a.score, 0) / present.length : 5
   const NEUTRAL = '#9ca3af'
   // 반지름은 0~10 aspect 점수의 절대 크기다. 이전 min-max 방식은 낮은 평점 게임도
   // 내부 상대 1등 축이 꼭짓점까지 차서 전체 평가가 좋게 보이는 문제가 있었다.
   const MIN_R = 0.18       // 낮은 점수도 점/라벨 위치를 읽을 수 있게 최소 반지름 유지
   const MAX_R = 0.96       // 외곽선과 겹치지 않도록 약간의 여백 유지
-  const TIER_THRESHOLD = 0.6
   const MISSING_R = 0      // 데이터 부족 축은 꼭짓점을 중앙으로 붙여(반지름 0) 완전히 함몰 표시
   const radiusNorm = (a) => {
     if (a.missing || !Number.isFinite(a.score)) return MISSING_R
     return Math.max(MIN_R, Math.min(MAX_R, a.score / 10))
   }
-  const relColor = (a) => { if (a.missing) return NEUTRAL; const d = a.score - mean; return d >= TIER_THRESHOLD ? '#22c55e' : d <= -TIER_THRESHOLD ? '#ef4444' : NEUTRAL }
-  const tierOf = (a) => { if (a.missing) return null; const d = a.score - mean; return d >= TIER_THRESHOLD ? '강점' : d <= -TIER_THRESHOLD ? '약점' : '보통' }
+  // score-mean 재계산은 평균 대비 최저 축을 무조건 약점으로 칠해(정상 조작감 등) 오판한다.
+  // backend relative_label(prior 보정 반영)을 단일 출처로 써 색·라벨을 일치시킨다.
+  const relColor = (a) => { if (a.missing) return NEUTRAL; return a.relative_label === 'strength' ? '#22c55e' : a.relative_label === 'weakness' ? '#ef4444' : NEUTRAL }
+  const tierOf = (a) => { if (a.missing) return null; return a.relative_label === 'strength' ? '강점' : a.relative_label === 'weakness' ? '약점' : '보통' }
 
   const angleFor = (i) => (-90 + (360 / n) * i) * (Math.PI / 180)
   const pt = (i, r) => [cx + r * Math.cos(angleFor(i)), cy + r * Math.sin(angleFor(i))]
@@ -903,9 +901,12 @@ function GameDetailPage({ isDark, toggleDark }) {
                   return ai - bi
                 })
               const present = aspects.filter((a) => !a.missing)
-              const sorted = [...present].sort((a, b) => b.score - a.score)
-              const strength = sorted[0]
-              const weakness = sorted[sorted.length - 1]
+              // 강·약점 캡션도 relative_label 기준. 최고·최저점을 기계적으로 찍지 않아
+              // 모든 축이 양호한 게임에서 멀쩡한 최저 축이 약점으로 오표시되는 일을 막는다.
+              const strength = [...present].sort((a, b) => b.score - a.score)
+                .find((a) => a.relative_label === 'strength') || null
+              const weakness = [...present].sort((a, b) => a.score - b.score)
+                .find((a) => a.relative_label === 'weakness') || null
               return (
                 <div className="bg-white dark:bg-[#1e1e2e] rounded-xl p-7 border border-gray-200 dark:border-[#2a2a3e] shadow-sm">
                   <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0] mb-1">카테고리별 분석</h2>
@@ -913,11 +914,17 @@ function GameDetailPage({ isDark, toggleDark }) {
                   {aspects.length >= 3 ? (
                     <div className="flex flex-col items-center">
                       <AspectRadarChart aspects={aspects} isDark={isDark} />
-                      {strength && weakness && strength !== weakness && (
+                      {(strength || weakness) && (
                         <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
-                          강점 <span className="font-bold" style={{ color: '#22c55e' }}>{labelOf(strength)}</span>
-                          <span className="mx-1.5 text-gray-300 dark:text-gray-600">·</span>
-                          약점 <span className="font-bold" style={{ color: '#ef4444' }}>{labelOf(weakness)}</span>
+                          {strength && (
+                            <>강점 <span className="font-bold" style={{ color: '#22c55e' }}>{labelOf(strength)}</span></>
+                          )}
+                          {strength && weakness && (
+                            <span className="mx-1.5 text-gray-300 dark:text-gray-600">·</span>
+                          )}
+                          {weakness && (
+                            <>약점 <span className="font-bold" style={{ color: '#ef4444' }}>{labelOf(weakness)}</span></>
+                          )}
                         </p>
                       )}
                     </div>
