@@ -76,6 +76,34 @@ function ScoreBandBadge({ score }) {
   return <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${cls}`}>{label}</span>
 }
 
+function aspectScoreToBand(score) {
+  if (score == null || Number.isNaN(Number(score))) return null
+  return scoreToBand(Number(score) * 10)
+}
+
+function compactBandLabel(label) {
+  return {
+    '압도적으로 긍정적': '압도적 긍정',
+    '매우 긍정적': '매우 긍정',
+    '대체로 긍정적': '대체로 긍정',
+    '대체로 부정적': '대체로 부정',
+    '매우 부정적': '매우 부정',
+    '압도적으로 부정적': '압도적 부정',
+  }[label] || label
+}
+
+const ASPECT_BAND_COLORS = {
+  pos: '#22c55e',
+  mix: '#9ca3af',
+  neg: '#ef4444',
+}
+function aspectBandColor(score) {
+  const s = Number(score)
+  if (!Number.isFinite(s)) return '#9ca3af'
+  const band = SCORE_BANDS.find((x) => s * 10 >= x.min) || SCORE_BANDS[SCORE_BANDS.length - 1]
+  return ASPECT_BAND_COLORS[band.tone] || '#9ca3af'
+}
+
 const BUCKET_COLORS = {
   early: { bar: '#6366f1', light: 'rgba(99,102,241,0.15)' },
   mid:   { bar: '#f59e0b', light: 'rgba(245,158,11,0.15)' },
@@ -151,7 +179,8 @@ function PlaytimeBarChart({ buckets, isDark }) {
 }
 
 // 카테고리별 점수를 다각형(레이더) 차트로 보여 준다.
-// 면적은 절대 점수에 묶고, 색/라벨만 게임 안에서의 상대 강약을 표현한다.
+// 면적과 축 라벨은 0~10 점수의 절대 평가 밴드를 따른다.
+// 대표 강·약점은 별도 캡션/보조 카드에서 category_frequency 기반 relative_label로 표시한다.
 function AspectRadarChart({ aspects, isDark }) {
   const n = aspects.length
   if (n < 3) return null
@@ -161,8 +190,6 @@ function AspectRadarChart({ aspects, isDark }) {
   const stroke = isDark ? '#3a3a5e' : '#e5e7eb'
   const labelColor = isDark ? '#e0e0e0' : '#374151'
   const accent = '#6366f1'
-  // 강·약점 색은 backend가 prior 보정해 내려준 relative_label을 따른다(아래 relColor/tierOf).
-  // 근거 없는(missing) 축은 중앙으로 함몰시키고 회색으로 표시한다.
   const NEUTRAL = '#9ca3af'
   // 반지름은 0~10 aspect 점수의 절대 크기다. 이전 min-max 방식은 낮은 평점 게임도
   // 내부 상대 1등 축이 꼭짓점까지 차서 전체 평가가 좋게 보이는 문제가 있었다.
@@ -173,10 +200,12 @@ function AspectRadarChart({ aspects, isDark }) {
     if (a.missing || !Number.isFinite(a.score)) return MISSING_R
     return Math.max(MIN_R, Math.min(MAX_R, a.score / 10))
   }
-  // score-mean 재계산은 평균 대비 최저 축을 무조건 약점으로 칠해(정상 조작감 등) 오판한다.
-  // backend relative_label(prior 보정 반영)을 단일 출처로 써 색·라벨을 일치시킨다.
-  const relColor = (a) => { if (a.missing) return NEUTRAL; return a.relative_label === 'strength' ? '#22c55e' : a.relative_label === 'weakness' ? '#ef4444' : NEUTRAL }
-  const tierOf = (a) => { if (a.missing) return null; return a.relative_label === 'strength' ? '강점' : a.relative_label === 'weakness' ? '약점' : '보통' }
+  const bandColor = (a) => { if (a.missing) return NEUTRAL; return aspectBandColor(a.score) }
+  const bandOf = (a) => {
+    if (a.missing) return null
+    const label = aspectScoreToBand(a.score)?.label
+    return label ? compactBandLabel(label) : null
+  }
 
   const angleFor = (i) => (-90 + (360 / n) * i) * (Math.PI / 180)
   const pt = (i, r) => [cx + r * Math.cos(angleFor(i)), cy + r * Math.sin(angleFor(i))]
@@ -199,7 +228,7 @@ function AspectRadarChart({ aspects, isDark }) {
 
       {aspects.map((a, i) => {
         const p = pt(i, radiusNorm(a) * R)
-        const c = relColor(a)
+        const c = bandColor(a)
         // 근거 없는 축은 속 빈 회색 점으로 구분.
         return <circle key={i} cx={p[0]} cy={p[1]} r={4} fill={a.missing ? 'none' : c} stroke={c} strokeWidth={a.missing ? 1.5 : 0} />
       })}
@@ -209,17 +238,16 @@ function AspectRadarChart({ aspects, isDark }) {
         const cos = Math.cos(angleFor(i))
         const anchor = Math.abs(cos) < 0.3 ? 'middle' : cos > 0 ? 'start' : 'end'
         const label = CATEGORY_LABELS[a.key] || a.label || a.key
-        const c = relColor(a)
-        const tier = tierOf(a)
-        // 절대 수치는 기준이 불명확해 표기하지 않는다. 색·형상 + 상대 tier(강점/보통/약점)로만 비교.
+        const c = bandColor(a)
+        const band = bandOf(a)
         return (
           <g key={i}>
-            <text x={lp[0]} y={lp[1] + (a.missing || tier ? -2 : 3)} textAnchor={anchor} fontSize={11} fontWeight="bold"
+            <text x={lp[0]} y={lp[1] + (a.missing || band ? -2 : 3)} textAnchor={anchor} fontSize={11} fontWeight="bold"
               fill={c === NEUTRAL ? labelColor : c}>{label}</text>
             {a.missing ? (
               <text x={lp[0]} y={lp[1] + 9} textAnchor={anchor} fontSize={8} fill={NEUTRAL}>관련 리뷰 부족</text>
             ) : (
-              <text x={lp[0]} y={lp[1] + 9} textAnchor={anchor} fontSize={8} fontWeight="bold" fill={c}>{tier}</text>
+              <text x={lp[0]} y={lp[1] + 9} textAnchor={anchor} fontSize={8} fontWeight="bold" fill={c}>{band}</text>
             )}
           </g>
         )
@@ -843,7 +871,7 @@ function GameDetailPage({ isDark, toggleDark }) {
               </div>
             )}
 
-            {/* 카테고리별 분석 — 게임 내 상대 강·약점 프로파일 (다각형 차트) */}
+            {/* 카테고리별 분석 — 레이더는 점수 기반 평가 밴드, 캡션은 category_frequency 기반 대표 강·약점 */}
             {summary.aspect_sentiment && Object.keys(summary.aspect_sentiment).length > 0 && (() => {
               const raw = summary.aspect_sentiment || {}
               const labelOf = (a) => CATEGORY_LABELS[a.key] || a?.label || a?.key
@@ -882,12 +910,12 @@ function GameDetailPage({ isDark, toggleDark }) {
               }
               const auxiliaryToneMeta = (a) => {
                 if (a.relative_label === 'strength') {
-                  return { label: a.relative_reason || '강점으로 자주 꼽힘', color: '#22c55e' }
+                  return { label: '강점으로 자주 꼽힘', color: '#22c55e' }
                 }
                 if (a.relative_label === 'weakness') {
-                  return { label: a.relative_reason || '주의 지점으로 언급', color: '#ef4444' }
+                  return { label: '주의 지점으로 언급', color: '#ef4444' }
                 }
-                return { label: a.relative_reason || '리뷰에서 자주 언급됨', color: '#f5a623' }
+                return { label: '리뷰에서 자주 언급됨', color: '#f5a623' }
               }
               // 핵심 5축 고정. 게임에 근거 없는 축은 missing(중립)으로 채워 축을 항상 동일하게 유지.
               const aspects = CANONICAL_ASPECTS.map((key) => toAspect(key, raw[key]))
@@ -901,8 +929,8 @@ function GameDetailPage({ isDark, toggleDark }) {
                   return ai - bi
                 })
               const present = aspects.filter((a) => !a.missing)
-              // 강·약점 캡션도 relative_label 기준. 최고·최저점을 기계적으로 찍지 않아
-              // 모든 축이 양호한 게임에서 멀쩡한 최저 축이 약점으로 오표시되는 일을 막는다.
+              // 대표 강·약점은 category_frequency 기반 relative_label 기준.
+              // 레이더 밴드(점수 강도)와 리뷰에서 자주 회자된 정의적 특징을 분리한다.
               const strength = [...present].sort((a, b) => b.score - a.score)
                 .find((a) => a.relative_label === 'strength') || null
               const weakness = [...present].sort((a, b) => a.score - b.score)
@@ -910,20 +938,22 @@ function GameDetailPage({ isDark, toggleDark }) {
               return (
                 <div className="bg-white dark:bg-[#1e1e2e] rounded-xl p-7 border border-gray-200 dark:border-[#2a2a3e] shadow-sm">
                   <h2 className="text-sm font-bold text-gray-900 dark:text-[#e0e0e0] mb-1">카테고리별 분석</h2>
-                  <p className="text-xs text-gray-400 dark:text-gray-500 mb-4">이 게임 안에서의 상대적 강점과 약점</p>
+                  <p className="text-xs text-gray-400 dark:text-gray-500 mb-4">
+                    레이더는 항목별 평가 밴드, 캡션은 자주 회자된 대표 강점과 약점
+                  </p>
                   {aspects.length >= 3 ? (
                     <div className="flex flex-col items-center">
                       <AspectRadarChart aspects={aspects} isDark={isDark} />
                       {(strength || weakness) && (
                         <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
                           {strength && (
-                            <>강점 <span className="font-bold" style={{ color: '#22c55e' }}>{labelOf(strength)}</span></>
+                            <>대표 강점 <span className="font-bold" style={{ color: '#22c55e' }}>{labelOf(strength)}</span></>
                           )}
                           {strength && weakness && (
                             <span className="mx-1.5 text-gray-300 dark:text-gray-600">·</span>
                           )}
                           {weakness && (
-                            <>약점 <span className="font-bold" style={{ color: '#ef4444' }}>{labelOf(weakness)}</span></>
+                            <>대표 약점 <span className="font-bold" style={{ color: '#ef4444' }}>{labelOf(weakness)}</span></>
                           )}
                         </p>
                       )}
@@ -934,8 +964,8 @@ function GameDetailPage({ isDark, toggleDark }) {
                         <div key={i} className="flex items-center justify-between bg-gray-50 dark:bg-[#2a2a3e] rounded-lg px-4 py-2">
                           <span className="text-sm text-gray-700 dark:text-[#e0e0e0] font-bold">{labelOf(a)}</span>
                           <div className="flex items-center gap-2">
-                            <span className="text-xs text-gray-500 dark:text-gray-400">{a.label}</span>
-                            <span className="text-sm font-bold" style={{ color: a.score >= 7 ? '#22c55e' : a.score >= 5 ? '#f5a623' : '#ef4444' }}>
+                            <span className="text-xs text-gray-500 dark:text-gray-400">{compactBandLabel(aspectScoreToBand(a.score)?.label || '')}</span>
+                            <span className="text-sm font-bold" style={{ color: aspectBandColor(a.score) }}>
                               {a.score?.toFixed(1)}
                             </span>
                           </div>

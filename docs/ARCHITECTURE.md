@@ -118,6 +118,8 @@ Groq 클라이언트는 `GroqKeyRotator`로 감싸 429 발생 시 다음 키로 
 - **약점**: `언급 ≥ 12 AND 긍정률 ≤ 0.78`. 낮은 긍정률은 드물어 진짜 불만만 잡힙니다(예: Witcher 3 조작감 0.61, Starfield 가성비 0.59). 정상 최적화(BF1 0.97)는 제외됩니다.
 - 카테고리→항목 매핑은 `ASPECT_KEY_MAP`. '버그'·'멀티플레이'는 9개 항목으로 안 떨어져 제외하며, 특히 '버그'는 "버그 있지만 재밌다" 식 긍정 태깅이 많아 최적화 신호를 오염시키므로 매핑하지 않습니다. 임계값은 대표 게임(엘든 링·Cyberpunk 2077·Baldur's Gate 3·Witcher 3·Starfield·Overwatch 2 등) 캘리브레이션값입니다.
 
+프론트에서는 이 라벨을 레이더 축 색상 자체로 쓰지 않고, 레이더 아래의 **대표 강점/대표 약점** 캡션과 보조 항목의 "강점으로 자주 꼽힘/주의 지점" 문구에 사용합니다. 레이더 축의 색·라벨은 §5-3의 9밴드 컷을 항목 점수(0~10 → 0~100 환산)에 적용해 표시합니다. 따라서 한 항목의 "평가 강도"와 "리뷰에서 반복적으로 회자된 이슈"가 분리됩니다.
+
 ### 5-2. 감성 점수의 출처 분리 (유저 / 종합 / 평론가 독립 산출)
 
 세 점수가 서로 다른 앵커·근거로 산출됩니다(`_apply_sentiment_score_delta`: 앵커 + 검증 delta `[-8,+8]`, 인용 ≥2개·표본 ≥10 필요).
@@ -236,7 +238,7 @@ API 문서: `http://localhost:8000/docs`.
 - **`GameListPage`** (`/`): 게임 카드 그리드, 태그(장르) 필터, 구매 시그널 bulk 조회(`/buy-signals/bulk`).
 - **`GameDetailPage`** (`/games/:id`): 한 화면에서 7개 데이터원을 병렬 fetch(`/games/{id}`, `/summary`, `/playtime-analysis`, `/critic-summary`, `/user-summary`, `/buy-signal`, `/recommendation-targets`).
   - **종합 평가**: 점수 + 9밴드 등급 배지(점수 기반 도출).
-  - **항목별 레이더**: 공통 5축(`content·gameplay·graphics·controls·optimization`) 고정. 면적=점수 절대 크기, 색·라벨=항목별 강·약점(`relative_label`, §5-1-1). 데이터 부족 축은 중앙 함몰. `story·difficulty·sound·price_value`는 근거·기준점 차이가 충분할 때만 방향 문구로 노출.
+  - **항목별 레이더**: 공통 5축(`content·gameplay·graphics·controls·optimization`) 고정. 면적=0~10 점수 절대 크기, 색·라벨=점수 기반 9밴드(0~100 환산). 데이터 부족 축은 중앙 함몰. `relative_label`(§5-1-1)은 레이더 아래 대표 강점/약점 캡션과 `story·difficulty·sound·price_value` 보조 항목 문구에만 써서, 점수 강도와 자주 회자된 이슈를 분리합니다.
   - **유저/평론가 요약 카드**, **플레이타임 구간 카드**, **이런 사람에게 추천/주의**, **플랫폼별 대표 리뷰**(도움 수 높은 순, 비한국어는 `/translate/batch`로 번역), **구매 타이밍 시그널**.
 - **`GameComparePage`** (`/compare`): 여러 게임의 요약·점수·플레이타임을 나란히 비교.
 
