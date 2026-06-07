@@ -8,6 +8,16 @@ LLM 파이프라인은 토큰이 많이 드는 **Map(근거 추출)** 과 품질
 
 ---
 
+## 🎬 최종 시연 & 평가 자료
+
+> 발표 평가 기준(시연 · 기술 챌린지 · 품질 · 개발 프로세스 · 달성도 · 향후)은 별도 문서로 정리했습니다.
+>
+> **→ [docs/PRESENTATION.md](docs/PRESENTATION.md)**
+>
+> 라이브 데모는 Cloudflare Tunnel로 공개된 실제 서비스이며, 데모 URL·시연 영상·스크린샷은 위 문서에 채웁니다.
+
+---
+
 ## 1. 문제 정의
 
 게임을 사기 전 사용자는 리뷰를 찾아보지만, 인기작 하나에도 리뷰가 수백·수천 개씩 달려 있고 길이도 내용도 제각각이라 "이 게임이 나에게 맞을까?"를 빠르게 판단하기 어렵습니다. 화면에 표시되는 평균 평점 하나로는 다음을 알 수 없습니다.
@@ -187,6 +197,6 @@ python run_map_pipeline.py \
 
 ## 9. 더 알아보기
 
-- **[기술 아키텍처와 파이프라인 상세 → docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — 데이터 흐름, 점수 산출 로직, DB 테이블, API, 챗봇 구조, 배포 구성.
-- **[백엔드 & 챗봇 코드 상세 → docs/BACKEND_CHATBOT_ARCH.md](docs/BACKEND_CHATBOT_ARCH.md)** — FastAPI 라우터·서비스 레이어·ORM 모델·백그라운드 잡·챗봇 요청 흐름·Redis 키/인증을 코드 단위로 정리.
+- **[발표·평가 자료 → docs/PRESENTATION.md](docs/PRESENTATION.md)** — 최종 시연, 핵심 기술 챌린지(STAR), 품질 증명(RAGAS·회귀 테스트), 개발 프로세스, 달성도, 향후 발전/아쉬운 점.
+- **[기술 아키텍처와 파이프라인 상세 → docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — 데이터 흐름, 점수 산출 로직, DB 테이블, API, 챗봇 구조, 배포 구성. (FastAPI 라우터·ORM·챗봇 요청 흐름 등 코드 단위 레퍼런스 `BACKEND_CHATBOT_ARCH.md` 링크 포함)
 - **[통합 패치노트 → docs/INTEGRATION_CHANGES.md](docs/INTEGRATION_CHANGES.md)** — 기능 개선과 클라우드 배포 작업을 합치며 바뀐 내용.
