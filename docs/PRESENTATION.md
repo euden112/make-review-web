@@ -7,9 +7,12 @@
 
 - **라이브 데모(메인)**: <https://formerly-integral-regard-sara.trycloudflare.com> — Cloudflare Tunnel로 공개된 실제 서비스
 
-**게임 목록 화면**
+<details>
+<summary>게임 목록 화면 캡처 (클릭해서 펼치기)</summary>
 
 <img src="img/list.png" width="640">
+
+</details>
 
 <details>
 <summary>📱 상세 페이지 전체 화면 캡처 (클릭해서 펼치기)</summary>
