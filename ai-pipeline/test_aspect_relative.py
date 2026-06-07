@@ -1,7 +1,9 @@
-"""Aspect 상대 강·약점 판정(_enrich_aspect_relative) 회귀 테스트.
+"""Aspect 강·약점 판정(_enrich_aspect_relative) 회귀 테스트.
 
-핵심 계약: relative_label은 delta(score-baseline_score)가 아니라 score 자체,
-게임 내 평균 대비 위치, evidence_count, mention_share, polarity_mix로 산출된다.
+계약(현행): relative_label은 reduce에 전달된 category_frequency(전체 리뷰의 항목별
+언급 횟수 + 긍정률)로 산출된다 — 강점 count>=30 & ratio>=0.92, 약점 count>=12 &
+ratio<=0.78, 그 외 neutral. 점수(0~10) 산출과는 분리한다(이전 score-상대 방식에서
+전환, ARCHITECTURE §5-1-1). mention_count/mention_share는 표시용 메타로 유지된다.
 
 실행: python test_aspect_relative.py  (또는 pytest)
 """
@@ -17,146 +19,70 @@ if ROOT not in sys.path:
 from ai_module.map_reduce.reduce_api import _enrich_aspect_relative
 
 
-def _aspect(score, ec, pos, mxd, neg, baseline=None):
+def _aspect(score, ec, pos, mxd, neg):
     return {
         "label": "x",
         "score": score,
-        "baseline_score": baseline if baseline is not None else score,
         "evidence_count": ec,
         "polarity_mix": {"positive": pos, "mixed": mxd, "negative": neg},
     }
 
 
-def test_game1_gameplay_high_score_strength():
-    """game 1: gameplay 높은 점수 + 충분한 근거 → strength."""
-    scores = {
-        "gameplay": _aspect(8.4, 30, 26, 2, 2),
-        "graphics": _aspect(7.0, 8, 5, 2, 1),
-        "optimization": _aspect(6.2, 6, 2, 1, 3),
-    }
-    out = _enrich_aspect_relative(scores)
-    g = out["gameplay"]
-    assert g["relative_label"] == "strength", g
-    assert g["mention_count"] == 30
-    assert 0 < g["mention_share"] <= 1
-    assert g["relative_reason"]  # 비어있지 않음
+def test_strength_high_mentions_high_ratio():
+    """많이 언급(>=30) + 높은 긍정률(>=0.92) → strength."""
+    scores = {"gameplay": _aspect(8.0, 20, 16, 2, 2), "graphics": _aspect(7.0, 8, 5, 2, 1)}
+    cf = [("재미", 40, 0.95), ("그래픽", 8, 0.90)]
+    out = _enrich_aspect_relative(scores, cf)
+    assert out["gameplay"]["relative_label"] == "strength", out["gameplay"]
+    assert out["gameplay"]["relative_reason"]  # 비어있지 않음
 
 
-def test_game2_difficulty_zero_delta_still_surfaces():
-    """game 2(Elden Ring): difficulty가 baseline==score(델타 0)여도
-    점수 높고 자주 언급되면 strength로 노출되어야 한다."""
-    scores = {
-        # difficulty: delta 0 (baseline == score), 높은 점수 + 많은 언급
-        "difficulty": _aspect(8.2, 40, 30, 6, 4, baseline=8.2),
-        "gameplay": _aspect(8.0, 20, 16, 2, 2),
-        "graphics": _aspect(7.5, 10, 7, 2, 1),
-        "optimization": _aspect(6.5, 8, 3, 2, 3),
-    }
-    out = _enrich_aspect_relative(scores)
-    diff = out["difficulty"]
-    # 델타 0이라는 이유로 숨기면 안 된다 → neutral이 아니어야 한다.
-    assert diff["relative_label"] == "strength", diff
-    assert diff["mention_share"] >= 0.20  # 상위권 언급
-    assert "자주 언급" in (diff["relative_reason"] or "")
-
-
-def test_low_score_aspect_is_weakness_not_exaggerated():
-    """낮은 점수 + 부정 우세 aspect는 weakness. 강점으로 과장되지 않는다."""
-    scores = {
-        "optimization": _aspect(5.2, 18, 3, 4, 11),
-        "gameplay": _aspect(7.0, 20, 14, 3, 3),
-        "graphics": _aspect(7.2, 12, 9, 2, 1),
-    }
-    out = _enrich_aspect_relative(scores)
-    opt = out["optimization"]
-    assert opt["relative_label"] == "weakness", opt
-    # 다른 축이 잘못 weakness로 끌려가지 않는지(과장 방지)
-    assert out["graphics"]["relative_label"] != "weakness"
-
-
-def test_low_baseline_flat_game_not_all_weakness():
-    """저평가 게임(점수 전반 5점대, 비슷)이라고 모든 aspect가 약점으로
-    도배되면 안 된다. 평균 대비 격차 없으면 neutral."""
-    scores = {
-        "content": _aspect(5.3, 12, 4, 4, 4),
-        "gameplay": _aspect(5.4, 14, 5, 4, 5),
-        "graphics": _aspect(5.1, 10, 3, 4, 3),
-        "optimization": _aspect(5.2, 11, 3, 4, 4),
-    }
-    out = _enrich_aspect_relative(scores)
-    weak = [k for k, v in out.items() if v["relative_label"] == "weakness"]
-    assert weak == [], f"평탄한 저점수 게임이 약점 도배됨: {weak}"
-
-
-def test_strongly_negative_aspect_is_weakness_even_if_flat():
-    """평균과 비슷해도 그 aspect 자체가 부정·복합 압도(>=65%)면 약점."""
-    scores = {
-        "optimization": _aspect(5.0, 20, 2, 4, 14),  # neg+mixed=18/20=0.9
-        "gameplay": _aspect(5.2, 18, 6, 5, 7),
-        "graphics": _aspect(5.1, 12, 4, 4, 4),
-    }
-    out = _enrich_aspect_relative(scores)
+def test_weakness_low_ratio():
+    """충분히 언급(>=12) + 낮은 긍정률(<=0.78) → weakness. 다른 축은 안 끌려간다."""
+    scores = {"optimization": _aspect(5.2, 18, 3, 4, 11), "gameplay": _aspect(7.0, 20, 14, 3, 3)}
+    cf = [("최적화", 20, 0.60), ("재미", 20, 0.94)]
+    out = _enrich_aspect_relative(scores, cf)
     assert out["optimization"]["relative_label"] == "weakness", out["optimization"]
+    assert out["optimization"]["relative_reason"]
+    assert out["gameplay"]["relative_label"] != "weakness"
 
 
-def test_insufficient_evidence_stays_neutral():
-    """근거 부족(evidence_count < 5)이면 점수가 높아도 neutral."""
-    scores = {
-        "sound": _aspect(8.5, 3, 3, 0, 0),
-        "gameplay": _aspect(7.0, 20, 14, 3, 3),
-    }
-    out = _enrich_aspect_relative(scores)
+def test_high_ratio_but_below_count_not_strength():
+    """긍정률이 높아도 언급 수가 임계 미만(<30)이면 strength가 아니다."""
+    scores = {"sound": _aspect(8.5, 10, 9, 1, 0)}
+    cf = [("사운드", 20, 0.98)]   # ratio는 충분, count 부족
+    out = _enrich_aspect_relative(scores, cf)
     assert out["sound"]["relative_label"] == "neutral", out["sound"]
 
 
-def test_net_negative_weakness_always_has_reason():
-    """평균과 비슷하고 점수도 6 초과지만 순부정 우세(neg-pos>=0.3)로
-    약점이 된 경우, relative_reason이 비면 안 된다(근거 없는 약점 금지)."""
-    scores = {
-        "x": _aspect(6.8, 20, 4, 2, 14),   # neg_dominance=(14-4)/20=0.5
-        "y": _aspect(6.6, 12, 5, 3, 4),
-        "z": _aspect(7.0, 10, 7, 2, 1),
-    }
-    out = _enrich_aspect_relative(scores)
-    x = out["x"]
-    assert x["relative_label"] == "weakness", x
-    assert x["relative_reason"], f"약점인데 reason 비어있음: {x}"
+def test_ratio_between_thresholds_neutral():
+    """긍정률이 약점(<=0.78)과 강점(>=0.92) 사이면 neutral."""
+    scores = {"story": _aspect(7.5, 40, 28, 6, 6)}
+    cf = [("스토리", 40, 0.85)]
+    out = _enrich_aspect_relative(scores, cf)
+    assert out["story"]["relative_label"] == "neutral", out["story"]
 
 
-def test_high_volume_average_score_not_strength():
-    """content처럼 evidence를 독점해도 점수가 게임 평균 수준이면 강점이 아니다.
-    언급량(mention_share)은 강점 트리거가 아님(content 구조적 편향 차단)."""
-    scores = {
-        "content": _aspect(7.6, 60, 45, 8, 7),   # 최다 언급(share~0.7)이나 점수 평균 근처
-        "gameplay": _aspect(7.8, 12, 9, 2, 1),
-        "graphics": _aspect(7.5, 10, 7, 2, 1),
-    }
-    out = _enrich_aspect_relative(scores)
-    # mean=(7.6+7.8+7.5)/3=7.633, content rel=-0.03 → 강점 아님
-    assert out["content"]["relative_label"] != "strength", out["content"]
-    assert out["content"]["mention_share"] > 0.5  # 메타 필드로는 여전히 큼
+def test_weakness_count_below_threshold_neutral():
+    """낮은 긍정률이라도 언급이 임계 미만(<12)이면 weakness가 아니다."""
+    scores = {"controls": _aspect(5.0, 5, 1, 1, 3)}
+    cf = [("조작감", 8, 0.50)]
+    out = _enrich_aspect_relative(scores, cf)
+    assert out["controls"]["relative_label"] == "neutral", out["controls"]
 
 
-def test_three_high_aspects_not_all_strength():
-    """aspect 3개 모두 고득점이고 언급 균등하면 N-상대 top_share가 막아
-    전부 강점으로 도배되지 않는다."""
-    scores = {
-        "a": _aspect(7.8, 10, 8, 1, 1),
-        "b": _aspect(7.9, 10, 8, 1, 1),
-        "c": _aspect(8.0, 10, 8, 1, 1),
-    }
-    out = _enrich_aspect_relative(scores)
-    strengths = [k for k, v in out.items() if v["relative_label"] == "strength"]
-    assert len(strengths) < 3, f"3축 고득점이 전부 강점 도배됨: {strengths}"
+def test_no_category_frequency_all_neutral():
+    """category_frequency가 없으면 라벨 신호가 없어 전부 neutral(점수와 무관)."""
+    scores = {"gameplay": _aspect(8.4, 30, 26, 2, 2), "optimization": _aspect(5.0, 20, 2, 4, 14)}
+    out = _enrich_aspect_relative(scores, None)
+    assert all(v["relative_label"] == "neutral" for v in out.values()), out
 
 
-def test_mention_share_sums_to_one():
-    scores = {
-        "a": _aspect(7.0, 10, 8, 1, 1),
-        "b": _aspect(6.0, 30, 10, 5, 15),
-        "c": _aspect(8.0, 10, 9, 1, 0),
-    }
-    out = _enrich_aspect_relative(scores)
+def test_mention_meta_preserved():
+    """라벨과 별개로 mention_count/mention_share(표시 메타)는 유지된다."""
+    scores = {"a": _aspect(7.0, 10, 8, 1, 1), "b": _aspect(6.0, 30, 10, 5, 15)}
+    out = _enrich_aspect_relative(scores, None)
+    assert out["a"]["mention_count"] == 10
     total = sum(v["mention_share"] for v in out.values())
     assert abs(total - 1.0) < 0.01, total
 

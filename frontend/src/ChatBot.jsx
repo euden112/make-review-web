@@ -57,7 +57,7 @@ export default function ChatBot({ isDark }) {
         try {
           const errData = await res.json()
           if (errData?.detail) errorMsg = errData.detail
-        } catch (_) {}
+        } catch { /* JSON 파싱 실패 시 기본 메시지 사용 */ }
         if (res.status === 504) errorMsg = 'AI 응답 시간이 초과됐습니다. 잠시 후 다시 시도해주세요.'
         throw new Error(errorMsg)
       }

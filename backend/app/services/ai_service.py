@@ -1422,6 +1422,38 @@ async def run_reduce_from_precomputed_map(
                     last_summary_version=new_version,
                 ))
 
+            # 신뢰도 평가 (Mode A와 동일 — replay에도 기록).
+            # compute_reduce_reliability는 ai_result만으로 schema_compliance·
+            # sentiment_consistency·anchor_deviation을 산출한다(input_reviews는 현재 미사용,
+            # hallucination_score는 스텁이라 None). semantic은 임베딩 모델 설치 시에만.
+            if _HAS_GEMINI_RELIABILITY:
+                reliability = compute_reduce_reliability(
+                    ai_result=ai_result,
+                    input_reviews=summary_reviews,
+                    steam_recommend_ratio=steam_recommend_ratio,
+                )
+                job.schema_compliance     = reliability.schema_compliance
+                job.hallucination_score   = reliability.hallucination_score
+                job.sentiment_consistency = reliability.sentiment_consistency
+                job.anchor_deviation      = reliability.anchor_deviation
+
+            if _HAS_SEMANTIC_SIMILARITY:
+                selected_texts = [r.review_text_clean for r in summary_reviews[:50] if r.review_text_clean]
+                synthesized_summary = "\n".join(
+                    part for part in [
+                        ai_result.one_liner,
+                        "\n".join(ai_result.pros or []),
+                        "\n".join(ai_result.cons or []),
+                        ai_result.user.summary if ai_result.user else "",
+                        ai_result.critic.summary if ai_result.critic else "",
+                    ]
+                    if part
+                )
+                loop = asyncio.get_running_loop()
+                new_summary.semantic_similarity_score = await loop.run_in_executor(
+                    None, compute_semantic_similarity, selected_texts, synthesized_summary,
+                )
+
             job.status   = "success"
             job.ended_at = datetime.utcnow()
             await db.commit()
