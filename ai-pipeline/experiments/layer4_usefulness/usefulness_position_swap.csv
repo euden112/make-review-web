@@ -1,0 +1,21 @@
+game_name,persona,order1_pref,order2_pref,underlying_choice,consistent
+Dead by Daylight,2_specificity_seeker,B,A,pipeline,yes
+Clair Obscur: Expedition 33,2_specificity_seeker,A,B,baseline,yes
+Overwatch 2,2_specificity_seeker,A,B,baseline,yes
+Hitman World of Assassination,2_specificity_seeker,A,B,baseline,yes
+Street Fighter 6,2_specificity_seeker,B,A,pipeline,yes
+The Witcher 3: Wild Hunt,2_specificity_seeker,A,B,baseline,yes
+A Plague Tale: Innocence,2_specificity_seeker,B,A,pipeline,yes
+Balatro,2_specificity_seeker,A,B,baseline,yes
+Death Stranding,2_specificity_seeker,A,B,baseline,yes
+Dragon Age: The Veilguard,2_specificity_seeker,B,A,pipeline,yes
+Star Wars Jedi: Survivor,2_specificity_seeker,A,B,baseline,yes
+Dave the Diver,2_specificity_seeker,B,A,pipeline,yes
+TEKKEN 8,2_specificity_seeker,B,A,pipeline,yes
+Forza Horizon 5,2_specificity_seeker,A,B,baseline,yes
+Monster Hunter Rise,2_specificity_seeker,B,A,pipeline,yes
+Star Wars Jedi: Fallen Order,2_specificity_seeker,A,B,baseline,yes
+God of War Ragnarök,2_specificity_seeker,A,B,baseline,yes
+Dragon Age: Inquisition,2_specificity_seeker,B,A,pipeline,yes
+Battlefield 2042,2_specificity_seeker,A,B,baseline,yes
+The Outer Worlds,2_specificity_seeker,B,A,pipeline,yes

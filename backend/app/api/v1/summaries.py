@@ -62,18 +62,19 @@ def _serialize_game_metadata(
     game: Game,
     steam_map: GamePlatformMap | None = None,
     meta_map: GamePlatformMap | None = None,
+    rating_override: float | None = None,
 ) -> dict:
     cover_image = None
     hero_image = None
     tags: list[str] = []
-    rating: float | None = None
+    rating = rating_override
 
     if steam_map and steam_map.platform_meta_json:
         cover_image = steam_map.platform_meta_json.get("cover_image")
         hero_image = steam_map.platform_meta_json.get("hero_image")
         tags = steam_map.platform_meta_json.get("tags") or []
 
-    if meta_map and meta_map.platform_meta_json:
+    if rating is None and meta_map and meta_map.platform_meta_json:
         score = meta_map.platform_meta_json.get("score")
         if score is not None:
             rating = round(float(score) / 20, 1)
@@ -86,6 +87,10 @@ def _serialize_game_metadata(
         "tags": tags,
         "rating": rating,
     }
+
+
+def _sentiment_rating(score: float | None) -> float | None:
+    return round(float(score) / 20, 1) if score is not None else None
 
 
 @router.get("/")
@@ -102,6 +107,7 @@ async def get_games(db: AsyncSession = Depends(get_db)):
     # 플랫폼 맵을 플랫폼별 단일 쿼리로 일괄 로드 (N+1 제거)
     steam_maps: dict[int, GamePlatformMap] = {}
     meta_maps: dict[int, GamePlatformMap] = {}
+    sentiment_ratings: dict[int, float] = {}
     if games:
         game_ids = [g.id for g in games]
         if steam_platform:
@@ -125,8 +131,29 @@ async def get_games(db: AsyncSession = Depends(get_db)):
             )).scalars().all()
             meta_maps = {m.game_id: m for m in rows}
 
+        sentiment_rows = (await db.execute(
+            select(GameReviewSummary.game_id, GameReviewSummary.sentiment_score).where(
+                and_(
+                    GameReviewSummary.game_id.in_(game_ids),
+                    GameReviewSummary.summary_type == "unified",
+                    GameReviewSummary.review_language.is_(None),
+                    GameReviewSummary.is_current == True,
+                    GameReviewSummary.sentiment_score.isnot(None),
+                )
+            )
+        )).all()
+        sentiment_ratings = {
+            row.game_id: _sentiment_rating(row.sentiment_score)
+            for row in sentiment_rows
+        }
+
     return [
-        _serialize_game_metadata(g, steam_maps.get(g.id), meta_maps.get(g.id))
+        _serialize_game_metadata(
+            g,
+            steam_maps.get(g.id),
+            meta_maps.get(g.id),
+            sentiment_ratings.get(g.id),
+        )
         for g in games
     ]
 
@@ -168,7 +195,24 @@ async def get_game(game_id: int, db: AsyncSession = Depends(get_db)):
             )
         )).scalar_one_or_none()
 
-    return _serialize_game_metadata(game, steam_map, meta_map)
+    sentiment_score = (await db.execute(
+        select(GameReviewSummary.sentiment_score).where(
+            and_(
+                GameReviewSummary.game_id == game_id,
+                GameReviewSummary.summary_type == "unified",
+                GameReviewSummary.review_language.is_(None),
+                GameReviewSummary.is_current == True,
+                GameReviewSummary.sentiment_score.isnot(None),
+            )
+        )
+    )).scalar_one_or_none()
+
+    return _serialize_game_metadata(
+        game,
+        steam_map,
+        meta_map,
+        _sentiment_rating(sentiment_score),
+    )
 
 
 @router.post("/{game_id}/summarize", dependencies=[Depends(require_api_key)])

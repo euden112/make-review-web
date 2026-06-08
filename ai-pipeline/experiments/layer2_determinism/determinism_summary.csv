@@ -1,0 +1,6 @@
+game_id,title,runs,sentiment_mean,sentiment_std,aspect_std_mean,aspect_std_max
+11,Dragon Age: The Veilguard,5,52.0,2.53,0.236,0.748
+12,The Witcher 3: Wild Hunt,5,92.0,0.0,0.062,0.214
+20,Star Wars Jedi: Fallen Order,5,75.8,1.166,0.132,0.49
+32,Death Stranding,5,82.0,0.0,0.039,0.16
+79,Dead by Daylight,5,58.4,1.2,0.112,0.463

@@ -1,0 +1,21 @@
+﻿game_id,title,faithfulness,faith_tier,genre,reviews,vol_tier
+12,The Witcher 3: Wild Hunt,0.714,저,open_world,294,대
+79,Dead by Daylight,0.700,저,horror,284,대
+34,A Plague Tale: Innocence,0.667,저,narrative,201,소
+99,Balatro,0.636,저,roguelike,261,중
+32,Death Stranding,0.625,저,open_world,210,소
+11,Dragon Age: The Veilguard,0.900,중,strategy,230,소
+53,Star Wars Jedi: Survivor,0.889,중,soulslike,242,소
+74,Dave the Diver,0.889,중,action,279,중
+67,Clair Obscur: Expedition 33,0.833,중,narrative,326,대
+86,TEKKEN 8,0.812,중,fighting,290,대
+31,Forza Horizon 5,0.800,중,racing,255,중
+94,Overwatch 2,0.786,중,shooter,342,대
+59,Monster Hunter Rise,0.778,중,rpg,237,소
+20,Star Wars Jedi: Fallen Order,1.000,고,soulslike,260,중
+39,God of War Ragnarök,1.000,고,narrative,263,중
+49,Hitman World of Assassination,1.000,고,coop_mp,217,소
+70,Dragon Age: Inquisition,1.000,고,open_world,215,소
+75,Battlefield 2042,1.000,고,shooter,287,대
+78,The Outer Worlds,1.000,고,open_world,198,소
+87,Street Fighter 6,1.000,고,fighting,269,중
