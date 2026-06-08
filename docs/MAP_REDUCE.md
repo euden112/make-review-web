@@ -114,6 +114,8 @@ graphics, controls, optimization, content, story, price_value, sound, gameplay, 
 
 즉 "깨진 JSON이어도 살릴 수 있으면 정규화해서 받고, 근거 자체가 없으면(빈 evidence/빈 id) 그 청크만 실패"가 원칙입니다. 이 복구 동작은 `ai-pipeline/test_map_reduce_quality.py`의 `*_repairs_*` 테스트군이 합성 입력으로 고정합니다.
 
+id 화이트리스트가 **형식상** 환각 인용을 막는다면, Map 추출이 **내용상** 원문에 충실한지는 RAGAS faithfulness로 따로 실측했습니다. 저장 payload의 Map 합성 주장을 그 청크의 실제 출처 `review_id` 원문과 정확히 대조(출처 오귀속까지 검출)했고, 게임 전체 리뷰 풀 대조(환각)와 함께 코어셋 20개에서 두 방식 모두 평균 0.94·중앙값 1.0을 기록했습니다. 즉 Map이 근거를 지어내거나 출처를 잘못 붙이는 일 없이 원문에 충실히 추출한다는 점을 수치로 확인했습니다(`ai-pipeline/experiments/layer1_faithfulness/`).
+
 ---
 
 ## 5. 그룹화와 Reduce 4-콜 (`pipeline.py`, `reduce_api.py`)
